@@ -24,6 +24,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_arabic","阿拉伯语"},
     {"op_sub_russian","俄语"},
     {"op_sub_ukrainian","乌克兰语"},
+    {"op_sub_czech","捷克语"},
     {"op_camera_setting","镜头"},
     {"op_camera_y_axis","垂直方向"},
     {"op_camera_x_axis","水平方向"},

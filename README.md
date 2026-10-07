@@ -82,7 +82,7 @@ Extras
 
 Languages
 - The original's English, French, German, Spanish, Italian, Portuguese and Japanese, plus Turkish, Simplified Chinese,
-  Arabic, Russian and Ukrainian added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
+  Arabic, Russian, Ukrainian and Czech added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
   original English, and the word the microphone listens for is always "Jack".
 
 Mods

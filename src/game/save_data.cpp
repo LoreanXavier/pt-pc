@@ -74,6 +74,8 @@ GameOptions DefaultOptionsForLocale(std::string_view locale) {
         options.subtitle_language = 10;
     } else if (primary == "uk") {
         options.subtitle_language = 11;
+    } else if (primary == "cs") {
+        options.subtitle_language = 12;
     }
     return options;
 }

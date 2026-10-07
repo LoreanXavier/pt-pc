@@ -2255,7 +2255,7 @@ private:
     uint32_t voice_id_ = 0;
     uint64_t voice_start_ = 0;
 
-    int Language() const { return std::clamp(game_.Options().subtitle_language, 0, 11); }
+    int Language() const { return std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1); }
 
     const pt::game::ArchiveEntry* EntryOf(int id) const {
         const auto entries = pt::game::ArchiveEntries();
@@ -2542,7 +2542,7 @@ private:
     std::vector<pt::game::PcSettingSection> SpeedrunResults() const {
         const pt::game::SpeedrunTimer& run = game_.Speedrun();
         using pt::game::SpeedrunTimer;
-        const int language = std::clamp(game_.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         pt::game::PcSettingSection result{"pc_speedrun_run", 0, {}};
         auto menu = Row(kRunMenu, "pc_speedrun_menu", {""}, 0, "pc_note_speedrun_menu");
         menu.link = true;
@@ -2655,7 +2655,7 @@ private:
         pt::game::PcSettingSection left{"pc_section_mods", 0, {}};
         pt::game::PcSettingSection right{"pc_section_mods", 1, {}};
         if (!app_.mods) return {std::move(left)};
-        const int language = std::clamp(game_.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         const std::string restart(pt::game::PcText("pc_note_mods", language));
         const auto& mods = app_.mods->mods;
         for (size_t i = 0; i < mods.size() && i < static_cast<size_t>(kMaxModRows); ++i) {
@@ -3311,7 +3311,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             theater_paused = true;
             if (game.Audio()) game.Audio()->PostEvent("Pause_All", nullptr);
         }
-        const int language = std::clamp(game.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         ui.SetMenuSuspended(true);
         ui.EnterTheater(view->theater->Sandbox());
         if (options.make_museum_previews.empty()) {

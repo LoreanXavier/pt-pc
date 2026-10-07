@@ -13,7 +13,7 @@ Everything the engine needs from the operating system beyond SDL3 goes through `
 | `os.h`: `RunProcess` (texture upscaler, installer helper) | `CreateProcessW`, no console, below-normal priority | `posix_spawn`, nice 10, SIGKILL on cancel or timeout |
 | `os.h`: `FileLock` (one texture generation at a time) | file opened without sharing | `flock` |
 | `http.h`: HTTPS GET (update check) | WinHTTP | the system libcurl, loaded with `dlopen` (the game starts without it) |
-| Unicode fonts (Turkish, Chinese, Arabic, Russian, Ukrainian UI) | GDI + Uniscribe | HarfBuzz 14.6.0 (fetched, built into the binary) + stb_truetype, a small bidi pass for Arabic lines |
+| Unicode fonts (Turkish, Chinese, Arabic, Russian, Ukrainian, Czech UI) | GDI + Uniscribe | HarfBuzz 14.6.0 (fetched, built into the binary) + stb_truetype, a small bidi pass for Arabic lines |
 | voice recognizer (whisper.cpp) | `whisper.dll`, `ggml*.dll` in `voice/` | `libwhisper.so`, `libggml*.so` in `voice/` (RPATH `$ORIGIN`), worker thread at nice 10 |
 | enhanced textures | `realesrgan-ncnn-vulkan.exe` + `vcomp140.dll` | `realesrgan-ncnn-vulkan` (the project's ubuntu release, checked by SHA-256) |
 | folder picker when no game is found | `IFileOpenDialog` | none: a message box asks for `--game` |

@@ -9,6 +9,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_arabic","Arabo"},
     {"op_sub_russian","Russo"},
     {"op_sub_ukrainian","Ucraino"},
+    {"op_sub_czech","Ceco"},
     {"pc_loop_browser","Selezione ciclo"},
     {"pc_note_loop_browser_entry","Avvia qualsiasi ciclo senza sostituire il tuo salvataggio."},
     {"pc_loop_choose","Scegli un ciclo"},

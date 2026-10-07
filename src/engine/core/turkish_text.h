@@ -6,7 +6,7 @@
 namespace pt::turkish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
-    {"op_sub_turkish","Türkçe"},{"op_sub_chinese","Çince (basitleştirilmiş)"},{"op_sub_arabic","Arapça"},{"op_sub_russian","Rusça"},{"op_sub_ukrainian","Ukraynaca"},
+    {"op_sub_turkish","Türkçe"},{"op_sub_chinese","Çince (basitleştirilmiş)"},{"op_sub_arabic","Arapça"},{"op_sub_russian","Rusça"},{"op_sub_ukrainian","Ukraynaca"},{"op_sub_czech","Çekçe"},
     {"op_options","SEÇENEKLER"},{"op_back","Geri"},{"op_brightness_setting","Parlaklık"},
     {"op_britness_tip","Yalnızca soldaki resim görünene kadar parlaklığı ayarlayın."},
     {"op_subtitles_setting","Altyazılar"},{"op_sub_none","Kapalı"},{"op_sub_english","İngilizce"},

@@ -9,6 +9,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_arabic","Arabisch"},
     {"op_sub_russian","Russisch"},
     {"op_sub_ukrainian","Ukrainisch"},
+    {"op_sub_czech","Tschechisch"},
     {"pc_loop_browser","Schleifenauswahl"},
     {"pc_note_loop_browser_entry","Beliebige Schleife starten, ohne Ihren Spielstand zu ersetzen."},
     {"pc_loop_choose","Schleife wählen"},
