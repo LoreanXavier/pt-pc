@@ -2,7 +2,7 @@
 
 ![Lisa in the hallway](docs/media/lisa.gif)
 
-If the port is worth something to you, you can buy me a coffee: [ko-fi.com/loreanxavier](https://ko-fi.com/loreanxavier). It keeps the testing hardware and the releases coming.
+If the port is worth something to you, you can support me on Patreon: [patreon.com/loreanxavier](https://patreon.com/loreanxavier). It keeps the testing hardware and the releases coming.
 
 This is a native PC port of P.T., the 2014 PS4 teaser by Kojima Productions. It is not an emulator. The game logic was
 rebuilt in C++ from the original's behaviour and the renderer is written on Vulkan; every level, model, texture, sound,
