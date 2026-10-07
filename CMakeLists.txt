@@ -171,12 +171,17 @@ endforeach()
 file(GLOB PT_SHADERS CONFIGURE_DEPENDS shaders/*.vert shaders/*.frag shaders/*.comp)
 set(PT_SPIRV_DIR ${CMAKE_BINARY_DIR}/shaders)
 set(PT_SPIRV_OUTPUTS)
+set(PT_GLSLC_DEFINES)
+if(APPLE)
+  # MoltenVK: no comparison sampler on the images[] array (shaders/lighting.glsl ShadowTap, docs/macos.md)
+  list(APPEND PT_GLSLC_DEFINES -DPT_SHADOW_GATHER)
+endif()
 foreach(shader ${PT_SHADERS})
   get_filename_component(name ${shader} NAME)
   set(out ${PT_SPIRV_DIR}/${name}.spv)
   add_custom_command(OUTPUT ${out}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PT_SPIRV_DIR}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -MD -MF ${out}.d ${shader} -o ${out}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${PT_GLSLC_DEFINES} -MD -MF ${out}.d ${shader} -o ${out}
     DEPENDS ${shader} DEPFILE ${out}.d VERBATIM)
   list(APPEND PT_SPIRV_OUTPUTS ${out})
 endforeach()

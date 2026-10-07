@@ -30,6 +30,7 @@ macOS takes the POSIX side of `src/engine/platform` (docs/linux.md), with these 
 | `http.h`: HTTPS GET (update check) | the system's `/usr/lib/libcurl.4.dylib`, loaded with `dlopen` as on Linux. The release manifest has no `macos` entry yet, so the check finds nothing |
 | voice recognizer (whisper.cpp) | `libwhisper.dylib`, `libggml*.dylib` and ggml's Apple silicon CPU variants (`libggml-cpu-apple_m1.so`, `-apple_m2_m3`, `-apple_m4`; CMake modules keep `.so`) in `voice/`, rpath `@loader_path`, worker thread at QoS utility. CPU only, as elsewhere: ggml's Metal and Accelerate backends are off |
 | audio mixer | flush to zero through ARM64 FPCR.FZ instead of the SSE control register |
+| shadow maps | compared in the shader from a `textureGather` (`PT_SHADOW_GATHER`, shaders/lighting.glsl) instead of a comparison sampler: with one on the bindless `images[]` array SPIRV-Cross declares the whole array `depth2d`, and Metal reads the G-buffer's normal and material through it as one channel, which lit the hallway ceiling in blotches |
 | enhanced textures | the `realesrgan-ncnn-vulkan` macOS release (universal, MoltenVK linked in), checked by SHA-256 |
 | folder picker when no game is found | SDL's folder dialog (`NSOpenPanel`) |
 | crash dump | none |
