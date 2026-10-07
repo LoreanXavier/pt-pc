@@ -18,11 +18,11 @@ still have it installed. It plays the whole teaser from the first wake-up to the
   or a fake PKG made from that dump. The European and Japanese releases install too, with a note, but I have not seen
   their data myself. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing here
   decrypts it.
-- Windows 10 or 11 (x64), or Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
-  and SteamOS).
-- A GPU and driver with Vulkan 1.3. The optional ray-traced shadows, ambient occlusion and reflections need a GPU with
-  Vulkan ray queries. DLSS needs a GeForce RTX card; FSR and XeSS run on any recent GPU. The settings page greys out
-  what your machine cannot run and says why.
+- Windows 10 or 11 (x64), Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
+  and SteamOS), or macOS 14 or newer on Apple silicon (M1 and later).
+- A GPU and driver with Vulkan 1.3; on macOS the port brings MoltenVK, which runs Vulkan on Metal. The optional
+  ray-traced shadows, ambient occlusion and reflections need a GPU with Vulkan ray queries. DLSS needs a GeForce RTX
+  card; FSR and XeSS run on any recent GPU. The settings page greys out what your machine cannot run and says why.
 - A microphone for one part of the game, as on the PS4. If you have none, `key = J` under `[voice]` in `pt.ini` lets a
   key stand in for the spoken word.
 
@@ -37,12 +37,16 @@ system files are not used.
 Linux: `chmod +x` the setup and run it from a terminal. The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
+macOS: unzip `P.T. PC Port.app`, open it once and allow it under System Settings > Privacy & Security (it is not signed
+with a Developer ID), then pick your dump folder when it asks. A fake PKG has to be extracted on Windows or Linux first.
+More in docs/macos.md.
+
 There is also a portable zip on the Releases page if you prefer to put the game files in place yourself: unpack it,
 then start `pt.exe --game <your CUSA01127 folder>` once, or put the folder next to the executable as `game/CUSA01127`.
 
-Settings go to `%APPDATA%\pt-port\pt\pt.ini` on Windows and `~/.local/share/pt-port/pt/` on Linux, together with the
-save, the log (`pt.log`) and crash dumps. The game checks the Releases page for a newer version once at start; `[network]
-check_updates = 0` turns that off.
+Settings go to `%APPDATA%\pt-port\pt\pt.ini` on Windows, `~/.local/share/pt-port/pt/` on Linux and
+`~/Library/Application Support/pt-port/pt/` on macOS, together with the save, the log (`pt.log`) and crash dumps. The
+game checks the Releases page for a newer version once at start; `[network] check_updates = 0` turns that off.
 
 ## Playing
 
@@ -105,6 +109,11 @@ tools\package.py` turns the build into the portable folder and zip.
 Linux: `cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build/linux --target pt`.
 GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-only SDKs and are left out there.
 `tools/linux/` has the cross build I use from Windows. More in docs/linux.md.
+
+macOS (Apple silicon): the command line tools, then `brew install cmake ninja shaderc vulkan-headers vulkan-loader` and
+`cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build/macos --target pt`.
+`python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode are left out there
+too, and MoltenVK has no ray queries. More in docs/macos.md.
 
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the
