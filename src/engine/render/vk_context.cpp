@@ -121,9 +121,34 @@ bool Context::Init(SDL_Window* window, bool validation) {
         vkCreateDebugUtilsMessengerEXT(instance, &messenger_info, nullptr, &messenger);
     }
 
-    if (window && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
-        LogError("SDL_Vulkan_CreateSurface: {}", SDL_GetError());
-        return false;
+    if (window) {
+        bool created = false;
+#ifdef _WIN32
+        /* SDL creates the surface through its own vulkan-1.dll, so Streamline's interposer never sees the window, and DLSS-G then
+           fails the swapchain with "could not find a window". With Streamline loaded the surface is made through the interposer. */
+        if (loader) {
+            struct Win32SurfaceCreateInfo {
+                VkStructureType sType;
+                const void* pNext;
+                VkFlags flags;
+                void* hinstance;
+                void* hwnd;
+            };
+            using CreateWin32Surface = VkResult(VKAPI_PTR*)(VkInstance, const Win32SurfaceCreateInfo*, const VkAllocationCallbacks*, VkSurfaceKHR*);
+            void* hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+            void* hinstance = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr);
+            const auto create = reinterpret_cast<CreateWin32Surface>(vkGetInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR"));
+            if (hwnd && create) {
+                const Win32SurfaceCreateInfo info{static_cast<VkStructureType>(1000009000), nullptr, 0, hinstance, hwnd};
+                created = create(instance, &info, nullptr, &surface) == VK_SUCCESS;
+                LogInfo("vulkan: surface through the Streamline interposer{}", created ? "" : " failed, SDL's instead");
+            }
+        }
+#endif
+        if (!created && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
+            LogError("SDL_Vulkan_CreateSurface: {}", SDL_GetError());
+            return false;
+        }
     }
 
     uint32_t device_count = 0;

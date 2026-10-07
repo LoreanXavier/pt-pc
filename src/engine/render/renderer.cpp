@@ -15,6 +15,8 @@
 
 #include "engine/core/log.h"
 #include "engine/render/upscale/streamline.h"
+#include "engine/render/upscale/streamline.h"
+#include "engine/render/upscale/upscale.h"
 
 namespace pt {
 namespace {
@@ -48,7 +50,15 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         width = static_cast<uint32_t>(w);
         height = static_cast<uint32_t>(h);
         if (!ctx_.CreateSwapchain(width, height, settings.vsync)) {
-            return false;
+            /* DLSS-G's swapchain hook can refuse the window (borderless fullscreen on some setups); the game goes on without it. */
+            if (!streamline::UnloadFrameGen()) {
+                return false;
+            }
+            LogError("frame generation: DLSS Frame Generation refused the swapchain, turned off for this run");
+            UpscaleHost::Get().SetDlssFrameGenFailed(true);
+            if (!ctx_.CreateSwapchain(width, height, settings.vsync)) {
+                return false;
+            }
         }
         output_format = ctx_.swapchain.format;
         width = ctx_.swapchain.extent.width;

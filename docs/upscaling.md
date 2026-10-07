@@ -121,3 +121,10 @@ cost about twice K, so DLSS performance can take more GPU time than DLSS quality
 Known differences: under FSR the wet asphalt of the ending street comes out a few levels darker under the flashlight
 (its accumulation loses some of the sparkle); the eye adaptation is a little behind native for the first second after
 a cut in every mode.
+
+## DLSS Frame Generation on RTX 20 and 30
+
+DLSS Frame Generation needs an RTX 40 or newer card. On an RTX 20 or 30 the row is greyed out, unless RTX30MFG-Unlock
+(github.com/mcsoderh/RTX30MFG-Unlock) sits next to pt.exe: `RTX40MFGCore.dll`, `RTX40MFG.asi` and the Ultimate ASI Loader as
+`version.dll` with its `global.ini` values in `version.ini`. The game then lets Streamline decide, and Streamline accepts the
+card. Tested once on an RTX 3090: it generates frames. It is third-party and experimental; nothing of it ships with the game.

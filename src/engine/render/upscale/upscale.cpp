@@ -542,6 +542,19 @@ void UpscaleHost::CheckDlssFrameGen() {
         LogWarn("frame generation: PT_DLSSG_ALLOW_UNSUPPORTED set, skipping DLSS-G GPU and driver checks");
         unsupported &= ~6u;
     }
+#ifdef _WIN32
+    /* RTX30MFG-Unlock (RTX40MFGCore.dll next to pt.exe, loaded by an ASI loader) lifts Streamline's GPU check in memory on RTX 20
+       and 30; with it in place the PCI gate steps aside and Streamline's own answer decides. */
+    if (ctx_->properties.vendorID == 0x10DE && (unsupported & 4u)) {
+        wchar_t module[MAX_PATH];
+        const DWORD n = GetModuleFileNameW(nullptr, module, MAX_PATH);
+        std::error_code ec;
+        if (n > 0 && n < MAX_PATH && std::filesystem::exists(std::filesystem::path(module).parent_path() / L"RTX40MFGCore.dll", ec)) {
+            LogWarn("frame generation: RTX40MFGCore.dll next to pt.exe, the DLSS-G GPU check steps aside for the unlock");
+            unsupported &= ~4u;
+        }
+    }
+#endif
     if (ctx_->properties.vendorID != 0x10DE) {
         dlss_fg_.reason = "needs an NVIDIA GeForce RTX 40 series or newer GPU";
         dlss_fg_.note = "pc_note_dlssg_gpu";

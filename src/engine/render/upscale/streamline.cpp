@@ -344,6 +344,13 @@ sl::Result SetFeatureLoaded(sl::Feature feature, bool loaded) {
     return g_active ? g_api.set_loaded(feature, loaded) : sl::Result::eErrorInitNotCalled;
 }
 
+bool UnloadFrameGen() {
+    if (!g_active || !g_frame_gen) return false;
+    const sl::Result result = g_api.set_loaded(sl::kFeatureDLSS_G, false);
+    g_frame_gen = false;
+    return result == sl::Result::eOk;
+}
+
 }
 
 namespace pt {
@@ -737,6 +744,7 @@ bool FrameGenSupported(std::string* reason) {
     return false;
 }
 bool FrameGenNeedsVsyncOff() { return false; }
+bool UnloadFrameGen() { return false; }
 void BeginFrame() {}
 void SetMarker(Marker) {}
 void SetConstants(const FrameConstants&) {}
