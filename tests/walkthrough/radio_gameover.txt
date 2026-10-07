@@ -1,0 +1,13 @@
+# f050 loop 1: stand in the radio's subtitle area while the radio talks, then a game over (as after Lisa's kill): the radio's
+# subtitle ends with the radio when Set_state_game_over stops all sounds, so nothing of it reaches the wake-up in the start room
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+swait 700
+sexpect speech 1
+sgamestep GotoGameOver
+sstep 13
+swait 30
+sexpect speech 0
+slog

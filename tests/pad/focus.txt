@@ -1,0 +1,32 @@
+# Window focus loss (simulated with the focus op, nothing touches the OS focus): where the game cannot pause (the
+# opening, before StartGame) the game clock and the audio freeze until the focus returns; in play the game's own
+# pause menu opens and stays open after the focus returns.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/focus.txt
+10 pattach 0 ps4
+300 log
+300 focus 0
+600 focus 1
+601 log
+20 sstep 15
+20 swait 30
+20 sexpect menu 0
+20 slog
+1600 focus 0
+1602 expect menu 1
+1602 expect paused 1
+1700 focus 1
+1790 expect menu 1
+1800 ptap 0 options
+1990 expect menu 0
+1990 expect paused 0
+# sfocus 0 N: the focus goes away for N frames at this point of the sequence; the menu it opens stays open
+2000 sfocus 0 120
+2000 swait 5
+2000 sexpect menu 1
+2000 sexpect paused 1
+2000 swait 200
+2000 sexpect menu 1
+2000 stap 0 options
+2000 smenu 0
+2000 sexpect paused 0
+2000 squit

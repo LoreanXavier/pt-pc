@@ -1,0 +1,38 @@
+# The R3 chalked beside the fallen photo frame (FrameGround on f005, after the bathroom door demo drops it) follows the prompt device: a
+# mouse with the right button lit for the keyboard and mouse, the data's R3 for a DualSense, RS for an Xbox pad, R and a stick for a
+# Switch Pro pad. The run walks from f010 into f005 and through the bathroom door demo (the walkthrough's start and f005 routes), then
+# the camera looks down on the frame from 45 cm; shots go to the working folder.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --width 1920 --height 1080 --frames 12000
+#   --input-script tests/pad/frame_prompts.txt
+20 sstep 15
+20 swait 30
+20 goto 0 0 12.5
+20 swait 10
+20 sfree
+20 sanchor
+20 gfile 0 -1.4 -4.0
+20 gfile 0 -1.4 6.5
+20 gfile -1.0 -1.4 7.5
+20 gfile -7.7 -1.4 7.5
+20 swait 30
+20 gfile -6.1 -1.4 7.5
+20 swait 10
+20 sfree
+20 gfile -1.0 -1.4 7.5
+20 gfile 0 -1.4 0.4
+20 swait 30
+20 slog
+20 scamfile 0.06 -0.95 1.70 0 -1 0 50 0 0 -1
+20 swait 3
+20 sshot frame_keyboard.png
+20 sattach 0 ps5
+20 swait 5
+20 sshot frame_playstation.png
+20 sattach 1 xbox
+20 swait 5
+20 sshot frame_xbox.png
+20 sattach 2 switch
+20 swait 5
+20 sshot frame_nintendo.png
+20 slog
+20 squit

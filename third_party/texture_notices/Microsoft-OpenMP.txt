@@ -1,0 +1,15 @@
+Microsoft OpenMP runtime (vcomp140.dll)
+Copyright Microsoft Corporation. All rights reserved.
+
+This is the release x64 OpenMP runtime required by the bundled
+Real-ESRGAN-ncnn-vulkan Windows executable. The debug runtime is excluded.
+Redistribution is governed by the Microsoft Software License Terms for
+Visual Studio and its Distributable Code list; the open-source licenses
+of the texture upscaler do not apply to this DLL.
+
+Microsoft distribution documentation:
+https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170
+https://learn.microsoft.com/en-us/cpp/windows/determining-which-dlls-to-redistribute?view=msvc-170
+
+Visual C++ Redistributable license terms:
+https://aka.ms/VCRedistLicense

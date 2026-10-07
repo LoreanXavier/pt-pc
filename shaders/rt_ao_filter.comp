@@ -1,0 +1,130 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+layout(set = 2, binding = 3, r32f) uniform readonly image2D rt_ao_raw;
+layout(set = 2, binding = 4, rgba16f) uniform image2D rt_ao_history0;
+layout(set = 2, binding = 5, rgba16f) uniform image2D rt_ao_history1;
+layout(set = 2, binding = 6, r32f) uniform image2D rt_ao_blur;
+layout(set = 2, binding = 7, r32f) uniform writeonly image2D rt_ao;
+
+vec4 History(bool second, ivec2 p) {
+    return second ? imageLoad(rt_ao_history1, p) : imageLoad(rt_ao_history0, p);
+}
+
+void Accumulate(View v, ivec2 pixel, ivec2 size) {
+    float raw = imageLoad(rt_ao_raw, pixel).x;
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    bool previous_second = (pass.ids.w & 1u) != 0u;
+    if (depth <= 0.0) {
+        vec4 none = vec4(1.0, 0.0, 0.0, 0.0);
+        if (previous_second) {
+            imageStore(rt_ao_history0, pixel, none);
+        } else {
+            imageStore(rt_ao_history1, pixel, none);
+        }
+        return;
+    }
+    float z = ViewZ(v, depth);
+    vec3 world = (v.inv_view * vec4(PixelNdc(v, vec2(pixel) + 0.5) * v.projection_param.xy * z, z, 1.0)).xyz;
+    float history = 0.0;
+    float count = 0.0;
+    vec4 previous = pass.m * vec4(world, 1.0);
+    if ((pass.ids.w & 2u) == 0u && previous.w > 1.0e-4) {
+        vec2 at = (previous.xy / previous.w * 0.5 + 0.5) * vec2(size) - 0.5;
+        ivec2 base = ivec2(floor(at));
+        vec2 f = at - vec2(base);
+        float weights[4] = float[4]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        ivec2 offsets[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        float sum = 0.0;
+        float ao_sum = 0.0;
+        float count_sum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 p = base + offsets[i];
+            if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) {
+                continue;
+            }
+            vec4 h = History(previous_second, p);
+            if (h.z <= 0.0 || abs(h.y - previous.w) > 0.04 * previous.w) {
+                continue;
+            }
+            sum += weights[i];
+            ao_sum += weights[i] * h.x;
+            count_sum += weights[i] * h.z;
+        }
+        if (sum > 0.05) {
+            history = ao_sum / sum;
+            count = count_sum / sum;
+        }
+    }
+    count = min(count + 1.0, max(pass.f0.y, 1.0));
+    float ao = mix(history, raw, 1.0 / count);
+    vec4 result = vec4(ao, z, count, 0.0);
+    if (previous_second) {
+        imageStore(rt_ao_history0, pixel, result);
+    } else {
+        imageStore(rt_ao_history1, pixel, result);
+    }
+}
+
+void Blur(View v, ivec2 pixel, ivec2 size, bool vertical) {
+    float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    if (depth <= 0.0) {
+        if (vertical) {
+            imageStore(rt_ao, pixel, vec4(1.0));
+        } else {
+            imageStore(rt_ao_blur, pixel, vec4(1.0));
+        }
+        return;
+    }
+    float z = ViewZ(v, depth);
+    vec3 n = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+    bool written_second = (pass.ids.w & 1u) == 0u;
+    ivec2 step = vertical ? ivec2(0, 1) : ivec2(1, 0);
+    float sum = 0.0;
+    float weight_sum = 0.0;
+    for (int k = -4; k <= 4; ++k) {
+        ivec2 p = clamp(pixel + step * k, ivec2(0), size - 1);
+        float dk = ImgFetch(IMG_DEPTH, p).x;
+        if (dk <= 0.0) {
+            continue;
+        }
+        float zk = ViewZ(v, dk);
+        vec3 nk = DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz);
+        float w = exp(-float(k * k) / 12.0);
+        w *= exp(-abs(zk - z) / (0.015 * z + 0.002));
+        w *= pow(max(dot(n, nk), 0.0), 16.0);
+        float value = vertical ? imageLoad(rt_ao_blur, p).x : History(written_second, p).x;
+        sum += w * value;
+        weight_sum += w;
+    }
+    float ao = weight_sum > 1.0e-5 ? sum / weight_sum : (vertical ? imageLoad(rt_ao_blur, pixel).x : History(written_second, pixel).x);
+    if (vertical) {
+        imageStore(rt_ao, pixel, vec4(ao));
+    } else {
+        imageStore(rt_ao_blur, pixel, vec4(ao));
+    }
+}
+
+void main() {
+    View v = frame.views[pass.ids.x];
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(v.viewport.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+    if (pass.ids.z == 0u) {
+        Accumulate(v, pixel, size);
+    } else {
+        Blur(v, pixel, size, pass.ids.z == 2u);
+    }
+}

@@ -1,0 +1,30 @@
+{
+  "ncnn.txt": {
+    "url": "https://raw.githubusercontent.com/Tencent/ncnn/6125c9f47cd14b589de0521350668cf9d3d37e3c/LICENSE.txt",
+    "sha256": "6495f972a09ad7f64ccd953e79adba91a93d862edc7135e6d95210bbf4002a01"
+  },
+  "glslang.txt": {
+    "url": "https://raw.githubusercontent.com/KhronosGroup/glslang/4afd69177258d0636f78d2c4efb823ab6382a187/LICENSE.txt",
+    "sha256": "130b2e98901db02a83e5e83c132b22d22d9279155feb53c49d6471b75af3c352"
+  },
+  "libwebp-COPYING.txt": {
+    "url": "https://raw.githubusercontent.com/webmproject/libwebp/8ea81561d2fdd382da60f57958741a7c23a18eb6/COPYING",
+    "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+  },
+  "libwebp-PATENTS.txt": {
+    "url": "https://raw.githubusercontent.com/webmproject/libwebp/8ea81561d2fdd382da60f57958741a7c23a18eb6/PATENTS",
+    "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+  },
+  "stb_image.h-MIT.txt": {
+    "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN-ncnn-vulkan/v0.2.0/src/stb_image.h",
+    "source_sha256": "8e5b0d717dfc8a834c97ef202d20e78d083d009586e1731c985817d0155d568c"
+  },
+  "stb_image_write.h-MIT.txt": {
+    "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN-ncnn-vulkan/v0.2.0/src/stb_image_write.h",
+    "source_sha256": "51998500e9519a85be1aa3291c6ad57deb454da98a1693ab5230f91784577479"
+  },
+  "dirent.txt": {
+    "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN-ncnn-vulkan/v0.2.0/src/win32dirent.h",
+    "license": "MIT, attribution from bundled header"
+  }
+}

@@ -1,0 +1,106 @@
+# The pause (option) menu with a pad alone: OPTIONS opens and closes it, triangle and square toggle the camera
+# inversions, the D-pad changes subtitles and brightness, cross opens the PC settings page and circle returns from it,
+# the touch pad clicked on its right half is OPTIONS too, an early OPTIONS press closes the menu once it is up, and the
+# pause stops the vibration.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 4000 --input-script tests/pad/menu.txt
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 sexpect menu 0
+20 stap 0 options
+20 swait 4
+20 sexpect menu 1
+20 sexpect paused 1
+20 swait 90
+20 stap 0 triangle
+20 swait 4
+20 sexpect invert y 1
+20 stap 0 square
+20 swait 4
+20 sexpect invert x 1
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 stap 0 circle
+20 swait 40
+20 sexpect page 0
+20 sexpect invert y 1
+20 sexpect invert x 1
+20 sexpect menu 1
+20 sexpect brightness 5
+20 stap 0 right
+20 swait 4
+20 sexpect brightness 6
+20 stap 0 left
+20 swait 4
+20 stap 0 left
+20 swait 4
+20 sexpect brightness 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 45
+20 stap 0 options
+20 swait 90
+20 sexpect menu 0
+20 sexpect paused 0
+20 sexpect subtitles 1
+20 sexpect invert y 1
+20 sexpect invert x 1
+20 sexpect brightness 4
+20 slog
+20 stap 0 options
+20 swait 90
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 45
+20 stap 0 triangle
+20 swait 4
+20 stap 0 square
+20 swait 4
+20 stap 0 right
+20 swait 4
+20 stap 0 options
+20 swait 90
+20 sexpect menu 0
+20 sexpect subtitles -1
+20 sexpect invert y 0
+20 sexpect invert x 0
+20 sexpect brightness 5
+20 slog
+20 stouch 0 0.8 0.5 1
+20 stap 0 touchpad
+20 swait 4
+20 sexpect menu 1
+20 stouch 0 0.8 0.5 0
+20 swait 90
+20 stap 0 options
+20 swait 90
+20 sexpect menu 0
+20 stouch 0 0.2 0.5 1
+20 stap 0 touchpad
+20 swait 4
+20 sexpect menu 0
+20 stouch 0 0.2 0.5 0
+20 swait 10
+20 stap 0 options
+20 swait 4
+20 sexpect menu 1
+20 stap 0 options
+20 swait 150
+20 sexpect menu 0
+20 slog
+20 ssound #2374364694
+20 swait 40
+20 sexpect rumble 0 100 0
+20 stap 0 options
+20 swait 30
+20 sexpect rumble 0 0 0
+20 swait 30
+20 sexpect norumble 0
+20 swait 60
+20 stap 0 options
+20 swait 150
+20 sexpect rumble 0 100 0
+20 squit

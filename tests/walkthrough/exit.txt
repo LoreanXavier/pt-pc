@@ -1,0 +1,10 @@
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+ffile -11 -0.2 7.5
+sshot {shots}/{floor}_{loop}_b_lobby.png
+gfile -11.0 -1.4 7.5
+gfile -14.2 -2.4 7.5
+gfile -17.5 -2.8 7.6 900
+swait 60
+sfree
+slog

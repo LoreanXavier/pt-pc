@@ -1,0 +1,3 @@
+# Baby and CeilLamp are drawn on f005 to f070 (RelocateGimmicks); the records keep their meshes through a reset
+sexpect gimmick CeilLamp 1
+sexpect gimmick Baby 1

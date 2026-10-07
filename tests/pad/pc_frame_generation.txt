@@ -1,0 +1,175 @@
+# Frame generation on the PC settings page, in a window, with a virtual DualShock 4: the row is greyed while the upscaler
+# is off, FSR enables it, On replaces the swapchain with the FSR 3 interpolation swapchain, a smaller window size recreates
+# that swapchain, Off returns to the plain one, and the upscaler set to Off greys the row again. pt.log names each swapchain
+# change ("frame generation: ..."); screenshots fg1 to fg3 go to the working folder.
+# Start with upscaler = off and frame_generation = 0 in the [upscaling] section of <pt.ini>; keep the window from taking
+# the focus and the audio silent:
+# SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_AUDIO_DRIVER=dummy pt.exe --virtual-pads --no-save --settings <pt.ini>
+#   --start-floor f010 --frames 6000 --input-script tests/pad/pc_frame_generation.txt
+# Buttons are pressed and released with sbutton and swait, which count game ticks, so the presses do not depend on the
+# frame rate as long as it stays above the tick rate (60 per second): a press within one frame's ticks is never seen.
+# Headless the row stays greyed (frame generation needs a window).
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 sbutton 0 options 1
+20 swait 3
+20 sbutton 0 options 0
+20 swait 70
+20 sexpect menu 1
+20 sbutton 0 cross 1
+20 swait 3
+20 sbutton 0 cross 0
+20 swait 40
+20 sexpect page 1
+20 sexpect pcrow pc_display_mode
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sexpect pcrow pc_upscaler
+20 sexpect pcvalue pc_upscaler 0
+20 sexpect pcenabled pc_frame_generation 0
+20 sbutton 0 right 1
+20 swait 3
+20 sbutton 0 right 0
+20 swait 6
+20 sexpect pcvalue pc_upscaler 1
+20 sexpect pcenabled pc_frame_generation 1
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sexpect pcrow pc_frame_generation
+20 sexpect pcvalue pc_frame_generation 0
+20 sbutton 0 right 1
+20 swait 3
+20 sbutton 0 right 0
+20 swait 120
+20 sexpect pcvalue pc_frame_generation 1
+20 sshot fg1_on.png
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sexpect pcrow pc_resolution
+20 sbutton 0 left 1
+20 swait 3
+20 sbutton 0 left 0
+20 swait 120
+20 sshot fg2_smaller_window.png
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sbutton 0 down 1
+20 swait 3
+20 sbutton 0 down 0
+20 swait 6
+20 sexpect pcrow pc_frame_generation
+20 sexpect pcvalue pc_frame_generation 1
+20 sbutton 0 left 1
+20 swait 3
+20 sbutton 0 left 0
+20 swait 120
+20 sexpect pcvalue pc_frame_generation 0
+20 sshot fg3_off.png
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sbutton 0 up 1
+20 swait 3
+20 sbutton 0 up 0
+20 swait 6
+20 sexpect pcrow pc_upscaler
+20 sbutton 0 left 1
+20 swait 3
+20 sbutton 0 left 0
+20 swait 6
+20 sexpect pcvalue pc_upscaler 0
+20 sexpect pcenabled pc_frame_generation 0
+20 sbutton 0 options 1
+20 swait 3
+20 sbutton 0 options 0
+20 swait 40
+20 sexpect page 0
+20 sbutton 0 options 1
+20 swait 3
+20 sbutton 0 options 0
+20 swait 90
+20 sexpect menu 0
+20 slog
+20 squit

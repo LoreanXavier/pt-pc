@@ -1,0 +1,641 @@
+#pragma once
+
+#include <glm/glm.hpp>
+
+#include <array>
+#include <chrono>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "engine/render/camera.h"
+#include "engine/platform/settings.h"
+#include "engine/render/dominant_light.h"
+#include "engine/render/gpu_types.h"
+#include "engine/render/light_cull.h"
+#include "engine/render/mesh.h"
+#include "engine/render/raytracing.h"
+#include "engine/render/render_util.h"
+#include "engine/render/renderer.h"
+#include "engine/render/scene_lighting.h"
+#include "engine/render/subsurface_pass.h"
+#include "engine/render/texture_manager.h"
+#include "engine/render/upscale/upscale.h"
+
+namespace pt {
+
+class Vfs;
+
+enum class DebugView : int {
+    Lit = 0,
+    Normals = 1,
+    UV0 = 2,
+    VertexColor = 3,
+    Albedo = 4,
+    Roughness = 5,
+    Specular = 6,
+    MaterialIndex = 7,
+    Depth = 8,
+    Translucency = 9,
+    LightDiffuse = 10,
+    LightSpecular = 11,
+    Ambient = 12,
+    Reflection = 13,
+    Occlusion = 14,
+    Unlit = 15,
+    Mirror = 16,
+    Count = 17,
+};
+
+const char* DebugViewNames();
+
+struct SceneVfxContext {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    glm::mat4 view_projection{1.0f};
+    glm::vec3 eye{0.0f};
+    VkExtent2D extent{};
+    VkFormat color_format = VK_FORMAT_UNDEFINED;
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
+    VkImageView depth_view = VK_NULL_HANDLE;
+    float exposure = 1.0f;
+    uint32_t frame_index = 0;
+    bool mirrored = false;
+    VkImageView scene_copy_view = VK_NULL_HANDLE;
+    std::function<void()> copy_scene;
+    glm::vec4 fog[8]{};
+    uint32_t fog_mode = 0;
+    uint32_t subset = 0;
+    uint32_t* recorded = nullptr;
+};
+
+constexpr uint32_t kVfxAll = 0;
+constexpr uint32_t kVfxScene = 1;
+constexpr uint32_t kVfxOffscreen = 2;
+
+struct SceneFilterContext {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkExtent2D extent{};
+    VkFormat color_format = VK_FORMAT_UNDEFINED;
+    VkImageView source = VK_NULL_HANDLE;
+    VkImageView depth_view = VK_NULL_HANDLE;
+    float exposure = 1.0f;
+    uint32_t frame_index = 0;
+    uint32_t layers = 3;
+};
+
+struct DrawItem {
+    const GpuMesh* mesh = nullptr;
+    glm::mat4 transform{1.0f};
+    glm::vec4 tint{1.0f};
+    int32_t material_override = -1;
+    std::span<const glm::mat4> skin;
+    MeshMask hidden_meshes;
+    uint8_t hidden_views = 0;
+    bool character_shadow = false;
+    uint64_t source = 0;
+};
+
+class DrawPairKeys {
+public:
+    uint64_t Next(const DrawItem& item) {
+        const uint64_t mesh = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(item.mesh));
+        const uint64_t base = item.source ? (item.source * 0x9E3779B97F4A7C15ull) ^ (mesh * 0xC2B2AE3D27D4EB4Full) : mesh << 12;
+        return base + 0xD6E8FEB86659FD93ull * occurrences_[base]++;
+    }
+
+private:
+    std::unordered_map<uint64_t, uint32_t> occurrences_;
+};
+
+struct RenderToggles {
+    bool lights = true;
+    bool probes = true;
+    bool shadows = true;
+    bool bloom = true;
+    bool color_lut = true;
+    bool fxaa = true;
+    bool depth_of_field = true;
+    bool film_grain = true;
+    bool distortion = true;
+    bool full_screen_blur = true;
+    bool adaptation = true;
+    bool mirrors = true;
+    bool tpp_atmosphere = true;
+    bool occlusion = true;
+    bool local_reflections = true;
+    bool motion_blur = true;
+    bool subsurface_scatter = true;
+};
+
+struct LightBox {
+    glm::vec3 lo{0.0f};
+    glm::vec3 hi{0.0f};
+};
+
+struct RenderStats {
+    uint32_t draws = 0;
+    uint32_t lights = 0;
+    uint32_t probes = 0;
+    uint32_t shadow_views = 0;
+    float ev = 0.0f;
+    float exposure = 1.0f;
+    float luminance = 0.0f;
+    float gpu_ms = 0.0f;
+    float cpu_ms = 0.0f;
+    float pass_ms[6] = {};
+    float part_ms[6] = {};
+    float device_mb = 0.0f;
+    glm::vec3 reflection_readback{0.0f};
+    uint64_t reflection_readbacks = 0;
+};
+
+struct UpscaleStats {
+    bool active = false;
+    UpscalerKind kind = UpscalerKind::Off;
+    VkExtent2D render{};
+    VkExtent2D output{};
+    float upscale_ms = 0.0f;
+    float inputs_ms = 0.0f;
+    std::string error;
+};
+
+class SceneRenderer {
+public:
+    bool Init(Renderer& renderer, TextureManager& textures);
+    void Shutdown();
+    bool LoadResources(Vfs& vfs);
+
+    std::unique_ptr<GpuMesh> Upload(const MeshData& data);
+    void Destroy(GpuMesh& mesh);
+
+    void Render(const Camera& camera, const std::vector<DrawItem>& items);
+    void Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt);
+    void DrawDebugUi();
+    void ResetExposure() { adaptation_valid_ = false; }
+    void SetMotionReference(const Camera& previous, float interval, bool history);
+    void AdvanceTime(float seconds) {
+        pending_time_ += seconds;
+        timed_ = true;
+    }
+
+    DebugView debug_view = DebugView::Lit;
+    RenderToggles toggles;
+    AppSettings::Graphics graphics;
+    static constexpr VkFormat kHdrTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    static constexpr VkFormat kDepthTargetFormat = VK_FORMAT_D32_SFLOAT;
+    static constexpr VkFormat kPostTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    static constexpr uint32_t kShadowTile = 2048;
+    static constexpr uint32_t kShadowAtlasSize = 8192;
+    std::function<void(const SceneVfxContext&)> vfx_forward;
+    std::function<void(const SceneFilterContext&)> vfx_filter;
+    const RenderStats& Stats() const { return stats_; }
+    UpscaleSettings upscale;
+    const UpscaleStats& UpscaleStatistics() const { return upscale_stats_; }
+    bool UpscalerAvailable(UpscalerKind kind, std::string& reason);
+    void RequestTargetDump() { dump_requested_ = true; }
+    bool DumpTargets(const std::string& prefix);
+    RayTracingSettings raytracing;
+    bool RayTracingReady() const { return rt_ != nullptr; }
+    bool RayTracingSupported(std::string& reason) const;
+    void SetVrEye(int eye) { vr_eye_ = eye; }
+
+private:
+    struct FrameSlot {
+        vk::Buffer frame_data;
+        vk::Buffer skin;
+        vk::Buffer luminance;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        VkDescriptorSet post_set = VK_NULL_HANDLE;
+        VkQueryPool queries = VK_NULL_HANDLE;
+        VkQueryPool upscale_queries = VK_NULL_HANDLE;
+        bool upscale_timed = false;
+        uint32_t luminance_groups = 0;
+        float exposure_used = 1.0f;
+        bool measured = false;
+        bool timed = false;
+        bool reflection_sampled = false;
+    };
+
+    struct Draw {
+        const GpuMesh* mesh = nullptr;
+        const SubMesh* sub = nullptr;
+        glm::mat4 transform{1.0f};
+        glm::vec4 tint{1.0f};
+        uint32_t material = 0;
+        uint32_t skin_base = gpu::kInvalid;
+        uint32_t previous_model = gpu::kInvalid;
+        uint32_t previous_skin = gpu::kInvalid;
+        glm::vec3 center{0.0f};
+        float radius = 0.0f;
+        uint8_t hidden_views = 0;
+        bool character_shadow = false;
+    };
+
+    struct MotionHistory {
+        glm::mat4 transform{1.0f};
+        std::vector<glm::mat4> skin;
+    };
+
+    struct ShadowView {
+        uint32_t view = 0;
+        uint32_t light = 0;
+        uint8_t casters = 1;
+        VkRect2D rect{};
+        glm::vec3 center{0.0f};
+        float radius = 0.0f;
+        glm::vec4 planes[6]{};
+        bool frustum = false;
+        float bias_constant = 0.0f;
+        float bias_slope = 0.0f;
+        VkCullModeFlags cull = VK_CULL_MODE_FRONT_BIT;
+    };
+
+    struct ViewSetup {
+        uint32_t index = 0;
+        glm::vec4 planes[6]{};
+        bool mirrored = false;
+        glm::mat4 view{1.0f};
+        glm::mat4 projection{1.0f};
+        glm::vec3 eye{0.0f};
+        uint8_t view_bit = 1;
+        VkExtent2D area{0, 0};
+    };
+
+    VkExtent2D ViewArea(const ViewSetup& view) const { return view.area.width > 0 ? view.area : extent_; }
+    bool CreatePipelines();
+    void DestroyPipelines();
+    bool CreateDescriptors();
+    bool EnsureTargets(VkExtent2D extent, VkExtent2D output, bool upscaling);
+    void DestroyTargets();
+    void WriteImageDescriptors();
+    bool CreateTarget(RenderTarget& target, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage, VkImageAspectFlags aspect);
+    bool UploadImage(vk::Image& image, VkFormat format, VkExtent3D extent, const void* data, size_t size);
+    bool UploadImageMips(vk::Image& image, VkFormat format, VkExtent3D extent, const std::vector<std::vector<uint8_t>>& mips);
+    void CreateBuiltinResources();
+    void UpdateColorLut(const ScreenSettings& screen);
+    bool BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out);
+
+    void PrepareFrame(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting);
+    void BuildShadowViews(const SceneLighting& lighting, const glm::vec3& eye);
+    void UploadFrame(FrameSlot& slot);
+    void SetTppFog(const TppAtmosphereSettings& tpp);
+    void ReadMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings);
+    void SettleExposure(const ExposureSettings& settings);
+    float ExposureFor(float ev, const ExposureSettings& settings) const;
+
+    void BindSets(VkCommandBuffer cmd, VkPipelineBindPoint point);
+    void RecordShadows(VkCommandBuffer cmd);
+    void RecordRayTracing(VkCommandBuffer cmd);
+    void RecordView(VkCommandBuffer cmd, const ViewSetup& view, RenderTarget& output, bool main_view);
+    void RecordGBuffer(VkCommandBuffer cmd, const ViewSetup& view);
+    void RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view);
+    bool EnsureAoTargets();
+    bool EnsureShadowTarget();
+    void RecordRtAmbientOcclusion(VkCommandBuffer cmd, const ViewSetup& view);
+    void RecordLighting(VkCommandBuffer cmd, const ViewSetup& view);
+    void RecordLuminance(VkCommandBuffer cmd);
+    void RecordForward(VkCommandBuffer cmd, const ViewSetup& view, RenderTarget& output);
+    void RecordPost(VkCommandBuffer cmd, const SceneLighting& lighting, float dt);
+    void RecordReflectionSample(VkCommandBuffer cmd, const SceneLighting& lighting);
+    void RecordReflections(VkCommandBuffer cmd, const ViewSetup& view);
+    void RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetup& view, gpu::PassPush push);
+    void RecordMirrorTemporal(VkCommandBuffer cmd);
+    bool RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
+    bool RecordMotionBlur(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
+    bool MotionBlurActive() const;
+    void RecordObjectVelocity(VkCommandBuffer cmd, const ViewSetup& view);
+    void PostPass(VkCommandBuffer cmd, RenderTarget& target, VkPipeline pipeline, const gpu::PassPush& push);
+    SceneFilterContext FilterContext(VkCommandBuffer cmd, uint32_t layers) const;
+    void UpdateMotion(const Camera& camera, float dt);
+    void RecordDebug(VkCommandBuffer cmd);
+    void DrawMesh(VkCommandBuffer cmd, const Draw& draw, uint32_t view, uint32_t flags, bool mirrored, bool no_cull = false,
+                  const glm::vec4* aux = nullptr, VkCullModeFlags cull = VK_CULL_MODE_BACK_BIT, bool shadow_pass = false);
+    uint32_t ForwardLights(const Draw& draw, glm::vec4 aux[2], uint8_t view_bit) const;
+    void UpdateDominantLight(const Camera& camera, const SceneLighting& lighting, float dt);
+    uint32_t MirrorLights(const Draw& draw, glm::vec4 aux[2]) const;
+    void UpdateReflectionTexture(const std::string& path);
+    void ApplyEnvironmentOverrides();
+    void Stamp(VkCommandBuffer cmd, uint32_t index);
+    void ReadTimestamps(FrameSlot& slot);
+    void PushConstants(VkCommandBuffer cmd, const void* data, uint32_t size);
+    void CopyToHistory(VkCommandBuffer cmd, const RenderTarget& source);
+    void Fullscreen(VkCommandBuffer cmd, VkPipeline pipeline, const gpu::PassPush& push);
+    bool Visible(const Draw& draw, const glm::vec4* planes) const;
+    bool Visible(const Draw& draw, const ViewSetup& view) const;
+
+    bool CreateUpscalePipelines();
+    void DestroyUpscalePipelines();
+    bool CreateUpscaleTargets(VkExtent2D render, VkExtent2D output);
+    void DestroyUpscaleTargets();
+    void WriteUpscaleDescriptors(VkDescriptorImageInfo* images, bool post);
+    bool BeginUpscaleFrame(VkExtent2D output);
+    bool SetupUpscaler(VkExtent2D output);
+    void RecordOpaqueSnapshot(VkCommandBuffer cmd, RenderTarget& output);
+    void RecordSceneCopy(VkCommandBuffer cmd, RenderTarget& output);
+    void RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer);
+    void RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context);
+    void RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& view);
+    void RecordUpscale(VkCommandBuffer cmd, float dt);
+    void ReadUpscaleTimestamps(FrameSlot& slot);
+
+    static constexpr uint32_t kTimestamps = 12;
+    static constexpr uint32_t kReflectMapSize = 512;
+    static constexpr float kCameraCutDistance = 3.0f;
+
+    Renderer* renderer_ = nullptr;
+    TextureManager* textures_ = nullptr;
+    VkQueryPool queries_ = VK_NULL_HANDLE;
+    glm::vec3 last_eye_{0.0f};
+    DominantLightState dominant_;
+    float pending_time_ = 0.0f;
+    bool timed_ = false;
+    bool has_last_eye_ = false;
+    uint32_t last_timed_slot_ = Renderer::kFramesInFlight;
+    VkDevice device_ = VK_NULL_HANDLE;
+    FrameSlot slots_[Renderer::kFramesInFlight];
+    VkDescriptorSetLayout frame_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool pool_ = VK_NULL_HANDLE;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    VkSampler samplers_[gpu::kSmpCount] = {};
+
+    VkExtent2D extent_{0, 0};
+    RenderTarget albedo_;
+    RenderTarget normal_;
+    RenderTarget material_;
+    RenderTarget depth_;
+    RenderTarget diffuse_;
+    RenderTarget specular_;
+    RenderTarget probe_acc_;
+    RenderTarget hdr_;
+    RenderTarget bloom_[3];
+    RenderTarget flare_;
+    RenderTarget ldr_[2];
+    RenderTarget history_;
+    RenderTarget dof_half_;
+    RenderTarget dof_quarter_[2];
+    RenderTarget dof_eighth_[2];
+    RenderTarget velocity_;
+    RenderTarget object_velocity_;
+    RenderTarget mb_tile_[5];
+    RenderTarget mb_neighbour_;
+    RenderTarget mb_bake_;
+    RenderTarget mb_blur_[2];
+    RenderTarget mirror_;
+    RenderTarget mirror_history_;
+    RenderTarget mirror_temporal_;
+    RenderTarget reflect_layer_;
+    RenderTarget reflect_offset_;
+    RenderTarget reflect_history_[2];
+    RenderTarget shadow_;
+    RenderTarget ao_[2];
+    RenderTarget refmap_;
+    RenderTarget hdr_copy_;
+    RenderTarget particles_;
+    RenderTarget motion_;
+    RenderTarget reactive_;
+    glm::vec4 previous_handy_[2] = {glm::vec4(0.0f, 0.0f, 0.0f, -2.0f), glm::vec4(0.0f)};
+    RenderTarget opaque_;
+    RenderTarget handy_factor_;
+    bool handy_demod_ = false;
+    RenderTarget exposure_image_;
+    RenderTarget upscaled_;
+    RenderTarget post_hdr_;
+    RenderTarget post_depth_;
+    RenderTarget post_object_velocity_;
+    bool dump_requested_ = false;
+    bool dump_recorded_ = false;
+    vk::Buffer dump_compose_;
+    vk::Buffer dump_forward_;
+    vk::Buffer dump_scene_;
+    vk::Buffer dump_mirror_;
+    VkExtent2D output_extent_{0, 0};
+    bool targets_upscaled_ = false;
+    bool history_valid_ = false;
+
+    vk::Image lut1_;
+    vk::Image lut2_;
+    vk::Image material_tex_;
+    vk::Image dither_;
+    vk::Image color_lut_;
+    vk::Image color_lut_prev_;
+    vk::Image noise_;
+    vk::Image mask_;
+    vk::Image white_;
+    std::string color_lut_key_;
+    std::string color_lut_prev_key_;
+    std::string reflection_key_;
+    uint32_t reflection_cube_ = 0;
+    Vfs* vfs_ = nullptr;
+
+    VkPipeline gbuffer_ = VK_NULL_HANDLE;
+    VkPipeline decal_ = VK_NULL_HANDLE;
+    VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline probe_ = VK_NULL_HANDLE;
+    VkPipeline probe_resolve_ = VK_NULL_HANDLE;
+    VkPipeline light_ = VK_NULL_HANDLE;
+    VkPipeline compose_ = VK_NULL_HANDLE;
+    VkPipeline forward_ = VK_NULL_HANDLE;
+    VkPipeline luminance_ = VK_NULL_HANDLE;
+    VkPipeline reflect_colour_ = VK_NULL_HANDLE;
+    VkPipeline occlusion_ = VK_NULL_HANDLE;
+    VkPipeline occlusion_blur_ = VK_NULL_HANDLE;
+    VkPipeline bright_ = VK_NULL_HANDLE;
+    VkPipeline kawase_ = VK_NULL_HANDLE;
+    VkPipeline forward_emissive_ = VK_NULL_HANDLE;
+    VkPipeline bloom_add_ = VK_NULL_HANDLE;
+    VkPipeline kawase_sum_ = VK_NULL_HANDLE;
+    VkPipeline gaussian_ = VK_NULL_HANDLE;
+    VkPipeline tonemap_ = VK_NULL_HANDLE;
+    VkPipeline fxaa_ = VK_NULL_HANDLE;
+    VkPipeline mirror_temporal_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline dof_ratio_ = VK_NULL_HANDLE;
+    VkPipeline dof_down_ = VK_NULL_HANDLE;
+    VkPipeline dof_blur_ = VK_NULL_HANDLE;
+    VkPipeline dof_blend_ = VK_NULL_HANDLE;
+    VkPipeline mb_velocity_ = VK_NULL_HANDLE;
+    VkPipeline mb_tile_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline mb_bake_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline mb_mcguire_ = VK_NULL_HANDLE;
+    VkPipeline mb_composite_ = VK_NULL_HANDLE;
+    VkPipeline velocity_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline fsblur_ = VK_NULL_HANDLE;
+    VkPipeline banding_ = VK_NULL_HANDLE;
+    VkPipeline screen_fx_ = VK_NULL_HANDLE;
+    VkPipeline debug_ = VK_NULL_HANDLE;
+    VkPipeline reflect_make_ = VK_NULL_HANDLE;
+    VkPipeline reflect_blend_ = VK_NULL_HANDLE;
+    VkPipeline reflect_layer_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline reflect_temporal_pipeline_ = VK_NULL_HANDLE;
+    bool reflect_post_upscale_ = false;
+    uint32_t shown_shadow_limit_ = 3;
+    VkPipeline vfx_composite_ = VK_NULL_HANDLE;
+    VkPipeline up_motion_ = VK_NULL_HANDLE;
+    VkPipeline up_object_motion_ = VK_NULL_HANDLE;
+    VkPipeline up_reactive_ = VK_NULL_HANDLE;
+    VkPipeline up_resolve_ = VK_NULL_HANDLE;
+    VkPipeline up_demod_ = VK_NULL_HANDLE;
+
+    std::unique_ptr<RayTracing> rt_;
+    SubsurfacePass sss_;
+    bool sss_ready_ = false;
+    VkPipeline light_rt_ = VK_NULL_HANDLE;
+    bool rt_active_ = false;
+    bool rt_reflections_ = false;
+    VkPipeline reflect_make_rt_ = VK_NULL_HANDLE;
+    VkPipeline reflect_blend_rt_ = VK_NULL_HANDLE;
+    VkPipeline reflect_layer_rt_ = VK_NULL_HANDLE;
+    RenderTarget refmap_color_;
+    uint32_t rt_cull_ = 0x10;
+    static constexpr uint32_t kRtSoftSamples = 4;
+    uint64_t rt_built_frame_ = ~0ull;
+    std::vector<RtCaster> rt_casters_;
+    bool rt_contact_active_ = false;
+    VkPipeline light_contact_ = VK_NULL_HANDLE;
+    float rt_contact_reach_ = 0.35f;
+    bool rt_contact_legacy_ = false;
+    bool rt_ao_active_ = false;
+    bool rt_ao_ready_ = false;
+    VkPipeline rt_ao_trace_ = VK_NULL_HANDLE;
+    VkPipeline rt_ao_filter_ = VK_NULL_HANDLE;
+    VkPipeline probe_ao_ = VK_NULL_HANDLE;
+    RenderTarget rt_ao_images_[RayTracing::kAoImages];
+    uint32_t rt_ao_written_ = 0;
+    bool rt_ao_history_ = false;
+    glm::mat4 rt_ao_previous_{1.0f};
+    glm::vec3 rt_ao_previous_eye_{0.0f};
+    uint32_t rt_ao_rays_ = 2;
+    float rt_ao_reach_ = 0.75f;
+    float rt_ao_frames_ = 16.0f;
+
+    gpu::FrameData* frame_ = nullptr;
+    std::vector<glm::mat4> skin_matrices_;
+    std::vector<Draw> draws_;
+    std::vector<ShadowView> shadow_views_;
+    std::vector<uint32_t> probe_order_;
+    std::vector<const SceneLight*> light_sources_;
+    std::vector<LightBox> light_boxes_;
+    std::vector<uint8_t> light_shadow_views_;
+    std::vector<uint32_t> mirror_shadow_lights_;
+    uint32_t light_upload_count_ = 0;
+    uint32_t view_count_ = 0;
+    uint32_t light_count_ = 0;
+    uint32_t probe_count_ = 0;
+    ViewSetup main_view_;
+    ViewSetup mirror_view_;
+    bool mirror_active_ = false;
+    bool mirror_temporal_enabled_ = false;
+    bool mirror_history_valid_ = false;
+    uint32_t mirror_history_size_ = 0;
+    glm::mat4 mirror_current_view_projection_{1.0f};
+    glm::mat4 mirror_previous_view_projection_{1.0f};
+    glm::vec3 mirror_history_origin_{0.0f};
+    float mirror_history_exposure_ = 1.0f;
+    bool reflect_history_valid_ = false;
+    uint32_t reflect_history_index_ = 0;
+    uint32_t reflect_history_frame_ = 0;
+    float reflect_history_exposure_ = 1.0f;
+    std::vector<const SceneMirror*> mirrors_;
+    struct MirrorStale {
+        bool valid = false;
+        const GpuMesh* mesh = nullptr;
+        glm::mat4 transform{1.0f};
+        glm::mat4 projection{1.0f};
+        glm::mat4 view{1.0f};
+        glm::vec3 eye{0.0f};
+        float near_distance = 0.0f;
+        uint32_t size = 0;
+    };
+    MirrorStale mirror_stale_;
+    bool mirror_stale_active_ = false;
+    const SceneLighting* lighting_ = nullptr;
+    SceneLighting fallback_;
+    Camera camera_;
+
+    float ev_ = 0.0f;
+    bool adaptation_valid_ = false;
+    bool ev_pinned_ = false;
+    float exposure_ = 1.0f;
+    Camera motion_reference_;
+    float motion_interval_ = 1.0f / 60.0f;
+    bool motion_reference_set_ = false;
+    bool motion_reference_history_ = true;
+    bool motion_history_valid_ = false;
+    uint32_t motion_view_ = 0;
+    std::unordered_map<uint64_t, MotionHistory> motion_history_;
+    std::unordered_map<uint64_t, MotionHistory> motion_history_next_;
+    Camera last_camera_;
+    bool has_last_camera_ = false;
+    glm::mat4 previous_view_projection_{1.0f};
+    double frame_time_ = 1.0 / 60.0;
+    uint32_t frame_counter_ = 0;
+    RenderStats stats_;
+
+    struct UpscaleState {
+        UpscalerKind kind = UpscalerKind::Off;
+        UpscaleBackend* backend = nullptr;
+        UpscaleSettings created_settings;
+        VkExtent2D render{};
+        VkExtent2D created_render{};
+        VkExtent2D created_output{};
+        bool enabled = false;
+        bool created = false;
+        bool reset = true;
+        bool cut = false;
+        int32_t jitter_index = 0;
+        int32_t phase_count = 1;
+        glm::vec2 jitter_pixels{0.0f};
+        glm::vec2 jitter_ndc{0.0f};
+        float mip_bias = 0.0f;
+        bool warp_test = false;
+        bool warp_history = false;
+        std::string failed_key;
+    } up_;
+    uint32_t post_view_ = 0;
+    bool post_bindings_ = false;
+    UpscaleStats upscale_stats_;
+    double upscale_ms_sum_ = 0.0;
+    double inputs_ms_sum_ = 0.0;
+    double gpu_ms_sum_ = 0.0;
+    double cpu_ms_sum_ = 0.0;
+    uint32_t upscale_samples_ = 0;
+    uint32_t gpu_samples_ = 0;
+    uint32_t cpu_samples_ = 0;
+    struct FrameTiming {
+        float gpu_ms = 0.0f;
+        float pass_ms[6] = {};
+        float part_ms[6] = {};
+        float device_mb = 0.0f;
+        uint64_t frame = 0;
+    };
+    std::vector<FrameTiming> timing_ring_;
+    uint64_t timing_count_ = 0;
+    struct FrameTrace {
+        float cpu_ms = 0.0f;
+        float interval_ms = 0.0f;
+        uint32_t lights = 0;
+        uint32_t shadow_views = 0;
+        uint32_t draws = 0;
+    };
+    std::vector<FrameTrace> frame_trace_;
+    std::map<std::string, std::pair<bool, float>> light_change_state_;
+    std::set<std::string> previous_shadowed_;
+    lightcull::OccluderSet main_occluders_;
+    lightcull::OccluderSet mirror_occluders_;
+    bool legacy_light_cull_ = false;
+    glm::mat4 main_cull_view_projection_{1.0f};
+    bool BoxInCullView(const ViewSetup& view, const LightBox& box) const;
+    std::map<std::string, std::string> cull_reasons_;
+    std::map<std::string, std::string> shadow_reasons_;
+    std::chrono::steady_clock::time_point previous_frame_start_{};
+    int vr_eye_ = -1;
+};
+
+}

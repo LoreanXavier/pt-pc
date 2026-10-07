@@ -1,0 +1,5 @@
+# a save dialog is open: the cross button closes it
+swait 60
+sshot {shots}/save_dialog.png
+stap 0 cross
+swait 30

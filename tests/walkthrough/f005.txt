@@ -1,0 +1,12 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -7.7 -1.4 7.5
+swait 30
+gfile -6.1 -1.4 7.5
+swait 10
+sfree
+gfile -1.0 -1.4 7.5
+gfile 0 -1.4 1.9
+slog

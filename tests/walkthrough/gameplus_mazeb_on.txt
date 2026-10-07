@@ -1,0 +1,18 @@
+# Game+ (after a finish), maze B active after mazeB's route: the bathtub Lisa sits in the tub of the bathroom where the baby talks
+# (her middle at maze B file (-5.02, 0.66, -34.93), the mirror at (-2.60, 1.66, -35.40)); three views in the bathroom
+sexpect gameplus 1
+scamfile -1.0 1.6 -34.9 -1 -0.25 0 54.879
+swait 30
+sshot {shots}/gameplus_mazeb_tub.png
+swait 30
+scamfile -2.2 1.7 -34.0 -1 -0.4 -0.3 54.879
+swait 30
+sshot {shots}/gameplus_mazeb_tub2.png
+swait 30
+scamfile -3.0 1.8 -35.9 -1 -0.45 0.4 54.879
+swait 30
+sshot {shots}/gameplus_mazeb_tub3.png
+swait 30
+scamera off
+slog
+squit

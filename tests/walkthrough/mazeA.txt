@@ -1,0 +1,11 @@
+sanchor next
+gfile 0 0 1.5
+gfile 0 0 13.6
+sshot {shots}/{floor}_{loop}_maze_a.png
+gfile -9.8 0 13.6
+gfile -9.8 0 1.3
+slog
+gfile -29.2 0 1.3
+slog
+gfile -29.2 0 -1.0 600
+slog

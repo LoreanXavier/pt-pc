@@ -1,0 +1,31 @@
+# Reset progress on the PC settings page with a pad: cross asks once more, circle cancels that, and a second cross deletes
+# the save and turns the row off. Run it with an empty save folder, never the real one.
+# pt.exe --headless --virtual-pads --audio-offline --save-dir <empty folder> --start-floor f010 --frames 3000 --input-script tests/pad/pc_reset.txt
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 stap 0 options
+20 swait 70
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 stap 0 up
+20 swait 4
+20 sexpect pcrow pc_reset
+20 sexpect pcenabled pc_reset 1
+20 stap 0 cross
+20 swait 4
+20 stap 0 circle
+20 swait 4
+20 sexpect page 1
+20 sexpect pcenabled pc_reset 1
+20 stap 0 cross
+20 swait 4
+20 stap 0 cross
+20 swait 4
+20 sexpect pcenabled pc_reset 0
+20 stap 0 circle
+20 swait 40
+20 sexpect page 0
+20 slog
+20 squit

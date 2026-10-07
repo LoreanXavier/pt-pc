@@ -1,0 +1,4 @@
+# a new session's reference: the session state (Game::DescribeSessionState) at the first boot's start room, saved
+sstep 15
+swait 60
+sstate save

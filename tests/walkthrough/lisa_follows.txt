@@ -1,0 +1,4 @@
+# f050 pass 2: Lisa follows in KillChase (LogicControl 3), drawn with her shadow
+swait 60
+sexpect ocho 3
+sexpect gimmick Ocho 1

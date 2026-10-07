@@ -1,0 +1,2 @@
+# Game+: the bathtub Lisa is drawn (the baby is in a loaded sink)
+sexpect gameplus 1

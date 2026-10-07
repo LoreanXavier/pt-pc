@@ -1,0 +1,39 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.3
+swait 10
+sfree
+sdemo gc_p01_110
+slog
+gfile -1.0 -1.4 7.4
+gfile -3.2 -1.4 7.4
+gfile -3.3 -1.4 5.7
+slog
+fent shsb_lght005_0000
+swait 10
+sfree
+sdemo gc_p00_030
+swait 10
+sdemo gc_p01_050
+slog
+gfile -4.3 -1.4 6.0 600
+fent Locator_baby_pos
+sshot {shots}/{floor}_{loop}_baby.png
+swait 10
+sfree
+sdemo gc_p01_090
+slog
+gfile -4.1 -1.4 6.0 600
+fent Locator_mirror_pos
+sshot {shots}/{floor}_{loop}_mirror.png
+swait 10
+sfree
+sdemo gc_p01_020
+slog
+gfile -3.2 -1.4 6.8 600
+fdir Locator_open_door_dir
+sstick 0 1 30
+swait 10
+sfree
+sdemo gc_p01_022
+slog

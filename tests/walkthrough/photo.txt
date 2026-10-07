@@ -1,0 +1,18 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile -0.5 -1.4 1.4
+fent shsb_labl001_mapc004_lisa
+swait 10
+szoom 1
+swait 150
+szoom 0
+swait 30
+slog
+gfile -0.5 -1.4 1.4
+fent shsb_labl001_mapc005_tree
+swait 10
+szoom 1
+swait 150
+szoom 0
+swait 30
+slog

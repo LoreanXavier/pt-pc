@@ -1,0 +1,12 @@
+# Photo is active from f020 on, so the option screen's photo frame is pending. A two-frame R3 tap is much shorter than the zoom-in;
+# the original (0x1285F80) keeps the release and sends PhotoOption when the zoom-in ends.
+pattach 0 ps5
+stap 0 options
+smenu 1
+swait 60
+stap 0 r3 2
+swait 150
+sexpect menu 1
+stap 0 options
+smenu 0
+slog

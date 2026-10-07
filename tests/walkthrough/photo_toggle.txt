@@ -1,0 +1,11 @@
+# the photo mode and the free camera (Extras) change no session state
+sstate save
+sphoto 1
+swait 30
+sphoto 0
+swait 5
+sfreecam 1
+swait 30
+sfreecam 0
+swait 5
+sstate compare

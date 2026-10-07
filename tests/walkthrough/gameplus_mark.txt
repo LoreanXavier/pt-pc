@@ -1,0 +1,2 @@
+# Game+: the finished game's marker, as a finish sets it
+sgameplus

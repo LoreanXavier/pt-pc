@@ -1,0 +1,75 @@
+# Keyboard and mouse through the input device's event path (key, ktap, mbutton, mtap): the right mouse button alone zooms (not Shift, not
+# Q); the left button acts (cross) also while the right one holds the zoom (the XMark gouge is the X key), and Enter acts too; W walks; Esc opens and
+# closes the menu; on the option screen Enter and Backspace toggle the camera inversions, the arrows are the D-pad and the right mouse
+# button is R3, the zoom of the photo option.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/keyboard.txt
+20 sstep 15
+20 swait 30
+20 skey Left_Shift 1
+20 swait 2
+20 sexpect held zoom 0
+20 sexpect raw r3 0
+20 skey Left_Shift 0
+20 skey Right_Shift 1
+20 swait 2
+20 sexpect held zoom 0
+20 skey Right_Shift 0
+20 skey Q 1
+20 swait 2
+20 sexpect held zoom 0
+20 skey Q 0
+20 smbutton right 1
+20 swait 2
+20 sexpect held zoom 1
+20 smbutton left 1
+20 swait 2
+20 sexpect held zoom 1
+20 sexpect held action 1
+20 sexpect raw cross 1
+20 smbutton left 0
+20 swait 2
+20 sexpect held action 0
+20 smbutton right 0
+20 swait 2
+20 sexpect held zoom 0
+20 skey Return 1
+20 swait 2
+20 sexpect held action 1
+20 skey Return 0
+20 swait 2
+20 sexpect held action 0
+20 skey W 1
+20 swait 2
+20 sexpect lstick 0 1
+20 skey W 0
+20 swait 2
+20 sexpect menu 0
+20 sktap Escape
+20 swait 4
+20 sexpect menu 1
+20 sexpect paused 1
+20 swait 90
+20 sktap Return
+20 swait 4
+20 sexpect invert y 1
+20 sktap Backspace
+20 swait 4
+20 sexpect invert x 1
+20 sktap Right
+20 swait 4
+20 sexpect brightness 6
+20 sktap Left
+20 swait 4
+20 sexpect brightness 5
+20 smbutton right 1
+20 swait 2
+20 sexpect raw r3 1
+20 smbutton right 0
+20 swait 2
+20 sexpect raw r3 0
+20 sktap Escape
+20 swait 60
+20 sexpect menu 0
+20 sexpect paused 0
+20 slog
+20 squit

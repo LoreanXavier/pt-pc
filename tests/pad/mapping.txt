@@ -1,0 +1,181 @@
+# Virtual pads through the SDL event path: mapping to PlayStation positions, dead zones, triggers, touch pad halves,
+# two pads, hot plug mid-press, rumble routing.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --frames 400 --input-script tests/pad/mapping.txt
+# A pad change at frame N reaches the game at frame N+1 (SDL pumps it at the start of the next frame).
+10 pattach 0 xbox
+12 expect pads 1
+20 pbutton 0 south 1
+21 expect held action 1
+21 expect raw cross 1
+21 expect pressed action 1
+22 expect pressed action 0
+22 expect held action 1
+22 pbutton 0 south 0
+23 expect held action 0
+24 pbutton 0 east 1
+25 expect raw circle 1
+25 expect held action 0
+25 pbutton 0 east 0
+26 pbutton 0 west 1
+27 expect raw square 1
+27 pbutton 0 west 0
+28 pbutton 0 north 1
+29 expect raw triangle 1
+29 expect held triangle 1
+29 pbutton 0 north 0
+30 pbutton 0 l1 1
+31 expect raw l1 1
+31 expect held l1 1
+31 pbutton 0 l1 0
+32 pbutton 0 r1 1
+33 expect raw r1 1
+33 expect held r1 1
+33 pbutton 0 r1 0
+34 pbutton 0 l3 1
+35 expect raw l3 1
+35 expect held l3 1
+35 pbutton 0 l3 0
+36 pbutton 0 r3 1
+37 expect raw r3 1
+37 expect held zoom 1
+37 pbutton 0 r3 0
+38 expect held zoom 0
+40 pbutton 0 start 1
+41 expect raw start 1
+41 expect pause 1
+42 expect pause 0
+42 pbutton 0 start 0
+44 pbutton 0 up 1
+45 expect raw up 1
+45 expect held lookup 1
+45 pbutton 0 up 0
+46 pbutton 0 down 1
+47 expect held lookdown 1
+47 pbutton 0 down 0
+48 pbutton 0 left 1
+49 expect held lookleft 1
+49 pbutton 0 left 0
+50 pbutton 0 right 1
+51 expect held lookright 1
+51 pbutton 0 right 0
+52 expect raw right 0
+54 paxis 0 l2 0.4
+55 expect raw l2 1
+55 paxis 0 l2 0
+56 expect raw l2 0
+56 paxis 0 r2 1
+57 expect raw r2 1
+57 paxis 0 r2 0
+60 paxis 0 lx 0.05
+61 expect lstick 0 0
+61 paxis 0 lx 0.2
+62 expect lstick 0.2 0 0.01
+62 paxis 0 lx 0.09
+62 paxis 0 ly -0.9
+63 expect lstick 0 0.9 0.01
+63 paxis 0 ly 0.5
+64 expect lstick 0 -0.5 0.01
+64 paxis 0 lx 0
+64 paxis 0 ly 0
+65 expect lstick 0 0
+65 paxis 0 rx 0.5
+65 paxis 0 ry 0.3
+66 expect rstick 0.5 0.3 0.01
+66 paxis 0 rx 0.1
+66 paxis 0 ry 0
+67 expect rstick 0 0
+67 paxis 0 rx 0
+# a second pad (PlayStation layout, touch pad) drives the same player
+70 pattach 1 ps4
+72 expect pads 2
+72 pbutton 1 cross 1
+73 expect held action 1
+73 pbutton 1 cross 0
+74 expect held action 0
+74 paxis 0 lx 0.3
+74 paxis 1 lx -0.8
+75 expect lstick -0.8 0 0.01
+75 paxis 1 lx 0
+76 expect lstick 0.3 0 0.01
+76 paxis 0 lx 0
+78 ptouch 1 0.8 0.5 1
+79 pbutton 1 touchpad 1
+80 expect raw start 1
+80 expect pause 1
+80 pbutton 1 touchpad 0
+81 ptouch 1 0.2 0.5 1
+82 pbutton 1 touchpad 1
+83 expect raw select 1
+83 expect held select 1
+83 expect pause 0
+83 pbutton 1 touchpad 0
+84 ptouch 1 0.5 0.5 1
+85 pbutton 1 touchpad 1
+86 expect raw start 0
+86 expect raw select 0
+86 pbutton 1 touchpad 0
+86 ptouch 1 0.5 0.5 0
+# OPTIONS together with SELECT (touch pad left half) does not toggle the pause (0x9203E0)
+87 ptouch 1 0.2 0.5 1
+87 pbutton 1 touchpad 1
+87 pbutton 1 options 1
+88 expect raw start 1
+88 expect raw select 1
+88 expect pause 0
+88 pbutton 1 options 0
+88 pbutton 1 touchpad 0
+88 ptouch 1 0.2 0.5 0
+# hot plug: pad 1 is removed while it holds cross and the left stick, nothing stays stuck
+90 pbutton 1 cross 1
+90 paxis 1 ly -1
+91 expect held action 1
+91 expect lstick 0 1 0.01
+91 pdetach 1
+92 expect pads 1
+92 expect held action 0
+92 expect lstick 0 0
+# pads of other kinds map by position: south is cross on all of them
+100 pattach 2 switch
+100 pattach 3 generic
+102 expect pads 3
+102 pbutton 2 south 1
+103 expect held action 1
+103 expect raw cross 1
+103 pbutton 2 south 0
+103 pbutton 2 east 1
+104 expect raw circle 1
+104 expect held action 0
+104 pbutton 2 east 0
+104 pbutton 3 south 1
+105 expect held action 1
+105 pbutton 3 south 0
+105 pbutton 3 r3 1
+106 expect held zoom 1
+106 pbutton 3 r3 0
+110 pattach 1 ps5
+112 expect pads 4
+112 pbutton 1 triangle 1
+113 expect raw triangle 1
+113 pbutton 1 triangle 0
+# vibration goes to the pad used last: the door hit pattern (0.3 s, both motors about 178)
+120 pbutton 2 south 1
+121 pbutton 2 south 0
+125 expect norumble 0
+125 expect norumble 2
+126 sound Play_sfx_door_hit_01
+140 expect rumble 2 150 150
+140 expect norumble 0
+140 expect norumble 1
+140 expect norumble 3
+160 expect rumble 2 0 0
+# after the pattern ends the pad is stopped
+170 expect norumble 2
+# releasing everything and detaching all pads leaves no input behind
+180 pdetach 0
+180 pdetach 1
+180 pdetach 2
+180 pdetach 3
+182 expect pads 0
+182 expect held action 0
+182 expect lstick 0 0
+190 squit

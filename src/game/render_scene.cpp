@@ -1,0 +1,1147 @@
+#include "game/render_scene.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+
+#include "engine/core/log.h"
+#include "engine/data/fox2.h"
+#include "engine/fs/vfs.h"
+#include "engine/physics/collision_world.h"
+#include "engine/core/strcode.h"
+#include "game/demo_system.h"
+#include "game/game.h"
+#include "game/stage_data.h"
+#include "game/stage_manager.h"
+
+namespace pt::game {
+namespace {
+
+constexpr float kCameraAperture = 1.0f;
+constexpr float kCameraShutter = 0.008333333f;
+
+constexpr float kPi = 3.14159265358979f;
+
+struct HandyPose {
+    float view_pitch;
+    glm::vec3 pivot;
+};
+
+constexpr glm::vec3 kHandOffset{0.0377f, 0.0603f, 0.1264f};
+constexpr HandyPose kHandyPoses[] = {{-55.0f, {-0.2402f, 0.0431f, 0.2678f}}, {-39.75f, {-0.2466f, -0.0074f, 0.2563f}},
+                                    {-20.09f, {-0.2482f, -0.0671f, 0.2221f}}, {-10.98f, {-0.2488f, -0.0905f, 0.2022f}},
+                                    {-2.57f, {-0.2503f, -0.1142f, 0.1773f}},  {0.0f, {-0.2495f, -0.1130f, 0.1740f}},
+                                    {39.45f, {-0.2554f, -0.1395f, 0.0666f}},
+                                    {50.5f, {-0.2507f, -0.1393f, 0.0402f}}};
+constexpr HandyPose kPickupHoldPoses[] = {{-55.0f, {-0.2446f, -0.0958f, 0.1462f}}, {-45.8f, {-0.2442f, -0.1141f, 0.1072f}},
+                                          {-38.15f, {-0.2459f, -0.1183f, 0.0859f}}, {-22.17f, {-0.2484f, -0.1213f, 0.0380f}}};
+
+template <size_t N>
+HandyPose PoseAt(const HandyPose (&poses)[N], float view_pitch) {
+    if (view_pitch <= poses[0].view_pitch) {
+        return poses[0];
+    }
+    for (size_t i = 1; i < N; ++i) {
+        const HandyPose& a = poses[i - 1];
+        const HandyPose& b = poses[i];
+        if (view_pitch <= b.view_pitch) {
+            const float t = (view_pitch - a.view_pitch) / (b.view_pitch - a.view_pitch);
+            return {view_pitch, glm::mix(a.pivot, b.pivot, t)};
+        }
+    }
+    return poses[N - 1];
+}
+
+}
+
+void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pickup_hold, float demo_pose, glm::vec3& position,
+                    glm::vec3& direction, glm::vec3* right_out, glm::vec3* up_out) {
+    const glm::vec3 forward = camera.Forward();
+    const glm::vec3 right = camera.Right();
+    const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+    const float view_pitch = glm::degrees(std::asin(std::clamp(forward.y, -1.0f, 1.0f)));
+    HandyPose pose = PoseAt(kHandyPoses, view_pitch);
+    if (pickup_hold > 0.0f) {
+        pose.pivot = glm::mix(pose.pivot, PoseAt(kPickupHoldPoses, view_pitch).pivot, std::min(pickup_hold, 1.0f));
+    }
+    const glm::vec3 target_cam(glm::dot(aim_point - camera.position, right), glm::dot(aim_point - camera.position, up),
+                               glm::dot(aim_point - camera.position, forward));
+    glm::vec3 light_cam = pose.pivot + kHandOffset;
+    glm::vec3 d_cam(0.0f, 0.0f, 1.0f);
+    glm::vec3 r_cam(1.0f, 0.0f, 0.0f);
+    glm::vec3 u_cam(0.0f, 1.0f, 0.0f);
+    for (int i = 0; i < 6; ++i) {
+        const glm::vec3 to_target = target_cam - light_cam;
+        if (glm::dot(to_target, to_target) < 1.0e-6f) {
+            break;
+        }
+        d_cam = glm::normalize(to_target);
+        r_cam = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), d_cam);
+        r_cam = glm::dot(r_cam, r_cam) > 1.0e-8f ? glm::normalize(r_cam) : glm::vec3(1.0f, 0.0f, 0.0f);
+        u_cam = glm::cross(d_cam, r_cam);
+        light_cam = pose.pivot + r_cam * kHandOffset.x + u_cam * kHandOffset.y + d_cam * kHandOffset.z;
+    }
+    position = camera.position + right * light_cam.x + up * light_cam.y + forward * light_cam.z;
+    direction = glm::normalize(right * d_cam.x + up * d_cam.y + forward * d_cam.z);
+    if (right_out) {
+        *right_out = glm::normalize(right * r_cam.x + up * r_cam.y + forward * r_cam.z);
+    }
+    if (up_out) {
+        *up_out = glm::normalize(right * u_cam.x + up * u_cam.y + forward * u_cam.z);
+    }
+    if (demo_pose > 0.0f) {
+        const glm::vec3 fixed = camera.position - right * 0.165f - up * 0.13f + forward * 0.185f;
+        position = glm::mix(position, fixed, std::min(demo_pose, 1.0f));
+        const glm::vec3 to_target = aim_point - position;
+        if (glm::dot(to_target, to_target) > 1.0e-6f) {
+            direction = glm::normalize(to_target);
+        }
+    }
+}
+
+namespace {
+
+template <typename T>
+T ReadAt(const std::vector<uint8_t>& data, size_t offset) {
+    T value{};
+    if (offset + sizeof(T) <= data.size()) {
+        std::memcpy(&value, data.data() + offset, sizeof(T));
+    }
+    return value;
+}
+
+std::string ShortName(const std::string& name) {
+    const size_t bar = name.find_last_of('|');
+    return bar == std::string::npos ? name : name.substr(bar + 1);
+}
+
+float CosHalf(float degrees) {
+    return std::cos(degrees * kPi / 360.0f);
+}
+
+float InverseRange(float cos_inner, float cos_outer) {
+    return 1.0f / std::max(cos_inner - cos_outer, 1.0e-5f);
+}
+
+float InverseInner(float scale) {
+    return scale >= 0.9999f ? 1.0e4f : 1.0f / (1.0f - scale);
+}
+
+void SpotAxes(const glm::mat3& world, glm::vec3 reach, glm::vec3& direction, glm::vec3& up) {
+    if (glm::dot(reach, reach) < 1.0e-12f) {
+        reach = glm::vec3(0.0f, -1.0f, 0.0f);
+    }
+    const glm::vec3 v = glm::normalize(reach);
+    const glm::vec3 z(0.0f, 0.0f, 1.0f);
+    glm::quat arc(0.0f, 1.0f, 0.0f, 0.0f);
+    if (glm::dot(v + z, v + z) >= 1.0e-5f) {
+        const glm::vec3 axis = glm::cross(z, v);
+        arc = glm::normalize(glm::quat(1.0f + glm::dot(z, v), axis.x, axis.y, axis.z));
+    }
+    const glm::mat3 rotation(glm::normalize(world[0]), glm::normalize(world[1]), glm::normalize(world[2]));
+    direction = glm::normalize(rotation * v);
+    up = glm::normalize(rotation * (arc * glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+const char* ForcedLightSet() {
+    static const char* value = std::getenv("PT_FORCE_LIGHTS");
+    return value && *value ? value : nullptr;
+}
+
+bool NameListed(const char* list_value, const std::string& name) {
+    if (!list_value || !*list_value) {
+        return false;
+    }
+    for (std::string_view list(list_value); !list.empty();) {
+        const size_t comma = list.find(',');
+        const std::string_view token = list.substr(0, comma);
+        if (!token.empty() && name.find(token) != std::string::npos) {
+            return true;
+        }
+        list = comma == std::string_view::npos ? std::string_view() : list.substr(comma + 1);
+    }
+    return false;
+}
+
+bool Forced(const fox2::DataSetFile& file, const fox2::Entity& e) {
+    const char* set = ForcedLightSet();
+    return set && file.EntityName(e).find(set) != std::string::npos;
+}
+
+bool EntityEnabled(const Stage* stage, const fox2::DataSetFile& file, const fox2::Entity& e) {
+    if (Forced(file, e)) {
+        return true;
+    }
+    if (stage) {
+        if (const BodyState* body = stage->FindBody(&e)) {
+            return body->enable;
+        }
+    }
+    return file.GetBool(e, "enable", 0, true);
+}
+
+}
+
+const RenderSceneBuilder::ProbeFile* RenderSceneBuilder::LoadProbes(Vfs& vfs, const std::string& path) {
+    auto it = probe_files_.find(path);
+    if (it != probe_files_.end()) {
+        return &it->second;
+    }
+    ProbeFile file;
+    auto bytes = vfs.ReadFile(path);
+    if (bytes && bytes->size() > 0xB0 && ReadAt<uint32_t>(*bytes, 0) == 3) {
+        const std::vector<uint8_t>& d = *bytes;
+        const uint32_t count = ReadAt<uint32_t>(d, 0x7C);
+        const uint32_t divisions = ReadAt<uint32_t>(d, 0x8C);
+        const size_t table = 0xB0 + size_t(divisions) * 4;
+        for (uint32_t i = 0; i < count; ++i) {
+            const size_t entry = table + size_t(i) * 12;
+            const uint32_t name_offset = ReadAt<uint32_t>(d, entry);
+            const uint32_t data_offset = ReadAt<uint32_t>(d, entry + 4);
+            if (name_offset >= d.size() || data_offset + 72 > d.size()) {
+                continue;
+            }
+            std::string name;
+            for (size_t k = name_offset; k < d.size() && d[k] != 0; ++k) {
+                name.push_back(static_cast<char>(d[k]));
+            }
+            std::array<glm::vec3, 9> sh{};
+            for (int c = 0; c < 9; ++c) {
+                for (int ch = 0; ch < 3; ++ch) {
+                    sh[c][ch] = glm::unpackHalf1x16(ReadAt<uint16_t>(d, data_offset + size_t(c) * 8 + size_t(ch) * 2));
+                }
+            }
+            file.probes[name] = sh;
+        }
+        LogInfo("render scene: {} probes from {}", file.probes.size(), path);
+    } else {
+        LogWarn("render scene: probe file {} missing or invalid", path);
+    }
+    return &probe_files_.emplace(path, std::move(file)).first->second;
+}
+
+void RenderSceneBuilder::AddLight(const fox2::DataSetFile& f, const fox2::Entity& e, const glm::mat4& file_to_world, uint64_t id,
+                                  SceneLighting& out) const {
+    static const char* skip = std::getenv("PT_LIGHT_SKIP");
+    static const char* no_specular = std::getenv("PT_LIGHT_NOSPEC");
+    const std::string name = f.EntityName(e);
+    if (NameListed(skip, name)) {
+        return;
+    }
+    SceneLight l;
+    l.id = id;
+    l.name = name;
+    const bool spot = e.class_name == "SpotLight";
+    l.type = spot ? LightType::Spot : LightType::Point;
+    const glm::mat4 world = file_to_world * f.WorldTransform(e);
+    l.position = glm::vec3(world[3]);
+    glm::vec3 reach = glm::vec3(f.GetVec4(e, "reachPoint"));
+    static const char* axis_mode = std::getenv("PT_SPOT_AXIS");
+    if (axis_mode && std::strcmp(axis_mode, "reach") != 0) {
+        if (const fox2::Entity* target = f.GetEntity(e, "irradiationPoint")) {
+            const glm::vec3 to = glm::vec3(file_to_world * f.WorldTransform(*target)[3]) - l.position;
+            reach = std::strcmp(axis_mode, "target") == 0 ? glm::transpose(glm::mat3(world)) * to : to;
+        }
+    }
+    SpotAxes(glm::mat3(world), reach, l.direction, l.up);
+    const glm::vec3 color = glm::vec3(f.GetVec4(e, "color"));
+    float lumen = f.GetFloat(e, "lumen");
+    const std::string_view last = std::string_view(name).substr(name.rfind('|') == std::string::npos ? 0 : name.rfind('|') + 1);
+    if (spot && (last == "8SL_stairs_down0000" || last == "8SL_stairs_down0002")) {
+        lumen = 40.0f;
+    }
+    const glm::vec3 rgb = light_math::ColorFromTemperature(f.GetFloat(e, "temperature", 0, 6500.0f), f.GetFloat(e, "colorDeflection"), lumen, color);
+    l.inner_range = f.GetFloat(e, "innerRange");
+    l.outer_range = std::max(f.GetFloat(e, "outerRange"), 0.01f);
+    l.dimmer = f.GetFloat(e, "dimmer");
+    l.source_radius = light_math::SourceRadius(f.GetFloat(e, "lightSize"));
+    l.cast_shadow = f.GetBool(e, "castShadow");
+    l.priority = 0xC0;
+    l.specular_scale = f.GetBool(e, "hasSpecular", 0, true) && !NameListed(no_specular, name) ? 1.0f : 0.0f;
+    l.shadow_strength = f.GetFloat(e, "LodShadowDrawRate", 0, 1.0f);
+    l.lod = glm::vec4(f.GetFloat(e, "LodNearSize"), f.GetFloat(e, "LodFarSize"), std::ldexp(0.5f, f.GetInt(e, "lodRadiusLevel") & 31),
+                      f.GetInt(e, "lodFadeType") == 1 ? 1.0f : 0.0f);
+    l.shadow_bias = f.GetFloat(e, "shadowBias") * 0.001f;
+    if (spot) {
+        const float umbra = f.GetFloat(e, "umbraAngle");
+        const float penumbra = f.GetFloat(e, "penumbraAngle");
+        const float exponent = f.GetFloat(e, "attenuationExponent", 0, 1.0f);
+        const float omega = light_math::SpotSolidAngle(umbra, penumbra, exponent);
+        l.intensity = rgb / omega * f.GetFloat(e, "powerScale", 0, 1.0f) / kPi;
+        l.cos_outer = CosHalf(umbra);
+        l.inv_cone_range = InverseRange(CosHalf(penumbra), l.cos_outer);
+        l.cone_exponent = exponent;
+        const float shadow_umbra = f.GetFloat(e, "shadowUmbraAngle", 0, umbra);
+        const float shadow_penumbra = f.GetFloat(e, "shadowPenumbraAngle", 0, penumbra);
+        l.shadow_cos_outer = CosHalf(shadow_umbra);
+        l.shadow_inv_cone_range = InverseRange(CosHalf(shadow_penumbra), l.shadow_cos_outer);
+        l.shadow_fov = shadow_umbra * kPi / 180.0f;
+        l.view_bias = f.GetFloat(e, "viewBias") * 0.001f;
+    } else {
+        l.intensity = rgb / (4.0f * kPi) / kPi;
+    }
+    const fox2::Entity* irradiation = f.GetEntity(e, "irradiationPoint");
+    l.rank_point = irradiation ? glm::vec3(file_to_world * f.WorldTransform(*irradiation)[3]) : l.position;
+    l.has_rank_point = true;
+    if (const fox2::Entity* area = f.GetEntity(e, "lightArea")) {
+        const glm::mat4 box = file_to_world * f.WorldTransform(*area) * glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+        if (std::abs(glm::determinant(glm::mat3(box))) > 1.0e-9f) {
+            l.has_area = true;
+            l.area_world = box;
+            l.area_to_box = glm::inverse(box);
+        }
+    }
+    out.lights.push_back(l);
+}
+
+std::optional<SceneOccluder> RenderSceneBuilder::BuildOccluder(const fox2::DataSetFile& f, const fox2::Entity& e, const glm::mat4& file_to_world) {
+    if (!f.GetBool(e, "isEnable", 0, true)) {
+        return std::nullopt;
+    }
+    SceneOccluder o;
+    o.count = static_cast<uint32_t>(std::clamp(f.GetInt(e, "numVertices", 0, 4), 0, 7));
+    if (o.count < 3) {
+        return std::nullopt;
+    }
+    o.one_sided = f.GetBool(e, "isOneSideMode");
+    const glm::mat4 world = file_to_world * f.WorldTransform(e);
+    for (uint32_t i = 0; i < o.count; ++i) {
+        o.points[i] = glm::vec3(world * glm::vec4(glm::vec3(f.GetVec4(e, "positions", i)), 1.0f));
+    }
+    return o;
+}
+
+std::optional<SceneProbe> RenderSceneBuilder::BuildProbe(Vfs& vfs, const fox2::DataSetFile& f, const fox2::Entity& e, const glm::mat4& file_to_world) {
+    const fox2::Entity* area = f.GetEntity(e, "lightArea");
+    const fox2::Entity* coefficients = f.GetEntity(e, "shCoefficientsData");
+    if (!area || !coefficients) {
+        return std::nullopt;
+    }
+    std::string path = f.GetString(*coefficients, "lpshFile");
+    if (path.empty()) {
+        path = f.GetString(*coefficients, "filePath");
+    }
+    if (path.empty()) {
+        return std::nullopt;
+    }
+    const ProbeFile* file = LoadProbes(vfs, path);
+    auto it = file->probes.find(ShortName(f.EntityName(e)));
+    static const bool dark_probes = [] {
+        const char* env = std::getenv("PT_DARK_PROBES");
+        return !env || std::atoi(env) != 0;
+    }();
+    const bool dark = dark_probes && (f.GetUInt(e, "localFlags") & 16u) != 0;
+    if (it == file->probes.end() && !dark) {
+        return std::nullopt;
+    }
+    SceneProbe p;
+    p.box_world = file_to_world * f.WorldTransform(*area) * glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+    if (std::abs(glm::determinant(glm::mat3(p.box_world))) < 1.0e-12f) {
+        return std::nullopt;
+    }
+    p.world_to_box = glm::inverse(p.box_world);
+    auto inner = [&](const char* name) { return InverseInner(f.GetFloat(e, name, 0, 1.0f)); };
+    p.positive_scale = glm::vec3(inner("innerScaleXPositive"), inner("innerScaleYPositive"), inner("innerScaleZPositive"));
+    p.negative_scale = glm::vec3(inner("innerScaleXNegative"), inner("innerScaleYNegative"), inner("innerScaleZNegative"));
+    p.priority = f.GetInt(e, "priority");
+    p.weight = 1.0f;
+    p.name = f.EntityName(e);
+    static const float kBasis[9] = {0.2820948f, 0.4886025f, 0.4886025f, 0.4886025f, 1.0925484f, 1.0925484f, 0.3153916f, 1.0925484f, 0.5462742f};
+    static const bool sh_legacy = [] {
+        const char* env = std::getenv("PT_SH_LEGACY");
+        return env && std::atoi(env) != 0;
+    }();
+    static const float kLegacyLobe[9] = {1.0f, 2.0f / 3.0f, 2.0f / 3.0f, 2.0f / 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f};
+    for (int i = 0; i < 9; ++i) {
+        const float basis = sh_legacy ? kBasis[i] * kLegacyLobe[i] : kBasis[i];
+        p.sh[i] = dark || it == file->probes.end() ? glm::vec3(0.0f) : it->second[i] * basis;
+    }
+    return p;
+}
+
+void RenderSceneBuilder::LoadResidentSettings(Game& game) {
+    if (resident_.loaded) {
+        return;
+    }
+    Stage* resident = game.Stages().Resident();
+    if (!resident) {
+        return;
+    }
+    resident_.loaded = true;
+    for (const auto& data : resident->files) {
+        const fox2::DataSetFile& f = *data->file;
+        for (const fox2::Entity& e : f.Entities()) {
+            if (e.class_name == "GrPluginSettings") {
+                resident_.tonemap_speed = f.GetFloat(e, "tonemapSpeed", 0, 1.0f);
+                ExposureSettings& s = resident_.defaults;
+                s.min_ev = f.GetFloat(e, "minExposure", 0, s.min_ev);
+                s.max_ev = f.GetFloat(e, "maxExposure", 0, s.max_ev);
+                s.compensation = f.GetFloat(e, "exposureCompensation", 0, s.compensation);
+                s.key = f.GetFloat(e, "keyValue", 0, s.key);
+                s.bloom_weight = f.GetFloat(e, "bloomWeight", 0, s.bloom_weight);
+                s.bloom_extraction = f.GetFloat(e, "bloomBrightnessExtraction", 0, s.bloom_extraction);
+                s.bloom_size = f.GetFloat(e, "bloomSize", 0, s.bloom_size);
+                resident_.plugin_flags = static_cast<uint32_t>(f.GetInt(e, "flags", 0, static_cast<int32_t>(resident_.plugin_flags)));
+            } else if (e.class_name == "GrReflectionSetting") {
+                if (const fox2::Property* p = f.FindProperty(e, "reflectionTexturePath"); p && p->Count() > 0) {
+                    resident_.reflection_texture = f.ElementString(*p, 0);
+                }
+            } else if (e.class_name == "TppTonemap") {
+                resident_.tpp_tonemap = f.GetBool(e, "enable", 0, true);
+                resident_.tpp_threshold = f.GetFloat(e, "threshold", 0, resident_.tpp_threshold);
+                resident_.tpp_range = f.GetFloat(e, "range", 0, resident_.tpp_range);
+            } else if (e.class_name == "ColorCorrectionData") {
+                resident_.color_scale = glm::vec3(f.GetVec4(e, "colorScale"));
+                resident_.start_slope = f.GetFloat(e, "startSlope", 0, resident_.start_slope);
+                resident_.end_slope = f.GetFloat(e, "endSlope", 0, resident_.end_slope);
+            } else if (e.class_name == "ShTextureLoader") {
+                if (const fox2::Property* p = f.FindProperty(e, "textures")) {
+                    for (size_t i = 0; i < p->Count(); ++i) {
+                        std::string path = f.ElementString(*p, i);
+                        if (const size_t dot = path.find_last_of('.'); dot != std::string::npos && dot > path.find_last_of('/')) {
+                            path = path.substr(0, dot);
+                        }
+                        resident_.luts[f.KeyString(*p, i)] = path;
+                    }
+                }
+            }
+        }
+    }
+    resident_.defaults.speed = resident_.tonemap_speed;
+    LogInfo("render scene: resident settings, tonemap speed {}, color scale ({} {} {}), {} LUTs, plugin flags {:#x}, reflection texture {}",
+            resident_.tonemap_speed, resident_.color_scale.x, resident_.color_scale.y, resident_.color_scale.z, resident_.luts.size(),
+            resident_.plugin_flags, resident_.reflection_texture);
+}
+
+void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const glm::vec3& aim_point, float dt, SceneLighting& out) {
+    const ScreenEffects& fx = game.Effects();
+    const glm::vec3 target = fx.handy_light_color;
+    if (!handy_initialized_) {
+        handy_color_ = handy_from_ = handy_target_ = target;
+        handy_initialized_ = true;
+    }
+    if (target != handy_target_) {
+        handy_from_ = handy_color_;
+        handy_target_ = target;
+        handy_fade_ = fx.handy_light_color_fade ? 2.0f : 0.0f;
+        if (handy_fade_ <= 0.0f) {
+            handy_color_ = target;
+        }
+    }
+    if (handy_fade_ > 0.0f) {
+        handy_fade_ = std::max(0.0f, handy_fade_ - dt);
+        const float t = handy_fade_ * 0.5f;
+        handy_color_ = handy_target_ * (1.0f - t) + handy_from_ * t;
+    }
+    const Player& player = game.GetPlayer();
+    static const bool handy_off = [] {
+        const char* off = std::getenv("PT_RENDER_OFF");
+        return off && std::strstr(off, "handy") != nullptr;
+    }();
+    if (!player.handy_light.enable || handy_off) {
+        return;
+    }
+    const HandyLightParameters& p = game.Parameters().handy_light;
+    SceneLight l;
+    l.id = kHandyLightId;
+    l.name = "PlayerHandyLight";
+    l.type = LightType::Spot;
+    const glm::vec3 up = glm::normalize(glm::cross(camera.Right(), camera.Forward()));
+    HandyLightPose(camera, aim_point, game.HandyPickupHold(), game.HandyDemoPose(), l.position, l.direction);
+    if (const auto& pose = game.HandyPoseOverride()) {
+        l.position = pose->first;
+        l.direction = pose->second;
+    }
+    if (glm::vec3 lens; game.DetachedView() && game.HandyLens(lens)) {
+        l.position = lens;
+    }
+    l.up = glm::normalize(up - l.direction * glm::dot(up, l.direction));
+    const glm::vec3 color = glm::vec3(p.color[0], p.color[1], p.color[2]) * handy_color_;
+    const glm::vec3 rgb = light_math::ColorFromTemperature(p.temperature, 0.0f, p.lumen, color);
+    const float omega = light_math::SpotSolidAngle(p.umbra_angle, p.penumbra_angle, p.attenuation_exponent);
+    l.intensity = rgb / omega * p.power_scale / kPi;
+    l.source_radius = light_math::SourceRadius(p.light_size);
+    l.inner_range = p.inner_range;
+    l.outer_range = p.outer_range;
+    l.dimmer = p.dimmer;
+    l.cos_outer = CosHalf(p.umbra_angle);
+    l.inv_cone_range = InverseRange(CosHalf(p.penumbra_angle), l.cos_outer);
+    l.cone_exponent = p.attenuation_exponent;
+    l.shadow_cos_outer = CosHalf(78.0f);
+    l.shadow_inv_cone_range = InverseRange(CosHalf(78.0f), l.shadow_cos_outer);
+    l.shadow_fov = 78.0f * kPi / 180.0f;
+    l.shadow_bias = -10.0f * 0.001f;
+    l.view_bias = -5.0f * 0.001f;
+    l.cast_shadow = true;
+    l.masked = true;
+    l.mask_fov = p.umbra_angle * kPi / 180.0f;
+    out.lights.push_back(l);
+    AddHandyReflection(game, l, out);
+}
+
+void RenderSceneBuilder::AddHandyReflection(Game& game, const SceneLight& handy, SceneLighting& out) const {
+    static const bool on = [] {
+        const char* e = std::getenv("PT_REFLECT");
+        return !e || std::atoi(e) != 0;
+    }();
+    const HandyReflection& r = game.HandyReflectionState();
+    if (!on || !r.active) {
+        return;
+    }
+    out.reflection_sample.active = !game.FreeView();
+    std::copy(std::begin(r.samples), std::end(r.samples), std::begin(out.reflection_sample.points));
+    const HandyLightParameters& p = game.Parameters().handy_light;
+    constexpr float kScale = 2.5f;
+    constexpr float kSpotScale = 1.5f;
+    constexpr uint32_t kStaleUpdates = 8;
+    static const bool white = std::getenv("PT_REFLECT_WHITE") != nullptr;
+    const glm::vec3 colour = !white && r.has_readback && r.readback_age <= kStaleUpdates ? r.readback : glm::vec3(1.0f);
+    const float weights[2] = {r.first_weight, r.second_weight};
+    const float attenuations[2] = {r.first_attenuation, r.second_attenuation};
+    const glm::vec3 positions[2] = {r.position, r.second};
+    static constexpr const char* kPointNames[2] = {"reflectLightPoint1", "reflectLightPoint2"};
+    static constexpr const char* kSpotNames[2] = {"reflectLight0", "reflectLight02"};
+    for (int i = 0; i < 2; ++i) {
+        const float base = weights[i] * attenuations[i] * kScale;
+        for (int spot = 0; spot < 2; ++spot) {
+            const float share = spot ? r.spot_share * kSpotScale : 1.0f - r.spot_share;
+            const bool enabled = weights[i] > 0.0f && (spot ? r.spot_share > 0.0f : r.spot_share < 1.0f);
+            if (!enabled || base * share <= 0.0f) {
+                continue;
+            }
+            SceneLight l;
+            l.id = kHandyReflectionId + static_cast<uint64_t>(i * 2 + spot);
+            l.name = spot ? kSpotNames[i] : kPointNames[i];
+            l.type = spot ? LightType::Spot : LightType::Point;
+            l.position = positions[i];
+            l.intensity = handy.intensity * colour * (base * share);
+            l.inner_range = 0.4f * p.inner_range;
+            l.outer_range = 0.4f * p.outer_range;
+            l.dimmer = 4.0f;
+            l.specular_scale = 0.0f;
+            l.cast_shadow = false;
+            if (spot) {
+                l.direction = r.normal;
+                l.up = std::abs(r.normal.y) < 0.95f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
+                l.cos_outer = CosHalf(100.0f);
+                l.inv_cone_range = InverseRange(1.0f, l.cos_outer);
+                l.cone_exponent = 1.0f;
+            }
+            out.lights.push_back(l);
+        }
+    }
+}
+
+void RenderSceneBuilder::AddMirrors(Game& game, SceneLighting& out) const {
+    game.Stages().ForEachStage(
+        [&](Stage& stage) {
+            for (const auto& data : stage.files) {
+                const fox2::DataSetFile& f = *data->file;
+                for (const fox2::Entity& e : f.Entities()) {
+                    if (e.class_name != "Mirror") {
+                        continue;
+                    }
+                    const fox2::Entity* model = f.GetEntity(e, "staticModelHandle");
+                    if (!model) {
+                        continue;
+                    }
+                    const fox2::Entity* area = f.GetEntity(e, "lightAreaLocatorHandle");
+                    for (const Stage::Draw& draw : stage.draws) {
+                        if (draw.entity != model || !draw.mesh) {
+                            continue;
+                        }
+                        const BodyState* body = stage.FindBody(draw.entity);
+                        if (body && !body->visible) {
+                            continue;
+                        }
+                        SceneMirror mirror{draw.mesh, stage.file_to_world * draw.file_transform};
+                        if (area) {
+                            const float size = f.GetFloat(*area, "size", 0, 1.0f);
+                            const glm::mat4 placement = stage.file_to_world * f.WorldTransform(*area);
+                            mirror.light_area = glm::translate(glm::mat4(1.0f), glm::vec3(placement[3])) * glm::mat4(glm::mat3(placement)) *
+                                                glm::scale(glm::mat4(1.0f), glm::vec3(size));
+                            mirror.has_light_area = true;
+                        }
+                        out.mirrors.push_back(mirror);
+                    }
+                }
+            }
+        },
+        false);
+}
+
+namespace {
+
+bool RayEntersBox(const glm::mat4& box, const glm::vec3& o, const glm::vec3& d, glm::vec3& at) {
+    const glm::mat4 inverse = glm::inverse(box);
+    const glm::vec3 lo(inverse * glm::vec4(o, 1.0f));
+    const glm::vec3 ld(inverse * glm::vec4(d, 0.0f));
+    float enter = 0.0f;
+    float leave = std::numeric_limits<float>::max();
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(ld[i]) < 1.0e-8f) {
+            if (lo[i] < -0.5f || lo[i] > 0.5f) {
+                return false;
+            }
+            continue;
+        }
+        float a = (-0.5f - lo[i]) / ld[i];
+        float b = (0.5f - lo[i]) / ld[i];
+        if (a > b) {
+            std::swap(a, b);
+        }
+        enter = std::max(enter, a);
+        leave = std::min(leave, b);
+        if (enter > leave) {
+            return false;
+        }
+    }
+    at = o + d * enter;
+    return true;
+}
+
+}
+
+void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneLighting& out) const {
+    const SceneMirror* mirror = nullptr;
+    float nearest = 0.0f;
+    for (const SceneMirror& m : out.mirrors) {
+        const float distance = glm::length(glm::vec3(m.transform[3]) - camera.position);
+        if (!mirror || distance < nearest) {
+            mirror = &m;
+            nearest = distance;
+        }
+    }
+    const auto handy = std::find_if(out.lights.begin(), out.lights.end(), [](const SceneLight& l) { return l.id == kHandyLightId; });
+    const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
+    auto trace_line = [&](const char* why) {
+        if (trace) {
+            LogInfo("mirror trace: off ({}) handy {} mirror {} area {}", why, handy != out.lights.end(), mirror != nullptr,
+                    mirror ? mirror->has_light_area : false);
+        }
+    };
+    if (!mirror || !mirror->has_light_area || handy == out.lights.end()) {
+        trace_line("missing");
+        return;
+    }
+    const glm::vec3 n = glm::normalize(-glm::vec3(mirror->transform[2]));
+    const glm::vec3 m = glm::vec3(mirror->transform[3]);
+    const glm::vec3 p = handy->position;
+    const glm::vec3 a = glm::normalize(handy->direction);
+    const float na = glm::dot(n, a);
+    if (na >= 0.0f) {
+        trace_line("axis away from the plane");
+        return;
+    }
+    const glm::vec3 hit = p + a * (glm::dot(n, m - p) / na);
+    const glm::vec3 mirrored = p - 2.0f * std::abs(glm::dot(n, p - m)) * n;
+    glm::vec3 at;
+    const glm::vec3 to_hit = hit - mirrored;
+    if (glm::length(to_hit) < 1.0e-6f) {
+        trace_line("no beam");
+        return;
+    }
+    const bool from_mirrored = RayEntersBox(mirror->light_area, mirrored, glm::normalize(to_hit), at);
+    if (!from_mirrored && !RayEntersBox(mirror->light_area, hit, glm::normalize(-to_hit), at)) {
+        if (trace) {
+            const glm::vec3 lo(glm::inverse(mirror->light_area) * glm::vec4(mirrored, 1.0f));
+            const glm::vec3 lh(glm::inverse(mirror->light_area) * glm::vec4(hit, 1.0f));
+            LogInfo("mirror trace: off (beam misses the area) p ({:.3f} {:.3f} {:.3f}) a ({:.3f} {:.3f} {:.3f}) mirrored ({:.3f} {:.3f} {:.3f}) hit ({:.3f} "
+                    "{:.3f} {:.3f}) local mirrored ({:.3f} {:.3f} {:.3f}) local hit ({:.3f} {:.3f} {:.3f})",
+                    p.x, p.y, p.z, a.x, a.y, a.z, mirrored.x, mirrored.y, mirrored.z, hit.x, hit.y, hit.z, lo.x, lo.y, lo.z, lh.x, lh.y, lh.z);
+        }
+        return;
+    }
+    const HandyLightParameters& params = game.Parameters().handy_light;
+    SceneLight l = *handy;
+    l.id = kMirrorLightId;
+    l.name = "MirrorLight";
+    l.position = at;
+    l.direction = glm::normalize(a - 2.0f * na * n);
+    l.up = glm::normalize(handy->up - 2.0f * glm::dot(handy->up, n) * n);
+    l.intensity *= 4.0f;
+    l.outer_range += 2.0f;
+    l.cos_outer = CosHalf(params.umbra_angle * 0.6f);
+    l.inv_cone_range = InverseRange(CosHalf(params.penumbra_angle), l.cos_outer);
+    l.mask_fov = params.umbra_angle * 0.6f * kPi / 180.0f;
+    static const bool light_shadow = [] {
+        const char* value = std::getenv("PT_MIRROR_LIGHT_SHADOW");
+        return !value || std::atoi(value) != 0;
+    }();
+    l.cast_shadow = light_shadow;
+    l.priority = 0x40;
+    l.hidden_views = 1u;
+    if (trace) {
+        LogInfo("mirror trace: on at ({:.3f} {:.3f} {:.3f}) from_mirrored {} beam {:.3f} p ({:.3f} {:.3f} {:.3f})", at.x, at.y, at.z, from_mirrored,
+                glm::length(hit - mirrored), p.x, p.y, p.z);
+    }
+    static const bool mirror_light_off = [] {
+        const char* off = std::getenv("PT_MIRROR_LIGHT_OFF");
+        return off && *off == '1';
+    }();
+    if (mirror_light_off) {
+        return;
+    }
+    out.lights.push_back(l);
+}
+
+float RenderSceneBuilder::FocusDistance(Game& game, const Camera& camera, float dt) {
+    constexpr float kRayStart = 0.1f;
+    RayHit hit;
+    float target = 1500.0f;
+    const bool hit_any = game.LineCollision().Raycast(camera.position + camera.Forward() * kRayStart, camera.Forward(), 1500.0f, hit);
+    if (hit_any) {
+        target = hit.distance + kRayStart;
+    }
+    target = std::clamp(target, 0.5f, 1500.0f);
+    const bool cut = !focus_valid_ || glm::distance(camera.position, focus_eye_) > 3.0f || glm::dot(camera.Forward(), focus_forward_) < 0.7071f;
+    focus_eye_ = camera.position;
+    focus_forward_ = camera.Forward();
+    focus_valid_ = true;
+    const float k = cut ? 1.0f : 1.0f - std::exp(-dt * 8.0f);
+    focus_ += (target - focus_) * k;
+    static const bool trace = std::getenv("PT_TRACE_FOCUS") != nullptr;
+    if (trace && (cut || std::abs(target - focus_) > 1.0f)) {
+        const CollisionWorld& lines = game.LineCollision();
+        LogInfo("focus: eye ({:.3f} {:.3f} {:.3f}) target {:.3f} focus {:.3f} on {} tags {:#x} flags {:#x}", camera.position.x,
+                camera.position.y, camera.position.z, target, focus_,
+                hit_any ? lines.OwnerName(lines.Triangles()[hit.triangle].owner) : std::string("nothing"),
+                hit_any ? lines.Triangles()[hit.triangle].tags : 0, hit_any ? lines.Triangles()[hit.triangle].shape_flags : 0u);
+    }
+    return focus_;
+}
+
+void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, SceneLighting& out, const TickBlend* blend) {
+    static const bool profile = std::getenv("PT_BUILD_PROFILE") != nullptr;
+    using clock = std::chrono::steady_clock;
+    clock::time_point marks[8];
+    int mark = 0;
+    auto stamp = [&] { if (profile && mark < 8) marks[mark++] = clock::now(); };
+    stamp();
+    out = SceneLighting{};
+    out.valid = true;
+    LoadResidentSettings(game);
+    stamp();
+    Vfs& vfs = game.GetVfs();
+    game.Stages().ForEachStage(
+        [&](Stage& stage) {
+            if (!stage.active) {
+                return;
+            }
+            for (const auto& data : stage.files) {
+                for (const LightPlacement& light : data->lights) {
+                    if (!light.entity || !EntityEnabled(&stage, *data->file, *light.entity)) {
+                        continue;
+                    }
+                    const uint64_t id = (uint64_t(stage.id) << 40) ^ reinterpret_cast<uintptr_t>(light.entity);
+                    AddLight(*data->file, *light.entity, stage.file_to_world, id, out);
+                }
+            }
+        },
+        false);
+    stamp();
+    {
+        std::vector<std::pair<uint32_t, const void*>> loaded;
+        game.Stages().ForEachStage([&](Stage& stage) {
+            for (const auto& data : stage.files) loaded.emplace_back(static_cast<uint32_t>(stage.id), static_cast<const void*>(data->file.get()));
+        }, false);
+        if (loaded != loaded_stage_files_) {
+            loaded_stage_files_ = std::move(loaded);
+            static_entities_.clear();
+            probe_cache_.clear();
+            occluder_cache_.clear();
+        }
+    }
+    game.Stages().ForEachStage(
+        [&](Stage& stage) {
+            if (!stage.active) {
+                return;
+            }
+            for (const auto& data : stage.files) {
+                const fox2::DataSetFile& f = *data->file;
+                auto [scan, fresh] = static_entities_.try_emplace(&f);
+                if (fresh) {
+                    for (const fox2::Entity& e : f.Entities()) {
+                        if (e.class_name == "ShLightProbe") {
+                            scan->second.probes.push_back(&e);
+                        } else if (e.class_name == "OccluderEx") {
+                            scan->second.occluders.push_back(&e);
+                        }
+                    }
+                }
+                auto cached = [&](const fox2::Entity* e, auto& cache, auto build) -> const auto* {
+                    const uint64_t key = (uint64_t(stage.id) << 40) ^ reinterpret_cast<uintptr_t>(e);
+                    auto it = cache.find(key);
+                    if (it == cache.end() || it->second.first != stage.file_to_world) {
+                        it = cache.insert_or_assign(key, std::make_pair(stage.file_to_world, build())).first;
+                    }
+                    return &it->second.second;
+                };
+                for (const fox2::Entity* e : scan->second.probes) {
+                    if (!EntityEnabled(&stage, f, *e)) continue;
+                    if (const auto* p = cached(e, probe_cache_, [&] { return BuildProbe(vfs, f, *e, stage.file_to_world); }); *p) {
+                        out.probes.push_back(**p);
+                    }
+                }
+                for (const fox2::Entity* e : scan->second.occluders) {
+                    if (!EntityEnabled(&stage, f, *e)) continue;
+                    if (const auto* o = cached(e, occluder_cache_, [&] { return BuildOccluder(f, *e, stage.file_to_world); }); *o) {
+                        out.occluders.push_back(**o);
+                    }
+                }
+            }
+        },
+        false);
+    stamp();
+    const float focus = FocusDistance(game, camera, dt);
+    stamp();
+    const bool blended = blend && blend->t < 1.0f;
+    const Camera handy_view = game.DetachedView() ? game.GetPlayer().MakeCamera() : camera;
+    AddHandyLight(game, handy_view, blended ? glm::mix(blend->handy_aim, game.HandyAim(), blend->t) : game.HandyAim(), dt, out);
+    for (const DemoLight& light : game.Demos().Lights()) {
+        AddDemoLight(light, blended ? blend : nullptr, out);
+    }
+
+    const ScreenEffects& fx = game.Effects();
+    static const bool mirror_capture_off = [] {
+        const char* off = std::getenv("PT_MIRROR_CAPTURE");
+        return off && *off == '0';
+    }();
+    out.mirror_capture = fx.mirror_capture && game.MirrorViewportBits() != 0 && !mirror_capture_off;
+    out.mirror_high = (game.MirrorViewportBits() & 2u) != 0;
+    if (out.mirror_capture) {
+        AddMirrors(game, out);
+        AddMirrorLight(game, camera, out);
+    }
+
+    ExposureSettings exposure = resident_.defaults;
+    if (const LightingRow* row = game.Parameters().Lighting(game.FloorLightingRow())) {
+        exposure.min_ev = row->min_exposure;
+        exposure.max_ev = row->max_exposure;
+        exposure.compensation = row->exposure_compensation;
+        exposure.key = row->key_value;
+        for (int i = 0; i < 3; ++i) {
+            exposure.add_comp[i] = row->add_exp_comp[i];
+            exposure.add_comp_ev[i] = row->add_exp_comp_ev[i];
+        }
+        exposure.bloom_weight = row->bloom_weight;
+        exposure.bloom_extraction = row->bloom_brightness_extraction;
+        exposure.bloom_size = row->bloom_size;
+    }
+    exposure.pinned = fx.ev_pinned;
+    exposure.pinned_ev = fx.pinned_ev;
+    out.exposure = exposure;
+
+    ScreenSettings& screen = out.screen;
+    auto lut = resident_.luts.find(fx.lut);
+    const std::string lut_path = lut != resident_.luts.end() ? lut->second : std::string();
+    if (lut_path != lut_path_) {
+        previous_lut_path_ = lut_path_;
+        lut_path_ = lut_path;
+        lut_blend_ = previous_lut_path_.empty() ? 1.0f : 0.0f;
+    }
+    lut_blend_ = std::min(1.0f, lut_blend_ + dt);
+    screen.lut_path = lut_path_;
+    screen.previous_lut_path = previous_lut_path_;
+    screen.lut_blend = lut_blend_;
+    screen.color_scale = resident_.color_scale;
+    screen.start_slope = resident_.start_slope;
+    screen.end_slope = resident_.end_slope;
+    screen.local_reflections = (resident_.plugin_flags & 0x20u) != 0;
+    static const bool no_local_reflections = std::getenv("PT_NO_LOCAL_REFLECTIONS") != nullptr;
+    if (no_local_reflections) {
+        screen.local_reflections = false;
+    }
+    out.reflection_texture = resident_.reflection_texture;
+    const bool ending = game.Floor().IsCurrentFloorName("ending");
+    screen.film_grain = fx.film_grain;
+    screen.grain_alt = ending;
+    screen.grain_strength = fx.film_grain_strength;
+    screen.grain_offset = fx.grain_offset;
+    screen.screen_distortion = fx.screen_distortion;
+    screen.wide_shadow_limit = fx.maze_viewport;
+    screen.reflect_scale = fx.reflect_scale;
+    screen.reflect_bias = fx.reflect_bias;
+    screen.reflect_edge = fx.reflect_edge;
+    screen.subsurface_scatter = fx.subsurface_scatter;
+    screen.full_screen_blur = fx.full_screen_blur;
+    screen.colour_banding_canceller = fx.colour_banding_canceller;
+    screen.blur_blend_rate = fx.blur_blend_rate;
+    screen.blur_fetch_band = fx.blur_fetch_band;
+    screen.zoom = game.GetPlayer().zoom;
+    screen.depth_of_field = (resident_.plugin_flags & 0x8u) != 0;
+    screen.motion_blur = (resident_.plugin_flags & 0x4u) != 0;
+    screen.fixed_shutter = (resident_.plugin_flags & 0x80u) != 0;
+    screen.focus_distance = focus;
+    screen.focal_length = game.Parameters().player.focal_length;
+    screen.aperture = kCameraAperture;
+    screen.shutter_speed = kCameraShutter;
+    if (const LightingRow* row = game.Parameters().Lighting(game.FloorLightingRow())) {
+        screen.shutter_speed = row->shutter_speed;
+    }
+    game.Demos().SetGameLens(screen.focus_distance, screen.aperture, screen.shutter_speed);
+    ApplyDemoCamera(game, out);
+    static const bool trace_lens = std::getenv("PT_TRACE_LENS") != nullptr;
+    if (log_lens_next || (trace_lens && game.Frame() % 30 == 0)) {
+        log_lens_next = false;
+        LogInfo("lens: frame {} floor {} auto {:.3f} applied {:.3f} focal {:.3f} aperture {:.3f} blur {} blend {:.3f} band {:.2f} "
+                "dof {} motion blur {} zoom {:.2f} distortion {} demo camera {}",
+                game.Frame(), game.Floor().CurrentFloorName(), focus, screen.focus_distance, screen.focal_length,
+                screen.aperture, screen.full_screen_blur, screen.blur_blend_rate, screen.blur_fetch_band, screen.depth_of_field,
+                screen.motion_blur, screen.zoom, screen.screen_distortion, game.Demos().CameraParams() != nullptr);
+    }
+    stamp();
+    AddTppAtmosphere(game, out);
+    stamp();
+    if (profile && mark == 7) {
+        static double sums[6] = {};
+        static int frames = 0;
+        for (int i = 0; i < 6; ++i) sums[i] += std::chrono::duration<double, std::milli>(marks[i + 1] - marks[i]).count();
+        if (++frames == 120) {
+            LogInfo("build profile: resident {:.3f} lights {:.3f} probes {:.3f} focus {:.3f} rest {:.3f} atmosphere {:.3f} ms ({} lights, {} probes)",
+                    sums[0] / frames, sums[1] / frames, sums[2] / frames, sums[3] / frames, sums[4] / frames, sums[5] / frames,
+                    out.lights.size(), out.probes.size());
+            frames = 0;
+            for (double& v : sums) v = 0.0;
+        }
+    }
+}
+
+void RenderSceneBuilder::AddTppAtmosphere(Game& game, SceneLighting& out) const {
+    TppAtmosphereSettings& tpp = out.tpp;
+    glm::vec3 self_color(0.0f);
+    float self_alpha = 1.0f;
+    float self_luminance = 0.0f;
+    const DemoScreenState* screen = game.Demos().ScreenState();
+    auto demo_value = [&](uint64_t functor, uint64_t name, size_t index, float& target) {
+        if (!screen) {
+            return;
+        }
+        const std::vector<float>* values = nullptr;
+        if (name) {
+            auto it = screen->named_values.find({functor, name});
+            values = it != screen->named_values.end() ? &it->second : nullptr;
+        } else {
+            auto it = screen->values.find(functor);
+            values = it != screen->values.end() ? &it->second : nullptr;
+        }
+        if (values && index < values->size()) {
+            target = (*values)[index];
+        }
+    };
+    game.Stages().ForEachStage(
+        [&](Stage& stage) {
+            for (const auto& data : stage.files) {
+                const fox2::DataSetFile& f = *data->file;
+                for (const fox2::Entity& e : f.Entities()) {
+                    if (e.class_name == "TppGlobalVolumetricFogParam") {
+                        tpp.enabled = true;
+                        const glm::vec4 self = f.GetVec4(e, "selfColor");
+                        self_color = glm::vec3(self);
+                        self_alpha = self.a;
+                        self_luminance = f.GetFloat(e, "selfLuminance");
+                        tpp.fog_density = f.GetFloat(e, "density");
+                        tpp.fog_falloff = f.GetFloat(e, "falloff");
+                        tpp.fog_near = f.GetFloat(e, "near");
+                        tpp.fog_far = f.GetFloat(e, "far", 0, 70.0f);
+                        const glm::vec4 mie = f.GetVec4(e, "mieScattering");
+                        tpp.fog_mie = glm::vec3(mie) * mie.a;
+                        const float g = f.GetFloat(e, "mieAnisotropy");
+                        tpp.fog_mie_anisotropy = 1.55f * g - 0.55f * g * g * g;
+                        const glm::vec4 rayleigh = f.GetVec4(e, "rayleighScattering");
+                        tpp.fog_rayleigh = glm::vec3(rayleigh) * rayleigh.a;
+                        tpp.dir_gain = f.GetFloat(e, "dirLightGain");
+                        for (int i = 0; i < 3; ++i) {
+                            tpp.exposure_offset_values[i] = f.GetFloat(e, "exposureOffsetValues", static_cast<size_t>(i));
+                            tpp.exposure_offset_targets[i] = f.GetFloat(e, "exposureOffsetTargets", static_cast<size_t>(i));
+                        }
+                    } else if (e.class_name == "TppAreaVolumetricFog" && !tpp.area) {
+                        const fox2::Entity* param = f.GetEntity(e, "param");
+                        if (!param) {
+                            continue;
+                        }
+                        const uint64_t name = StrCode64(f.EntityName(e)) & kStrCode64Mask;
+                        float enable = f.GetBool(*param, "enable") ? 1.0f : 0.0f;
+                        glm::vec3 color = glm::vec3(f.GetVec4(*param, "color"));
+                        float density = f.GetFloat(*param, "density");
+                        demo_value(0x1C873769CA1FULL, name, 0, enable);
+                        demo_value(0xD8C7DBEE04F7ULL, name, 0, density);
+                        demo_value(0x66F326FA2CE2ULL, name, 0, color.r);
+                        demo_value(0x66F326FA2CE2ULL, name, 1, color.g);
+                        demo_value(0x66F326FA2CE2ULL, name, 2, color.b);
+                        if (enable == 0.0f) {
+                            continue;
+                        }
+                        const glm::mat4 box = stage.file_to_world * f.WorldTransform(e) * glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+                        glm::vec3 lo(1.0e9f);
+                        glm::vec3 hi(-1.0e9f);
+                        for (int corner = 0; corner < 8; ++corner) {
+                            const glm::vec4 c((corner & 1) ? 1.0f : -1.0f, (corner & 2) ? 1.0f : -1.0f, (corner & 4) ? 1.0f : -1.0f, 1.0f);
+                            const glm::vec3 w = glm::vec3(box * c);
+                            lo = glm::min(lo, w);
+                            hi = glm::max(hi, w);
+                        }
+                        tpp.area = true;
+                        tpp.area_min = lo;
+                        tpp.area_max = hi;
+                        tpp.area_color = color * f.GetFloat(*param, "luminance");
+                        tpp.area_density = density;
+                        tpp.area_near = f.GetFloat(*param, "nearDistance");
+                        tpp.area_falloff = f.GetFloat(*param, "falloff");
+                        tpp.area_inverse = f.GetBool(*param, "inverseFalloff");
+                    }
+                }
+            }
+        },
+        false);
+    if (tpp.enabled) {
+        demo_value(0x899F4232248DULL, 0, 0, tpp.fog_density);
+        demo_value(0x5E28E698728CULL, 0, 0, tpp.fog_near);
+        demo_value(0xBB4946A517ECULL, 0, 0, self_luminance);
+        demo_value(0x232188F03793ULL, 0, 0, tpp.fog_far);
+        demo_value(0x10363B1D0048ULL, 0, 0, self_color.r);
+        demo_value(0x10363B1D0048ULL, 0, 1, self_color.g);
+        demo_value(0x10363B1D0048ULL, 0, 2, self_color.b);
+    }
+    tpp.fog_self = self_color * self_alpha * self_luminance;
+    if (tpp.enabled) {
+        game.Stages().ForEachStage(
+            [&](Stage& stage) {
+                for (const auto& data : stage.files) {
+                    const fox2::DataSetFile& f = *data->file;
+                    for (const fox2::Entity& e : f.Entities()) {
+                        if (e.class_name == "TppAtmosphere") {
+                            tpp.dir_color = glm::vec3(f.GetVec4(e, "moonColor")) * f.GetFloat(e, "moonLux") / kPi;
+                            tpp.light_dir = glm::vec3(0.39491f, 0.85361f, 0.33969f);
+                        }
+                        if (e.class_name == "TppSky" && f.GetBool(e, "enable", 0, true)) {
+                            tpp.sky = true;
+                        }
+                    }
+                }
+            },
+            false);
+    }
+    tpp.tonemap = resident_.tpp_tonemap;
+    tpp.threshold = resident_.tpp_threshold;
+    tpp.range = resident_.tpp_range;
+}
+
+void RenderSceneBuilder::AddDemoLight(const DemoLight& d, const TickBlend* blend, SceneLighting& out) const {
+    if (!d.enabled || d.lumen <= 0.0f) {
+        return;
+    }
+    glm::mat4 world = d.world;
+    if (blend) {
+        for (const DemoLight& previous : blend->demo_lights) {
+            if (previous.name == d.name && previous.demo_id == d.demo_id) {
+                world = BlendTransform(previous.world, d.world, blend->t);
+                break;
+            }
+        }
+    }
+    SceneLight l;
+    l.id = StrCode64(d.demo_id + "|" + d.name);
+    l.name = d.demo_id + "|" + d.name;
+    l.type = d.point ? LightType::Point : LightType::Spot;
+    l.position = glm::vec3(world[3]);
+    SpotAxes(glm::mat3(world), glm::vec3(0.0f, -1.0f, 0.0f), l.direction, l.up);
+    const glm::vec3 rgb = light_math::ColorFromTemperature(d.temperature, d.deflection, d.lumen, glm::vec3(d.color));
+    l.inner_range = d.inner_range;
+    l.outer_range = std::max(d.outer_range, 0.01f);
+    l.cast_shadow = d.shadow;
+    l.specular_scale = d.specular ? 1.0f : 0.0f;
+    l.shadow_bias = d.bias * 0.001f;
+    l.shadow_strength = d.shadow_strength;
+    l.priority = 0x80;
+    l.source_radius = light_math::SourceRadius(d.light_size);
+    if (d.point) {
+        l.intensity = rgb / (4.0f * kPi) / kPi;
+    } else {
+        const float omega = light_math::SpotSolidAngle(d.umbra, d.penumbra, d.attenuation_exponent);
+        l.intensity = rgb / omega * d.power_scale / kPi;
+        l.cos_outer = CosHalf(d.umbra);
+        l.inv_cone_range = InverseRange(CosHalf(d.penumbra), l.cos_outer);
+        l.cone_exponent = d.attenuation_exponent;
+        l.shadow_cos_outer = CosHalf(d.shadow_umbra);
+        l.shadow_inv_cone_range = InverseRange(CosHalf(d.shadow_penumbra), l.shadow_cos_outer);
+        l.shadow_fov = d.shadow_umbra * kPi / 180.0f;
+        l.view_bias = d.view_bias * 0.001f;
+    }
+    out.lights.push_back(l);
+}
+
+void RenderSceneBuilder::ApplyDemoCamera(Game& game, SceneLighting& out) const {
+    const DemoSystem& demos = game.Demos();
+    const DemoCameraParams* camera_params = demos.CameraParams() ? demos.CameraParams() : demos.SceneryCameraParams();
+    if (const DemoCameraParams* cam = camera_params) {
+        const uint32_t set = cam->set_mask;
+        ExposureSettings& e = out.exposure;
+        auto apply = [&](uint32_t bit, float value, float& target) {
+            if (set & (1u << bit)) {
+                target = value;
+            }
+        };
+        apply(4, cam->exposure_compensation, e.compensation);
+        apply(5, cam->min_exposure, e.min_ev);
+        apply(6, cam->max_exposure, e.max_ev);
+        apply(7, cam->bloom_size, e.bloom_size);
+        apply(10, cam->key_value, e.key);
+        apply(11, cam->bloom_weight, e.bloom_weight);
+        apply(12, cam->bloom_extraction, e.bloom_extraction);
+        if (set & (1u << 13)) {
+            static const int kEv[3] = {4, 5, 3};
+            for (int i = 0; i < 3; ++i) {
+                e.add_comp[i] = cam->add_exposure[i];
+                e.add_comp_ev[i] = cam->add_exposure[kEv[i]];
+            }
+        }
+        apply(3, cam->shutter_speed, out.screen.shutter_speed);
+    }
+    if (const DemoCameraParams* lens = demos.DofLens()) {
+        ScreenSettings& s = out.screen;
+        s.focal_length = lens->focal_length;
+        if (lens->set_mask & 1u) {
+            s.focus_distance = lens->focus_distance;
+        }
+        if (lens->set_mask & 2u) {
+            s.aperture = lens->aperture;
+        }
+    }
+    if (const DemoScreenState* screen = demos.ScreenState(); screen && screen->tone_set) {
+        out.screen.color_scale = glm::vec3(screen->color_scale);
+        out.screen.start_slope = screen->start_slope;
+        out.screen.end_slope = screen->end_slope;
+    }
+}
+
+void RenderSceneBuilder::BuildFromStage(const StageData& stage, Vfs& vfs, SceneLighting& out) {
+    out = SceneLighting{};
+    out.valid = true;
+    const fox2::DataSetFile& f = *stage.file;
+    uint64_t id = 1;
+    for (const LightPlacement& light : stage.lights) {
+        if (light.entity && light.enable) {
+            AddLight(f, *light.entity, glm::mat4(1.0f), id++, out);
+        }
+    }
+    for (const fox2::Entity& e : f.Entities()) {
+        if (e.class_name == "ShLightProbe" && EntityEnabled(nullptr, f, e)) {
+            if (auto p = BuildProbe(vfs, f, e, glm::mat4(1.0f))) {
+                out.probes.push_back(*p);
+            }
+        }
+    }
+    out.screen.film_grain = false;
+    out.screen.screen_distortion = false;
+    out.screen.depth_of_field = false;
+}
+
+}

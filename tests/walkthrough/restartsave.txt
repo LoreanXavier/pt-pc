@@ -1,0 +1,11 @@
+# The save after the ending (step 30, 0x9229F0) keeps g_SaveFloorName as it stands: f120 after Endf120 in the same session.
+sgamestep Endf120
+sstep 15
+swait 60
+sgamestep GotoEnding
+sstep 28
+swait 30
+sgamestep FinishEndingRestartGame
+sstep 15
+swait 30
+slog

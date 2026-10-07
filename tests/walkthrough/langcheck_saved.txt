@@ -1,0 +1,4 @@
+swait 10
+sexpect subtitles -1
+sexpect brightness 7
+slog

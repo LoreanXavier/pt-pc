@@ -1,0 +1,76 @@
+# Windowed first boot with a virtual DualSense only: the option screen, its PC settings page navigated with the pad
+# (View opens it, the D-pad moves, circle returns), a 1200 frame focus loss during the preface (the game and the audio clock freeze),
+# the opening, 3600 ticks in the pause menu, a focus loss in play (the pause menu opens and stays), then out of the
+# start room and through the hallway to the next floor (door save). Screenshots w1 to w6 go to the working folder.
+# Needs an empty save folder; keep the window from taking the focus and the audio silent:
+# SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_AUDIO_DRIVER=dummy pt.exe --virtual-pads --settings <pt.ini> --save-dir <empty>
+#   --input-script tests/pad/window.txt
+# Headless it needs --headless --audio-offline --options-menu --frames 40000.
+1 focus 1
+700 pattach 0 ps5
+700 pbot 0
+700 smenu 1
+700 swait 90
+700 sshot w1_first_boot_options.png
+700 stap 0 back
+700 swait 40
+700 sexpect page 1
+700 sshot w2_pc_page.png
+700 stap 0 down
+700 swait 8
+700 stap 0 down
+700 swait 8
+700 stap 0 down
+700 swait 20
+700 sexpect pcrow pc_focus_pause
+700 sshot w3_pc_page_pad_nav.png
+700 stap 0 circle
+700 swait 40
+700 sexpect page 0
+700 stap 0 right
+700 swait 4
+700 sexpect brightness 6
+700 stap 0 options
+700 smenu 0
+700 sexpect paused 0
+700 swait 600
+700 sfocus 0 1200
+700 swait 60
+700 sstep 15
+700 swait 30
+700 sshot w4_start_room.png
+700 stap 0 options
+700 swait 4
+700 sexpect menu 1
+700 sexpect paused 1
+700 swait 3600
+700 sshot w5_pause_after_long_wait.png
+700 stap 0 options
+700 smenu 0
+700 sexpect paused 0
+700 sfocus 0 300
+700 swait 10
+700 sexpect menu 1
+700 swait 400
+700 sexpect menu 1
+700 stap 0 options
+700 smenu 0
+700 sexpect paused 0
+700 goto 0 0 12.5
+700 swait 10
+700 sfree
+700 sanchor
+700 gfile 0 -1.4 -4.0
+700 ffile 0 -0.2 7.5
+700 gfile 0 -1.4 6.5
+700 gfile -1.0 -1.4 7.5
+700 ffile -11 -0.2 7.5
+700 gfile -11.0 -1.4 7.5
+700 gfile -14.2 -2.4 7.5
+700 gfile -17.5 -2.8 7.6 900
+700 swait 60
+700 sfree
+700 slog
+700 swait 120
+700 sshot w6_next_floor.png
+700 squit

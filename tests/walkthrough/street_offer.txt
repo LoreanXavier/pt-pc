@@ -1,0 +1,15 @@
+# the end of the credits' question asked in play (soffer): the PC page opens on "Explore the street?", its bar under the first
+# answer's text (the rows have no value), down moves it under the second; closing the page is the original's restart
+swait 200
+soffer
+swait 60
+sexpect menu 1
+sexpect page 1
+sexpect pcrow pc_street_walk
+sshot {shots}/street_offer_walk.png
+swait 90
+sui menukey down
+swait 30
+sexpect pcrow pc_street_restart
+sshot {shots}/street_offer_restart.png
+slog

@@ -1,0 +1,57 @@
+# Button prompts follow the device used last and switch at once, mid-menu (scenario prompts, with --virtual-pads): the keyboard with no
+# pad, a DualSense attached, a key pressed, the pad again, an Xbox pad attached and removed (back to the DualSense, used before it), a
+# Switch Pro pad, all pads removed. With --shots the option screen and the PC settings page of each device go to the shots folder.
+sstep 15
+swait 30
+sktap Escape
+swait 90
+sexpect menu 1
+sexpect prompts keyboard
+sshot {shots}/options_keyboard.png
+sktap F10
+swait 40
+sexpect page 1
+sshot {shots}/pc_keyboard.png
+sktap Escape
+swait 40
+sexpect page 0
+sattach 0 ps5
+swait 5
+sexpect prompts playstation
+sshot {shots}/options_playstation.png
+sktap Left
+swait 4
+sexpect prompts keyboard
+sexpect brightness 4
+stap 0 right
+swait 4
+sexpect prompts playstation
+sexpect brightness 5
+sattach 1 xbox
+swait 5
+sexpect prompts xbox
+sshot {shots}/options_xbox.png
+stap 1 a
+swait 40
+sexpect page 1
+sshot {shots}/pc_xbox.png
+stap 1 b
+swait 40
+sexpect page 0
+sdetach 1
+swait 5
+sexpect prompts playstation
+sattach 2 switch
+swait 5
+sexpect prompts nintendo
+sshot {shots}/options_nintendo.png
+sdetach 2
+swait 5
+sdetach 0
+swait 5
+sexpect prompts keyboard
+sktap Escape
+swait 60
+sexpect menu 0
+slog
+squit

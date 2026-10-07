@@ -1,0 +1,5 @@
+# the f050 radio's subtitle is on screen; a progress reset drops it with the session it belongs to
+sexpect speech 1
+sreset
+swait 30
+sexpect speech 0

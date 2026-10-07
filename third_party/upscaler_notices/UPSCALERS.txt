@@ -1,0 +1,29 @@
+Upscaler and frame generation runtimes shipped next to pt.exe
+
+The full licence texts are the other files in this folder. What each one lets the port ship:
+
+AMD FidelityFX SDK v1.1.4 (amd_fidelityfx_vk.dll: FSR 3.1 upscaler and frame generation)
+  MIT licence (AMD_FidelityFX_SDK_LICENSE.txt). AMD's prebuilt signed DLL, unmodified.
+  AMD FSR 4 is listed in the menu but not shipped: AMD releases it for DirectX 12 only
+  (FSR SDK 2.x), and this game renders with Vulkan.
+
+NVIDIA DLSS SDK 310.9.1 (nvngx_dlss.dll: DLSS Super Resolution)
+  NVIDIA RTX SDKs licence (NVIDIA_RTX_SDKs_LICENSE.txt): the SDK's binaries may be
+  distributed in object code inside an application with material additional functionality,
+  only for systems with NVIDIA GPUs, under terms at least as protective as NVIDIA's.
+
+NVIDIA Streamline 2.14.1 (experimental DLSS Frame Generation; builds with PT_STREAMLINE)
+  sl.interposer.dll, sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, sl.reflex.dll, sl.pcl.dll:
+  Streamline is MIT licensed (NVIDIA_Streamline_LICENSE.txt); only NVIDIA's signed
+  production builds ship. nvngx_dlssg.dll (DLSS Frame Generation) is under the NVIDIA RTX
+  SDKs licence (NVIDIA_Streamline_DLSS_LICENSE.txt). Reflex: NVIDIA_Reflex_LICENSE.txt;
+  NvLowLatencyVk.dll is not shipped.
+
+Intel XeSS SDK 3.0.2 (libxess.dll: XeSS Super Resolution)
+  Intel Simplified Software License (Intel_XeSS_SDK_LICENSE.txt): the binary may be
+  redistributed unmodified.
+
+Not shipped, looked for or loaded: any DLSS neural rendering runtime (nvngx_dlssnr.dll)
+and any third-party frame generation unlock. NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation; AMD and
+FidelityFX are trademarks of Advanced Micro Devices; Intel and XeSS are trademarks of
+Intel Corporation. P.T. port is not endorsed by NVIDIA, AMD or Intel.

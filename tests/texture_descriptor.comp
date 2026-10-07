@@ -1,0 +1,10 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0) uniform sampler2D textures[];
+layout(set = 1, binding = 0, std430) buffer Result { uvec4 size; vec4 colour; } result;
+layout(push_constant) uniform Push { uint texture_index; } pc;
+void main() {
+    result.size = uvec4(textureSize(textures[nonuniformEXT(pc.texture_index)], 0), 0, 0);
+    result.colour = textureLod(textures[nonuniformEXT(pc.texture_index)], vec2(0.5), 0);
+}

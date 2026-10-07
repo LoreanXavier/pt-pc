@@ -1,0 +1,6 @@
+sanchor
+slog
+gfile 0 -1.4 -3.0
+swait 60
+sfree
+slog

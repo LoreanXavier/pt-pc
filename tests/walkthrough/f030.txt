@@ -1,0 +1,23 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -4.4 -1.4 7.5
+swait 10
+sfree
+gfile -10.2 -1.4 7.9
+swait 10
+sfree
+slog
+gfile -2.35 -1.4 7.15
+fdir 6_Locator_trap_check_dir
+# the trap checks the published body yaw (15 degrees), which follows the snapped camera by 1/12 per tick
+swait 60
+szoom 1
+swait 30
+szoom 0
+swait 10
+sfree
+swait 30
+sfree
+slog

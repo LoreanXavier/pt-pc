@@ -1,0 +1,9 @@
+# loop browser: 01 First hallway (start room on f000); the stand-up demo is skipped, so its hideOcho hides the static Lisa
+# behind the start door, and the state is saved for the next pick of the same loop to compare
+sstep 15
+sloop 1
+swait 10
+sstep 15
+swait 30
+sexpect body shsb_hous001_ocho001_0000 0
+sstate save

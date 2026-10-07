@@ -1,0 +1,45 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SkinVertices {
+    float v[];
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer SkinPositions {
+    float p[];
+};
+
+layout(push_constant) uniform SkinPush {
+    uvec2 vertices;
+    uvec2 positions;
+    uint count;
+    uint skin_base;
+} push;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= push.count) {
+        return;
+    }
+    SkinVertices vb = SkinVertices(push.vertices);
+    uint b = i * 22u;
+    vec3 position = vec3(vb.v[b], vb.v[b + 1u], vb.v[b + 2u]);
+    uint joints = floatBitsToUint(vb.v[b + 18u]);
+    vec4 weights = unpackUnorm4x8(floatBitsToUint(vb.v[b + 19u]));
+    float weight_sum = dot(weights, vec4(1.0));
+    if (weight_sum > 0.0) {
+        uint base = push.skin_base;
+        uvec4 j = uvec4(joints & 0xFFu, (joints >> 8u) & 0xFFu, (joints >> 16u) & 0xFFu, joints >> 24u);
+        mat4 s = skin[base + j.x] * weights.x + skin[base + j.y] * weights.y + skin[base + j.z] * weights.z + skin[base + j.w] * weights.w;
+        s /= weight_sum;
+        position = (s * vec4(position, 1.0)).xyz;
+    }
+    SkinPositions out_positions = SkinPositions(push.positions);
+    out_positions.p[i * 3u] = position.x;
+    out_positions.p[i * 3u + 1u] = position.y;
+    out_positions.p[i * 3u + 2u] = position.z;
+}

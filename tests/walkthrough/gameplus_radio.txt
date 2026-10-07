@@ -1,0 +1,2 @@
+# Game+ tier 3 on f050: stays in the loop until the radio's 96 s broadcast and the three extra lines after it have played
+swait 7500

@@ -1,0 +1,5 @@
+# the first boot's option screen (--options-menu): close it
+smenu 1
+swait 30
+sktap Escape
+swait 30

@@ -1,0 +1,63 @@
+# the PC settings page's corner line (the version, by language: English, Japanese, Turkish, Arabic), then the port's credits page
+# (scredits, as the end of the ending's credits starts it) at normal speed: a shot per card at its held alpha, and the street
+# question that follows it once the page has run out
+srate 1
+swait 200
+sui subs 1 0
+sui menu pc
+swait 150
+sexpect menu 1
+sshot {shots}/corner_eng.png
+swait 10
+sui menukey close
+swait 30
+sui menukey close
+swait 60
+sui subs 1 4
+sui menu pc
+swait 150
+sexpect menu 1
+sshot {shots}/corner_jpn.png
+swait 10
+sui menukey close
+swait 30
+sui menukey close
+swait 60
+sui subs 1 7
+sui menu pc
+swait 150
+sexpect menu 1
+sshot {shots}/corner_tur.png
+swait 10
+sui menukey close
+swait 30
+sui menukey close
+swait 60
+sui subs 1 9
+sui menu pc
+swait 150
+sexpect menu 1
+sshot {shots}/corner_ara.png
+swait 10
+sui menukey close
+swait 30
+sui menukey close
+swait 60
+sui subs 1 0
+sexpect menu 0
+scredits
+swait 90
+sshot {shots}/credits_0.png
+swait 300
+sshot {shots}/credits_1.png
+swait 360
+sshot {shots}/credits_2.png
+swait 360
+sshot {shots}/credits_3.png
+swait 360
+sshot {shots}/credits_4.png
+swait 300
+sexpect menu 1
+sexpect pcrow pc_street_walk
+sshot {shots}/credits_question.png
+slog

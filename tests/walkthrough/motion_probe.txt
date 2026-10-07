@@ -1,0 +1,17 @@
+700 goto 0 0 12.5
+700 swait 10
+700 sfree
+700 swait 120
+700 slog
+700 strace 2720
+700 swait 10
+700 sstick 0 1 660
+700 swait 40
+700 srstick -1 0 32
+700 swait 600
+700 srstick 1 0 64
+700 swait 600
+700 srstick -1 0 64
+700 swait 60
+700 slog
+700 squit

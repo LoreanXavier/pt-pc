@@ -1,0 +1,7 @@
+# loop browser: 01 First hallway again, after other loops and a kill: the same state as the first pick (browse_first)
+sloop 1
+swait 10
+sstep 15
+swait 30
+sexpect body shsb_hous001_ocho001_0000 0
+sstate compare

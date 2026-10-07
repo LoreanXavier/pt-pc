@@ -1,0 +1,99 @@
+# The graphics page of the PC settings with a pad: the Graphics row (the last of the left column) opens it with cross, the
+# d-pad moves over its rows (ray-traced shadows, contact shadows, ambient occlusion, anisotropic filtering) and changes
+# anisotropic filtering, circle returns to the PC settings page (cursor on its first row) and circle again to the option screen.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/pc_graphics.txt
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 stap 0 options
+20 swait 70
+20 sexpect menu 1
+20 sexpect page 0
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 sexpect pcrow pc_display_mode
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_graphics
+20 stap 0 cross
+20 swait 4
+20 sexpect page 1
+20 sexpect pcrow pc_rt_shadows
+20 sexpect pcvalue pc_rt_shadows 0
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_rt_contact
+20 sexpect pcvalue pc_rt_contact 0
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_rt_ao
+20 sexpect pcvalue pc_rt_ao 0
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_rt_reflections
+20 sexpect pcvalue pc_rt_reflections 0
+20 stap 0 right
+20 swait 4
+20 sexpect pcvalue pc_rt_reflections 1
+20 stap 0 left
+20 swait 4
+20 sexpect pcvalue pc_rt_reflections 0
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_anisotropy
+20 sexpect pcvalue pc_anisotropy 0
+20 stap 0 right
+20 swait 4
+20 sexpect pcvalue pc_anisotropy 1
+20 stap 0 right
+20 swait 4
+20 stap 0 right
+20 swait 4
+20 stap 0 right
+20 swait 4
+20 stap 0 right
+20 swait 4
+20 sexpect pcvalue pc_anisotropy 4
+20 stap 0 left
+20 swait 4
+20 stap 0 left
+20 swait 4
+20 stap 0 left
+20 swait 4
+20 stap 0 left
+20 swait 4
+20 sexpect pcvalue pc_anisotropy 0
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_enhanced_textures
+20 sexpect pcvalue pc_enhanced_textures 0
+20 stap 0 circle
+20 swait 10
+20 sexpect page 1
+20 sexpect pcrow pc_display_mode
+20 stap 0 circle
+20 swait 40
+20 sexpect page 0
+20 sexpect menu 1
+20 stap 0 options
+20 swait 90
+20 sexpect menu 0
+20 slog
+20 squit

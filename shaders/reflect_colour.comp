@@ -1,0 +1,63 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+layout(std430, set = 1, binding = 5) buffer LuminanceOut {
+    vec2 partial[];
+};
+
+const int kSize = 64;
+const int kRadius = 12;
+const ivec2 kRead = ivec2(0, 32);
+const float kBinomial[25] = float[](1.0, 24.0, 276.0, 2024.0, 10626.0, 42504.0, 134596.0, 346104.0, 735471.0, 1307504.0, 1961256.0,
+                                    2496144.0, 2704156.0, 2496144.0, 1961256.0, 1307504.0, 735471.0, 346104.0, 134596.0, 42504.0,
+                                    10626.0, 2024.0, 276.0, 24.0, 1.0);
+
+shared vec3 s_sum[64];
+
+vec3 Warped(ivec2 pixel) {
+    vec2 p = (vec2(pixel) + 0.5) / float(kSize);
+    vec2 uv;
+    if (p.x + p.y <= 1.0) {
+        uv = pass.f0.xy + p.x * (pass.f0.zw - pass.f0.xy) + p.y * (pass.f1.xy - pass.f0.xy);
+    } else {
+        uv = pass.f1.zw + (1.0 - p.x) * (pass.f1.xy - pass.f1.zw) + (1.0 - p.y) * (pass.f0.zw - pass.f1.zw);
+    }
+    vec3 c = ImgLod(pass.ids.x, SMP_LINEAR_CLAMP, uv, 0.0).rgb;
+    return min(max(c, vec3(0.0)), vec3(1.0));
+}
+
+void main() {
+    uint index = gl_LocalInvocationIndex;
+    const int taps = (2 * kRadius + 1) * (2 * kRadius + 1);
+    vec3 acc = vec3(0.0);
+    for (int t = int(index); t < taps; t += 64) {
+        int i = t % (2 * kRadius + 1);
+        int j = t / (2 * kRadius + 1);
+        ivec2 pixel = clamp(kRead + ivec2(i - kRadius, j - kRadius), ivec2(0), ivec2(kSize - 1));
+        float w = (kBinomial[i] / 16777216.0) * (kBinomial[j] / 16777216.0);
+        acc += w * Warped(pixel);
+    }
+    s_sum[index] = acc;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (index < stride) {
+            s_sum[index] += s_sum[index + stride];
+        }
+        barrier();
+    }
+    if (index == 0u) {
+        vec3 c = floor(clamp(s_sum[0], vec3(0.0), vec3(1.0)) * 255.0 + 0.5) / 255.0;
+        partial[pass.ids.y] = c.rg;
+        partial[pass.ids.y + 1u] = vec2(c.b, 1.0);
+    }
+}

@@ -1,0 +1,16 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 3.0
+ffile 0 -0.2 7.5
+slisa 7200
+glisa 600
+swait 120
+slog
+swait 300
+ffile 0 -0.2 -8
+swait 40
+ffile 0 -0.2 7.5
+swait 40
+ffile 0 -0.2 -8
+swait 600
+slog

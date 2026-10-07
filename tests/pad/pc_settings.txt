@@ -1,0 +1,93 @@
+# The PC settings page with a pad alone: cross on the option screen opens it, the d-pad moves the cursor and changes the
+# setting under it (v-sync, the upscaler, which enables Quality, and its quality), cross changes it too, circle and
+# OPTIONS return to the option screen, and OPTIONS there closes the menu.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/pc_settings.txt
+10 pattach 0 ps4
+20 sstep 15
+20 swait 30
+20 stap 0 options
+20 swait 70
+20 sexpect menu 1
+20 sexpect page 0
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 sexpect pcrow pc_display_mode
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_resolution
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_vsync
+20 sexpect pcvalue pc_vsync 1
+20 stap 0 left
+20 swait 4
+20 sexpect pcvalue pc_vsync 0
+20 stap 0 cross
+20 swait 4
+20 sexpect pcvalue pc_vsync 1
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 4
+20 stap 0 up
+20 swait 4
+20 sexpect pcrow pc_reset
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_vsync
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 stap 0 down
+20 swait 4
+20 sexpect pcrow pc_upscaler
+20 sexpect pcvalue pc_upscaler 0
+20 sexpect pcenabled pc_quality 0
+20 stap 0 right
+20 swait 4
+20 sexpect pcvalue pc_upscaler 1
+20 sexpect pcenabled pc_quality 1
+20 stap 0 down
+20 swait 4
+20 stap 0 right
+20 swait 4
+20 sexpect pcvalue pc_quality 2
+20 stap 0 up
+20 swait 4
+20 stap 0 left
+20 swait 4
+20 sexpect pcvalue pc_upscaler 0
+20 sexpect pcenabled pc_quality 0
+20 stap 0 circle
+20 swait 40
+20 sexpect page 0
+20 sexpect menu 1
+20 sexpect invert y 0
+20 sexpect invert x 0
+20 stap 0 cross
+20 swait 40
+20 sexpect page 1
+20 stap 0 options
+20 swait 40
+20 sexpect page 0
+20 sexpect menu 1
+20 stap 0 options
+20 swait 90
+20 sexpect menu 0
+20 sexpect paused 0
+20 slog
+20 squit

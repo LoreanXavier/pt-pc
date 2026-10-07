@@ -1,0 +1,6 @@
+# loop browser: 08 Gouge it out (f050 pass 2), entered lit as after the f060 flashlight pickup
+sloop 8
+swait 10
+sstep 15
+swait 60
+sexpect handylight 1

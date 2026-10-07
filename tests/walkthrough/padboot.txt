@@ -1,0 +1,31 @@
+pattach 0 ps5
+pbot 0
+smenu 1
+swait 90
+sshot {shots}/boot_a_options.png
+stap 0 right
+swait 4
+sexpect brightness 6
+stap 0 left
+swait 4
+sexpect brightness 5
+stap 0 options
+smenu 0
+sexpect paused 0
+swait 30
+stap 0 options
+swait 10
+sexpect menu 0
+sstep 15
+swait 30
+sshot {shots}/boot_b_start_room.png
+stap 0 options
+swait 4
+sexpect menu 1
+sexpect paused 1
+swait 90
+sshot {shots}/boot_c_pause.png
+stap 0 options
+smenu 0
+sexpect paused 0
+slog

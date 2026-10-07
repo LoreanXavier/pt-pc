@@ -1,0 +1,4 @@
+sanchor
+gfile 0 -1.4 -4.0
+ffile 0 -0.2 7.5
+sshot {shots}/{floor}_{loop}_a_corridor.png

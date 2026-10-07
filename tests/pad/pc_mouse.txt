@@ -1,0 +1,18 @@
+# The option screen and the PC settings page with the mouse (1920 x 1080 pixels): a click on a camera row's value sets it,
+# a click on PC Settings opens the page, hovering moves the cursor, a click on a value changes it, a right click returns
+# to the option screen and a click on Back closes the menu.
+# pt.exe --headless --no-save --width 1920 --height 1080 --demo-rate 20 --frames 1420 --input-script tests/pad/pc_mouse.txt
+1150 menu
+1220 mclick 1575 735
+1224 expect invert y 1
+1230 mclick 1260 930
+1260 expect page 1
+1270 mmove 360 315
+1272 expect pcrow pc_resolution
+1280 mclick 690 360
+1284 expect pcrow pc_vsync
+1284 expect pcvalue pc_vsync 0
+1290 mright 690 360
+1320 expect page 0
+1330 mclick 240 945
+1400 expect menu 0

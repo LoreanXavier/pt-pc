@@ -1,0 +1,32 @@
+# DLSS Frame Generation (Streamline, experimental) in a window, for a tester with a GeForce RTX 40 or 50 and hardware-accelerated
+# GPU scheduling on (upscaling.md, DLSS Frame Generation through Streamline). On RTX 20/30 pt.log reports "DLSS Frame
+# Generation no supported adapter" and the frames are the plain ones (Streamline still runs DLSS through sl.dlss).
+# pt.ini: [display] pause_on_focus_loss = 0 (the window opens without the focus), [upscaling] upscaler = dlss,
+# quality = quality, frame_generation = dlss (the option loads Streamline at start).
+# SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_AUDIO_DRIVER=dummy PT_FRAME_STATS=1 pt.exe --virtual-pads --no-save --settings <pt.ini>
+#   --frames 5000 --input-script tests/pad/dlss_frame_generation.txt
+# pt.log must show "streamline: DLSS ok, DLSS Frame Generation ok", "frame generation: DLSS Frame Generation for WxH, N hud-less
+# targets", "DLSS Frame Generation mode on" while walking, "mode off" while the pause menu is open and "on" again after it,
+# and at exit "presented N frames for M rendered" with N close to 2 M. Screenshots dlssg1 to dlssg3 go to the working folder;
+# watch the window for doubled edges on the corridor's frames and on the subtitles while walking.
+10 pattach 0 ps4
+20 goto 0 0 12.5
+20 swait 10
+20 sfree
+20 swait 30
+20 sshot dlssg1_start_room.png
+20 sanchor
+20 gfile 0 -1.4 -4.0
+20 ffile 0 -0.2 7.5
+20 swait 30
+20 sshot dlssg2_corridor.png
+20 stap 0 options
+20 swait 120
+20 sexpect menu 1
+20 sshot dlssg3_menu.png
+20 stap 0 options
+20 swait 120
+20 sexpect menu 0
+20 swait 600
+20 slog
+20 squit

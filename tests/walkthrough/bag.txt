@@ -1,0 +1,18 @@
+# start room after Lisa's kill: the bag talks once when zoomed on (0x9545C0), then stays silent for the session
+sdemo gc_p07_030
+swait 240
+fent GimmickLocator_Bag
+swait 5
+szoom 1
+swait 60
+szoom 0
+slog
+swait 1700
+sface 0 1.6 12
+swait 30
+fent GimmickLocator_Bag
+swait 5
+szoom 1
+swait 60
+szoom 0
+slog

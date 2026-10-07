@@ -1,0 +1,9 @@
+sanchor nextC
+gfile 0.2 0 24.6
+gfile -1.0 0 25.6
+gfile -11.0 0 25.6
+gfile -14.2 -1.0 25.6
+gfile -17.5 -1.4 25.6 900
+swait 60
+sfree
+slog

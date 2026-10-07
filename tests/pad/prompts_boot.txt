@@ -1,0 +1,22 @@
+# The first-boot option screen with each device's button prompts: the keyboard (no pad), a DualShock 4 attached, an Xbox pad attached, a
+# key pressed. Shots go to the working folder.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --options-menu --width 1920 --height 1080 --frames 3000
+#   --input-script tests/pad/prompts_boot.txt
+700 smenu 1
+700 swait 90
+700 sexpect prompts keyboard
+700 sshot prompts_boot_keyboard.png
+700 sattach 0 ps4
+700 swait 5
+700 sexpect prompts playstation
+700 sshot prompts_boot_playstation.png
+700 sattach 1 xbox
+700 swait 5
+700 sexpect prompts xbox
+700 sshot prompts_boot_xbox.png
+700 sktap Up
+700 swait 5
+700 sexpect prompts keyboard
+700 sexpect menu 1
+700 slog
+700 squit

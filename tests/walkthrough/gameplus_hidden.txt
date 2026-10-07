@@ -1,0 +1,7 @@
+# after a finish (Game+ on): the ending's restart reaches StartGame and the hallway's own bathtub Lisa stays hidden
+sstep 28
+sstep 15
+swait 60
+sexpect body shsb_bath001_ocho001_0000 0
+slog
+squit

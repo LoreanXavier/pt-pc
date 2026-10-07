@@ -1,0 +1,26 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 7.0
+slog
+fent shsb_labl001_hhhh001_0000
+swait 10
+ffile 0 -0.5 -5.0
+swait 10
+fent shsb_labl001_hhhh001_0000
+swait 10
+ffile 0 -0.5 -5.0
+swait 10
+fent shsb_labl001_hhhh001_0000
+swait 10
+ffile 0 -0.5 -5.0
+swait 10
+fent shsb_labl001_hhhh001_0000
+swait 10
+ffile 0 -0.5 -5.0
+swait 10
+slog
+gfile -1.0 -1.4 7.5
+gfile -8.2 -1.4 7.9
+fent shsb_labl001_ican001_0000
+swait 30
+slog

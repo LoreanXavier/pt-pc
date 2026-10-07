@@ -1,0 +1,20 @@
+sanchor
+slog
+gfile 0 -1.4 -4.5
+swait 400
+sfree
+slog
+ffile 0 -0.2 7.5
+swait 10
+ssteps 10
+sshot {shots}/{floor}_{loop}_steps.png
+swait 30
+# the word comes from PT_VOICE_INPUT, looped by the game as its microphone
+swait 2000
+slog
+gfile 0.05 -1.4 6.9
+fent PhoneLocator
+szoom 1
+swait 200
+szoom 0
+slog

@@ -1,0 +1,17 @@
+# speedrun mode: the results page at the end of the credits, "Explore outside" (its second row) starts the street walk
+sstep 28
+smenu 1
+swait 60
+sshot {shots}/speedrun_results_partial.png
+swait 30
+sktap Down
+swait 10
+sktap Return
+swait 30
+sstep 31
+swait 150
+sshot {shots}/speedrun_street.png
+swait 30
+sexpect menu 0
+slog
+squit

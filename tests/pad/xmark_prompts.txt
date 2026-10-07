@@ -1,0 +1,27 @@
+# The X painted over Lisa's photo (the XMark photo, "Gouge it out!", f050) is the story's mark, not a button prompt: it stays the data's
+# for the keyboard and mouse, a DualSense, an Xbox pad and a Switch Pro pad, so the four shots are the same picture. The camera looks at the
+# photo from 45 cm; shots go to the working folder.
+# pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f050 --width 1920 --height 1080 --frames 8000
+#   --input-script tests/pad/xmark_prompts.txt
+20 sstep 15
+20 swait 30
+20 sanchor
+20 gfile 0 -1.4 6.5
+20 gfile -1.0 -1.4 7.5
+20 gfile -7.9 -1.4 7.5
+20 fent shsb_hous001_pc1a_0000
+20 swait 10
+20 scamfile -7.93 -0.10 6.81 0 -0.035 -1 36
+20 swait 3
+20 sshot xmark_keyboard.png
+20 sattach 0 ps5
+20 swait 5
+20 sshot xmark_playstation.png
+20 sattach 1 xbox
+20 swait 5
+20 sshot xmark_xbox.png
+20 sattach 2 switch
+20 swait 5
+20 sshot xmark_nintendo.png
+20 slog
+20 squit

@@ -1,0 +1,48 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant) uniform PassPush {
+    uvec4 ids;
+    vec4 f0;
+    vec4 f1;
+    vec4 f2;
+    mat4 m;
+} pass;
+
+layout(std430, set = 1, binding = 5) buffer LuminanceOut {
+    vec2 partial[];
+};
+
+shared vec2 s_sum[256];
+
+void main() {
+    ivec2 size = ivec2(ImgSize(IMG_DIFFUSE));
+    ivec2 base = ivec2(gl_GlobalInvocationID.xy) * 2;
+    vec2 acc = vec2(0.0);
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 p = base + ivec2(x, y);
+            if (all(lessThan(p, size))) {
+                float depth = ImgFetch(IMG_DEPTH, p).x;
+                if (depth > 0.0) {
+                    acc += vec2(max(0.0, Luma709(ImgFetch(IMG_DIFFUSE, p).rgb)), 1.0);
+                }
+            }
+        }
+    }
+    uint index = gl_LocalInvocationIndex;
+    s_sum[index] = acc;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (index < stride) {
+            s_sum[index] += s_sum[index + stride];
+        }
+        barrier();
+    }
+    if (index == 0u) {
+        uint group = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        partial[group] = s_sum[0];
+    }
+}

@@ -1,0 +1,8 @@
+# the reset of the PC settings page, then the state of the boot it must rebuild (session_save): no speech of the old session,
+# no kill flag, the same gimmick records, effects and puzzle state
+sreset
+swait 30
+sexpect speech 0
+sstep 15
+swait 60
+sstate compare

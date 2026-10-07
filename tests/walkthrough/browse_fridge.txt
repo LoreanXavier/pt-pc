@@ -1,0 +1,5 @@
+# loop browser: 10 Blood / ceiling (f080), the fridge in place of the ceiling lamp
+sloop 10
+swait 10
+sstep 15
+swait 60

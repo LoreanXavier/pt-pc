@@ -1,0 +1,16 @@
+# Maze A's two MirrorSwitch boxes of viewportFlag 1 (Trap_Mirror_High0 and High1). Moving from one into the other between two
+# trap frames gives one OUT and one ENTER of the same bit in one frame; 0xBEF910 runs every OUT before any ENTER, so the bit stays
+# set whichever box comes first in the file.
+steleport -26.55 -2.28
+swait 10
+sexpect mirrorbits 2
+steleport -17.10 5.61
+swait 10
+sexpect mirrorbits 2
+steleport -26.55 -2.28
+swait 10
+sexpect mirrorbits 2
+steleport -22.0 1.0
+swait 10
+sexpect mirrorbits 0
+slog

@@ -1,0 +1,21 @@
+# the port's credits page in Japanese (the game's own Japanese fonts) and skipped with a confirm press on its last card: the street
+# question opens at once
+srate 1
+swait 200
+sui subs 1 4
+scredits
+swait 90
+sshot {shots}/credits_jpn_0.png
+swait 300
+sshot {shots}/credits_jpn_1.png
+swait 360
+sshot {shots}/credits_jpn_2.png
+swait 360
+sshot {shots}/credits_jpn_3.png
+swait 360
+sshot {shots}/credits_jpn_4.png
+sui menukey accept
+swait 30
+sexpect menu 1
+sexpect pcrow pc_street_walk
+slog

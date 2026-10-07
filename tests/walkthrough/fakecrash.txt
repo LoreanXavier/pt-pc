@@ -1,0 +1,22 @@
+# f120 after the start room of f110: gc_p02_080 (the bug screen) runs its glitches gc_p02_060 (fx_sh_viwdis01_s1 and
+# Play_sfx_bug_loop_01) at 1800, 2700 and 3300, gc_p02_070 at 3540, the long fx_sh_viwdis02_s1 from 3600 to 5400 with the
+# gc_p02_100 number chant, the bug picture at 5401 and Endf120 at 5875; shots at those frames (--shots)
+sanchor
+gfile 0 -1.4 -2.0
+ffile 0 -0.2 7.5
+sdframe gc_p02_080 1806
+sshot {shots}/f120_1806_viwdis01.png
+sdframe gc_p02_080 1812
+sshot {shots}/f120_1812_viwdis01.png
+sdframe gc_p02_080 1818
+sshot {shots}/f120_1818_viwdis01.png
+sdframe gc_p02_080 3550
+sshot {shots}/f120_3550_viwdis02.png
+sdframe gc_p02_080 3700
+sshot {shots}/f120_3700_viwdis02.png
+sdframe gc_p02_080 5300
+sshot {shots}/f120_5300_viwdis02.png
+sdframe gc_p02_080 5450
+sshot {shots}/f120_5450_bug.png
+sdemo gc_p02_080
+slog

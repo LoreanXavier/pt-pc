@@ -1,0 +1,22 @@
+# speedrun mode: the results page at the end of the credits, "Return to menu" (its first row): the ending's restart shows the
+# option screen first, closing it plays the preface and the opening, and the next run starts when the player gets control
+sstep 28
+smenu 1
+swait 60
+sshot {shots}/speedrun_results.png
+swait 30
+sktap Return
+swait 90
+smenu 1
+swait 60
+sshot {shots}/speedrun_options.png
+swait 30
+sktap Escape
+swait 60
+sstep 15
+swait 120
+sshot {shots}/speedrun_new_run.png
+swait 30
+sexpect menu 0
+slog
+squit

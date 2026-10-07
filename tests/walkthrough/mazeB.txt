@@ -1,0 +1,30 @@
+sanchor nextB
+gfile -13.5 0 -30.2
+gfile -7.1 0 -30.2
+gfile -7.1 0 -34.5
+slog
+fent shsb_labl001_holl001_0000
+swait 5
+szoom 1
+swait 45
+szoom 0
+swait 30
+fent shsb_labl001_holl001_0000
+swait 5
+szoom 1
+swait 20
+sshot {shots}/{floor}_{loop}_peephole.png
+swait 90
+sshot {shots}/{floor}_{loop}_peephole_view.png
+slog
+swait 2310
+szoom 0
+slog
+swait 30
+sfree
+gfile -7.1 0 -37.2
+gfile 2.2 0 -37.2
+gfile 2.2 0 -30.7
+gfile 16.0 0 -30.7
+gfile 16.0 0 -22.0
+slog

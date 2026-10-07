@@ -1,0 +1,94 @@
+# Button prompts follow the device used last and switch at once: the keyboard with no pad, a DualSense attached (a pad connected counts as
+# used), a key pressed mid-menu, the pad again, an Xbox pad attached and removed (the prompts go back to the DualSense, used before it), a
+# Switch Pro pad, all pads removed. Shots of the option screen, and of the PC settings page with the reset confirmation, whose help line
+# shows the accept button inline, for each device go to the working folder. The reset row needs a save folder; give it an empty one:
+# pt.exe --headless --virtual-pads --audio-offline --save-dir <empty folder> --start-floor f010 --width 1920 --height 1080 --frames 6000
+#   --input-script tests/pad/prompts.txt
+20 sstep 15
+20 swait 30
+20 sktap Escape
+20 swait 90
+20 sexpect menu 1
+20 sexpect prompts keyboard
+20 sshot prompts_options_keyboard.png
+20 sktap F10
+20 swait 40
+20 sexpect page 1
+20 sktap Up
+20 swait 4
+20 sexpect pcrow pc_reset
+20 sktap Return
+20 swait 4
+20 sshot prompts_pc_keyboard.png
+20 sktap Backspace
+20 swait 4
+20 sexpect page 1
+20 sexpect pcenabled pc_reset 1
+20 sattach 0 ps5
+20 swait 5
+20 sexpect prompts playstation
+20 stap 0 cross
+20 swait 4
+20 sshot prompts_pc_playstation.png
+20 stap 0 circle
+20 swait 4
+20 stap 0 circle
+20 swait 40
+20 sexpect page 0
+20 sshot prompts_options_playstation.png
+20 sktap Left
+20 swait 4
+20 sexpect prompts keyboard
+20 sexpect brightness 4
+20 stap 0 right
+20 swait 4
+20 sexpect prompts playstation
+20 sexpect brightness 5
+20 sattach 1 xbox
+20 swait 5
+20 sexpect prompts xbox
+20 sshot prompts_options_xbox.png
+20 stap 1 a
+20 swait 40
+20 sexpect page 1
+20 stap 1 up
+20 swait 4
+20 sexpect pcrow pc_reset
+20 stap 1 a
+20 swait 4
+20 sshot prompts_pc_xbox.png
+20 stap 1 b
+20 swait 4
+20 stap 1 b
+20 swait 40
+20 sexpect page 0
+20 sdetach 1
+20 swait 5
+20 sexpect prompts playstation
+20 sattach 2 switch
+20 swait 5
+20 sexpect prompts nintendo
+20 sshot prompts_options_nintendo.png
+20 stap 2 south
+20 swait 40
+20 sexpect page 1
+20 stap 2 up
+20 swait 4
+20 stap 2 south
+20 swait 4
+20 sshot prompts_pc_nintendo.png
+20 stap 2 east
+20 swait 4
+20 stap 2 east
+20 swait 40
+20 sexpect page 0
+20 sdetach 2
+20 swait 5
+20 sdetach 0
+20 swait 5
+20 sexpect prompts keyboard
+20 sktap Escape
+20 swait 60
+20 sexpect menu 0
+20 slog
+20 squit

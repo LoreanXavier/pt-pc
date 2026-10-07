@@ -1,0 +1,9 @@
+# before any finish (the base game), maze B active after mazeB's route: no bathtub Lisa (the first view of gameplus_mazeb_on)
+sexpect gameplus 0
+scamfile -1.0 1.6 -34.9 -1 -0.25 0 54.879
+swait 30
+sshot {shots}/gameplus_mazeb_off.png
+swait 30
+scamera off
+slog
+squit

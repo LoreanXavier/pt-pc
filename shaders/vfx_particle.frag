@@ -1,0 +1,247 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+
+layout(set = 0, binding = 0) uniform sampler2D textures[];
+layout(set = 0, binding = 2) uniform samplerCube cube_textures[];
+layout(set = 1, binding = 1) uniform sampler2D depth_texture;
+layout(set = 1, binding = 2) uniform sampler2D scene_copy;
+layout(set = 1, binding = 3) uniform VfxFog {
+    vec4 fog[8];
+    uvec4 mode;
+} fog_block;
+
+layout(push_constant) uniform VfxPush {
+    mat4 view_projection;
+    vec4 eye;
+    vec4 frame;
+    uvec4 ids;
+} push;
+
+layout(location = 0) in vec4 in_uv;
+layout(location = 1) in vec4 in_color;
+layout(location = 2) in vec4 in_params;
+layout(location = 3) in vec4 in_luminance;
+layout(location = 4) flat in uvec4 in_info;
+layout(location = 5) in float in_view_depth;
+layout(location = 6) flat in vec4 in_extra;
+layout(location = 7) in vec3 in_world;
+layout(location = 8) flat in vec3 in_tangent;
+layout(location = 9) flat in vec3 in_bitangent;
+layout(location = 10) flat in vec3 in_normal;
+layout(location = 11) flat in vec4 in_rain_rotation;
+
+layout(location = 0) out vec4 out_color;
+
+const uint kSoft = 1u;
+const uint kExposure = 2u;
+const uint kLuminance = 4u;
+const uint kLiquid = 8u;
+const uint kScreen = 16u;
+const uint kAnimeBlend = 32u;
+const uint kFlare = 64u;
+const uint kLiquidHnm = 128u;
+const uint kClip = 256u;
+const uint kRain = 1024u;
+const uint kNoTexture = 0xFFFFFFFFu;
+
+const uint kBlendAlpha = 0u;
+const uint kBlendAdd = 1u;
+const uint kBlendSub = 2u;
+const uint kBlendMul = 3u;
+const uint kBlendMin = 4u;
+const uint kBlendOpaque = 5u;
+
+vec3 SrgbToLinear(vec3 c) {
+    return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.04045)));
+}
+
+vec3 LinearToSrgb(vec3 c) {
+    return mix(1.055 * pow(max(c, vec3(1e-5)), vec3(1.0 / 2.4)) - 0.055, c * 12.92, lessThanEqual(c, vec3(0.0031308)));
+}
+
+float LinearDepth(float d) {
+    return push.frame.y / max(d, 1e-7);
+}
+
+vec3 ReflectionSample(uint slot, vec3 direction) {
+    return texture(cube_textures[nonuniformEXT(slot)], direction).rgb;
+}
+
+float FoldScreen(float u) {
+    if (u >= 0.995) {
+        u = 0.995 - fract(u / 0.995) * 0.995;
+    }
+    return abs(u);
+}
+
+float SceneDepth(vec2 pixel) {
+    return LinearDepth(texture(depth_texture, pixel * push.frame.zw).r);
+}
+
+void TppFog(vec3 eye, vec3 point, out vec3 inscatter, out float transmittance) {
+    vec4 g0 = fog_block.fog[0];
+    vec4 g1 = fog_block.fog[1];
+    vec4 mie = fog_block.fog[2];
+    vec4 ray = fog_block.fog[3];
+    vec3 d = point - eye;
+    vec3 dh = 0.01 * d;
+    float dist = length(dh);
+    float cos_theta = dot(fog_block.fog[7].xyz, dh / max(0.0001, dist));
+    float height = max(1.0e-6, 100.0 * g0.y * dh.y);
+    float amount = g0.x * pow(max(0.0, dist - g0.z * 0.01), g1.w);
+    float depth = (amount * 100.0 - 100.0 * amount * exp(-height)) / height;
+    float rayleigh_phase = 0.059683103 * cos_theta * cos_theta + 0.059683103;
+    float m = 1.0 - cos_theta * mie.w;
+    float mie_phase = 0.07957747 * (1.0 - mie.w * mie.w) / (m * m);
+    vec3 sigma = mie.rgb + ray.rgb;
+    vec3 directional = ray.w * (mie.rgb * mie_phase + ray.rgb * rayleigh_phase) / max(vec3(1.0e-6), sigma);
+    float opacity = 1.0 - exp(-depth);
+    vec3 color = g1.rgb + directional * (1.0 - exp(-depth * sigma));
+    inscatter = clamp(color * opacity, 0.0, 1.0);
+    transmittance = 1.0 - opacity;
+}
+
+float FlareAlpha(float tex_alpha) {
+    float a = in_color.a;
+    if (in_luminance.z > 0.0) {
+        float len = in_luminance.y * push.frame.x;
+        if (len * len < 0.001 && in_luminance.z >= 1.0) {
+            a = 0.0;
+        }
+        a *= mix(1.0, in_luminance.x * push.frame.x / max(len, 1.0), min(in_luminance.z, 1.0));
+    }
+    a = floor(clamp(a, 0.0, 1.0) * 255.0) / 255.0;
+    vec2 pixel = in_params.xy / push.frame.zw;
+    float tolerance = in_params.w;
+    float v = clamp((SceneDepth(pixel + vec2(0.69, -3.94)) + tolerance - in_params.z) / tolerance, 0.0, 1.0);
+    v += clamp((SceneDepth(pixel + vec2(-3.76, 1.37)) + tolerance - in_params.z) / tolerance, 0.0, 1.0);
+    v += clamp((SceneDepth(pixel + vec2(3.06, 2.57)) + tolerance - in_params.z) / tolerance, 0.0, 1.0);
+    float r = 1.0 - v * 0.33325195;
+    return (1.0 - r * r) * tex_alpha * a;
+}
+
+void main() {
+    const uint flags = in_info.y;
+    vec2 base_uv = in_uv.xy;
+    if ((flags & kRain) != 0u) {
+        vec2 centered = base_uv - in_extra.xy;
+        base_uv = in_extra.xy + vec2(in_extra.w * centered.x - in_extra.z * centered.y,
+                                    in_extra.z * centered.x + in_extra.w * centered.y);
+    }
+    vec4 tex = texture(textures[nonuniformEXT(in_info.x)], base_uv);
+    if ((flags & kAnimeBlend) != 0u) {
+        tex = mix(tex, texture(textures[nonuniformEXT(in_info.x)], in_uv.zw), in_params.w);
+    }
+    vec3 rgb;
+    float alpha;
+    float transmit = 0.0;
+    if ((flags & kFlare) != 0u) {
+        rgb = tex.rgb * in_color.rgb;
+        alpha = FlareAlpha(tex.a);
+    } else if ((flags & kLiquid) != 0u) {
+        vec3 nt;
+        if ((flags & kLiquidHnm) != 0u) {
+            nt.xy = vec2(tex.a, tex.g) * 2.0 - 1.0;
+            nt.z = sqrt(clamp(1.0 - dot(nt.xy, nt.xy), 0.0, 1.0)) + 1e-4;
+            alpha = in_color.a;
+        } else {
+            nt = tex.rgb * 2.0 - 1.0 + vec3(0.0, 0.0, 1e-4);
+            alpha = tex.a * in_color.a;
+        }
+        vec3 n = normalize(nt.x * in_tangent + nt.y * in_bitangent + nt.z * in_normal);
+        vec3 v = normalize(in_world - push.eye.xyz);
+        float t = in_luminance.x;
+        float ndv = dot(n, v);
+        float through = (1.0 - t) * clamp((1.0 - t) * ndv + t, 0.0, 1.0);
+        rgb = in_color.rgb * push.frame.x;
+        if (push.eye.w > 0.0) {
+            vec2 pixel = gl_FragCoord.xy - 0.00390625 - n.xy * (in_extra.y * push.eye.w);
+            vec2 uv = pixel * push.frame.zw;
+            vec3 scene = texture(scene_copy, vec2(FoldScreen(uv.x), FoldScreen(uv.y))).rgb;
+            vec3 unlit = vec3(unpackHalf2x16(in_info.w), in_extra.w);
+            rgb += (unlit * through + t * t) * scene;
+        } else {
+            transmit = t * t + through * in_luminance.y;
+        }
+        if (in_info.z != kNoTexture && in_extra.x > 0.0) {
+            float fresnel = in_luminance.z + (1.0 - in_luminance.z) * pow(max(1.0 - max(-ndv, 0.0), 1e-5), in_luminance.w);
+            vec3 c = ReflectionSample(in_info.z, reflect(v, n));
+            rgb += in_extra.x * fresnel * c * c;
+        }
+        if ((flags & kClip) != 0u) {
+            if (alpha < 0.49609375) {
+                discard;
+            }
+            alpha = 1.0;
+        }
+    } else if ((flags & kRain) != 0u) {
+        vec2 pixel = gl_FragCoord.xy - 0.5;
+        vec2 scale = in_luminance.xy * push.frame.zw;
+        vec2 uv0 = scale * vec2(pixel.x * in_rain_rotation.y - pixel.y * in_rain_rotation.x,
+                               pixel.y * in_rain_rotation.y + pixel.x * in_rain_rotation.x) + in_luminance.z;
+        vec2 uv1 = scale * vec2(pixel.x * in_rain_rotation.w - pixel.y * in_rain_rotation.z,
+                               pixel.y * in_rain_rotation.w + pixel.x * in_rain_rotation.z) + in_luminance.w;
+        float rain = in_info.z == kNoTexture ? 1.0 : texture(textures[nonuniformEXT(in_info.z)], uv0).a +
+                                                    texture(textures[nonuniformEXT(in_info.z)], uv1).a;
+        vec3 c = tex.rgb * in_color.rgb * rain * 0.5;
+        rgb = mix(pow(max((c + 0.055) / 1.055, vec3(1e-5)), vec3(2.4)), c / 12.92,
+                  lessThanEqual(c, vec3(0.03928)));
+        alpha = tex.a * in_color.a;
+    } else if ((flags & kScreen) != 0u) {
+        rgb = tex.rgb * in_color.rgb;
+        alpha = tex.a * in_color.a;
+    } else {
+        rgb = SrgbToLinear(tex.rgb) * in_color.rgb;
+        alpha = tex.a * in_color.a;
+    }
+    if ((flags & kExposure) != 0u) {
+        rgb *= push.frame.x;
+    }
+    if ((flags & kLuminance) != 0u) {
+        float ev = -log2(max(push.frame.x, 1e-8));
+        float t = clamp((ev - in_luminance.x) / max(in_luminance.y - in_luminance.x, 1e-4), 0.0, 1.0);
+        rgb *= mix(max(in_luminance.z, 0.0), max(in_luminance.w, 0.0), t);
+    }
+    const uint blend_mode = push.ids.z;
+    const bool world = push.ids.y != 1u;
+    if (world && (fog_block.mode.x & 1u) != 0u && (flags & (kLiquid | kFlare | kScreen)) == 0u) {
+        vec3 inscatter;
+        float transmittance;
+        const float fog_depth = clamp(in_view_depth, 1.0, fog_block.fog[0].w);
+        TppFog(push.eye.xyz, push.eye.xyz + (in_world - push.eye.xyz) * (fog_depth / max(in_view_depth, 1.0e-4)), inscatter, transmittance);
+        if (blend_mode == kBlendAlpha) {
+            rgb = rgb * transmittance + inscatter;
+        } else {
+            alpha *= transmittance;
+        }
+    }
+    if (world) {
+        float near_fade = in_params.y;
+        float far_fade = in_params.z;
+        if (far_fade > 0.0 || near_fade > 0.0) {
+            float d = in_view_depth;
+            alpha *= d > far_fade ? 1.0 : (d < near_fade ? 0.0 : clamp((d - near_fade) / max(far_fade - near_fade, 1e-3), 0.0, 1.0));
+        }
+        if ((flags & kSoft) != 0u) {
+            float scene = SceneDepth(gl_FragCoord.xy);
+            alpha *= clamp((scene - in_view_depth) * in_params.x, 0.0, 1.0);
+        }
+    }
+    alpha = clamp(alpha, 0.0, 1.0);
+    if (push.ids.w != 0u) {
+        out_color = vec4(push.ids.y == 0u ? vec3(1.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0), 1.0) * 0.5;
+        return;
+    }
+    const uint blend = push.ids.z;
+    if (blend == kBlendMul) {
+        out_color = vec4(mix(vec3(1.0), rgb, alpha), alpha);
+    } else if (blend == kBlendMin) {
+        out_color = vec4(mix(vec3(65504.0), rgb, alpha), alpha);
+    } else if (blend == kBlendOpaque) {
+        out_color = vec4(rgb, 1.0);
+    } else if (push.ids.y == 2u) {
+        out_color = vec4(LinearToSrgb(max(rgb, vec3(0.0))) * alpha, alpha);
+    } else {
+        out_color = vec4(rgb * alpha, alpha * (1.0 - transmit));
+    }
+}

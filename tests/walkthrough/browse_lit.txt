@@ -1,0 +1,10 @@
+# loop browser: 09 Forgive me Lisa (f070): its start room is on f050, which SetupFlashLight leaves dark; the browser lights the
+# handy light as after the f060 pickup, in the new session (not in the one the pick was made in, which the reset drops)
+sloop 9
+swait 10
+sstep 15
+swait 60
+sexpect handylight 1
+fent GimmickLocator_Bag
+swait 5
+sexpect gimmick Bag 1
