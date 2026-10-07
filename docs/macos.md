@@ -57,3 +57,11 @@ makes `dist/P.T. PC Port.app` (MoltenVK in `Contents/Frameworks`, the shaders, f
 `Contents/Resources`, where `SDL_GetBasePath()` points in a bundle), signs every binary in it ad hoc and zips it with
 `ditto`. `--exe build/macos/pt_release` packages the release game; with `--game <folder>` the bundled game also shoots
 the loop browser's previews, as tools/package.py does.
+
+## Releases
+
+`.github/workflows/macos.yml` runs on GitHub's Apple silicon runners when a release is published: it builds `pt` and
+`pt_release` at the release's version, makes the app with `tools/macos/make_app.py`, attaches it to the release as
+`P.T.PC.Port-macOS.zip` and adds its `macos` entry to the release's `latest.json` (docs/updates.md). Started by hand
+(Actions > macOS > Run workflow) it builds the same zip as a workflow artifact, for a test. Without game files on the
+runner the zip has no loop browser previews; the game shoots them at the browser's first use.

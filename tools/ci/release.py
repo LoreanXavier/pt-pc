@@ -219,7 +219,8 @@ if a.linux_setup:
                                  linux / "payload" / "payload.bin", "--out", linux_setup])
     report["linux_installer"] = str(linux_setup)
     report["files"] += [str(runtime), str(linux_setup)]
-# 5. the update manifest (docs/updates.md), attached to the GitHub release next to the setup
+# 5. the update manifest (docs/updates.md), attached to the GitHub release next to the setup; .github/workflows/macos.yml adds
+# the macOS app to it once the release is published
 tag = f"v{a.version}"
 manifest = {
     "version": a.version,

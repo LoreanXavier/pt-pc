@@ -26,9 +26,13 @@ The environment variable `PT_UPDATE_MANIFEST_URL` overrides the built-in address
       "url": "https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.0",
       "platforms": {
         "windows": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/P.T.PC.Port.Setup.exe"},
-        "linux": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/<linux setup name>"}
+        "linux": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/<linux setup name>"},
+        "macos": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/P.T.PC.Port-macOS.zip"}
       }
     }
+
+The `macos` entry is added by `.github/workflows/macos.yml` when the release is published: it builds the app on a GitHub
+Apple silicon runner, attaches `P.T.PC.Port-macOS.zip` and uploads the release's `latest.json` again with the entry.
 
 `version` is required; the platform's `url` is used when present, else the top `url`. Versions compare by their numbers
 (`0.10.0` is newer than `0.9.2`, a leading `v` is ignored, `0.2.0-rc1` is older than `0.2.0`). The answer is limited to

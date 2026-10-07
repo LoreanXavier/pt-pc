@@ -1,0 +1,72 @@
+# The macOS app (docs/macos.md) on GitHub's Apple silicon runners. A published release gets it as P.T.PC.Port-macOS.zip and
+# its latest.json a "macos" entry (docs/updates.md), so nothing in tools/ci/release.py needs a Mac; run by hand (Actions >
+# macOS > Run workflow) the zip is a workflow artifact instead.
+name: macOS
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tools
+        run: brew install ninja shaderc vulkan-headers vulkan-loader
+
+      - name: Version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^set(PT_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # pt brings the shaders, fonts, MoltenVK and the texture tools into the build folder; pt_release is the shipped game
+      - name: Build
+        env:
+          PT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build/macos --target pt pt_release
+
+      - name: App
+        run: |
+          python3 tools/macos/make_app.py --build build/macos --exe build/macos/pt_release
+          mv dist/pt-port-*-macos-arm64.zip dist/P.T.PC.Port-macOS.zip
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name != 'release'
+        with:
+          name: P.T.PC.Port-macOS-${{ steps.version.outputs.version }}
+          path: dist/P.T.PC.Port-macOS.zip
+
+      - name: Release asset and latest.json
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/P.T.PC.Port-macOS.zip --clobber
+          if gh release download "$GITHUB_REF_NAME" --pattern latest.json --dir manifest; then
+            python3 - "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/P.T.PC.Port-macOS.zip" <<'EOF'
+          import json, sys
+          path = "manifest/latest.json"
+          with open(path) as f:
+              manifest = json.load(f)
+          manifest.setdefault("platforms", {})["macos"] = {"url": sys.argv[1]}
+          with open(path, "w") as f:
+              f.write(json.dumps(manifest, indent=2) + "\n")
+          EOF
+            gh release upload "$GITHUB_REF_NAME" manifest/latest.json --clobber
+          else
+            echo "::warning::the release has no latest.json, so the update check will not offer the macOS app"
+          fi
