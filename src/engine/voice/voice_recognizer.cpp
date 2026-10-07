@@ -14,6 +14,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <dlfcn.h>
+#include <pthread.h>
 #else
 #include <dlfcn.h>
 #include <sys/resource.h>
@@ -85,6 +88,7 @@ std::mutex g_api_mutex;
 using Library = HMODULE;
 constexpr const char* kLibraryPrefix = "";
 constexpr const char* kLibraryExtension = ".dll";
+constexpr const char* kModuleExtension = ".dll";
 Library LoadNear(const std::filesystem::path& path) {
     return LoadLibraryExW(std::filesystem::absolute(path).c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 }
@@ -94,7 +98,13 @@ std::string LoadError() { return std::format("Windows error {}", GetLastError())
 #else
 using Library = void*;
 constexpr const char* kLibraryPrefix = "lib";
+#ifdef __APPLE__
+/* whisper and ggml are shared libraries (.dylib); ggml's CPU variants are CMake MODULE libraries, .so on macOS as well */
+constexpr const char* kLibraryExtension = ".dylib";
+#else
 constexpr const char* kLibraryExtension = ".so";
+#endif
+constexpr const char* kModuleExtension = ".so";
 Library LoadNear(const std::filesystem::path& path) { return dlopen(std::filesystem::absolute(path).c_str(), RTLD_NOW | RTLD_GLOBAL); }
 void* Symbol(Library library, const char* name) { return dlsym(library, name); }
 void Unload(Library library) { dlclose(library); }
@@ -136,8 +146,8 @@ bool LoadRuntime(const std::filesystem::path& dir) {
     for (const auto& entry : std::filesystem::directory_iterator(dir, error)) {
         const std::string name = entry.path().filename().string();
         const std::string prefix = std::string(kLibraryPrefix) + "ggml-cpu-";
-        if (!name.starts_with(prefix) || entry.path().extension() != kLibraryExtension) continue;
-        const std::string variant = name.substr(prefix.size(), name.size() - prefix.size() - std::strlen(kLibraryExtension));
+        if (!name.starts_with(prefix) || entry.path().extension() != kModuleExtension) continue;
+        const std::string variant = name.substr(prefix.size(), name.size() - prefix.size() - std::strlen(kModuleExtension));
         if (forced && variant != forced) continue;
         const Library module = LoadNear(entry.path());
         if (!module) continue;
@@ -436,6 +446,8 @@ void VoiceRecognizer::FreeModels() {
 void VoiceRecognizer::Run(std::filesystem::path model_dir) {
 #ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #else
     setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
 #endif

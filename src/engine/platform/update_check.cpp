@@ -133,6 +133,8 @@ std::string_view CurrentVersion() { return PT_VERSION; }
 std::string_view Platform() {
 #ifdef _WIN32
     return "windows";
+#elif defined(__APPLE__)
+    return "macos";
 #else
     return "linux";
 #endif

@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -170,11 +171,26 @@ private:
             return true;
         }
         double d = 0.0;
+#ifdef __APPLE__
+        /* floating point std::from_chars is in Apple's libc++ from macOS 26 only, and the build runs on 14 (docs/macos.md); strtod
+           reads the same numbers in the "C" locale, which the game never changes */
+        const char* begin = text_.c_str() + pos_;
+        if (*begin != '-' && (*begin < '0' || *begin > '9')) {
+            return false;
+        }
+        char* end = nullptr;
+        d = std::strtod(begin, &end);
+        if (end == begin) {
+            return false;
+        }
+        pos_ = static_cast<size_t>(end - text_.c_str());
+#else
         const auto result = std::from_chars(text_.data() + pos_, text_.data() + text_.size(), d);
         if (result.ec != std::errc()) {
             return false;
         }
         pos_ = static_cast<size_t>(result.ptr - text_.data());
+#endif
         out.type = Number;
         std::memcpy(&out.data, &d, 8);
         return true;

@@ -7,6 +7,15 @@
 #include <cstring>
 #include <string>
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+
+#include <cstdlib>
+#include <filesystem>
+
+#include "engine/core/resource_path.h"
+#endif
+
 #include "engine/core/crash_report.h"
 #include "engine/core/log.h"
 
@@ -68,9 +77,63 @@ bool HasLayer(const char* name) {
     return std::any_of(layers.begin(), layers.end(), [&](const VkLayerProperties& l) { return std::strcmp(l.layerName, name) == 0; });
 }
 
+#ifdef __APPLE__
+bool HasInstanceExtension(const char* name) {
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> available(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, available.data());
+    return std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& e) { return std::strcmp(e.extensionName, name) == 0; });
+}
+
+PFN_vkGetInstanceProcAddr LoadVulkanLibrary(SDL_Window* window) {
+    if (window) {
+        /* SDL loaded it for the window (SDL_HINT_VULKAN_LIBRARY): the same library, or the surface belongs to another instance */
+        if (auto proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr())) return proc;
+    }
+    const std::string path = VulkanLibraryPath();
+    if (path.empty()) return nullptr;
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!library) {
+        LogError("vulkan: cannot load {} ({})", path, dlerror());
+        return nullptr;
+    }
+    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr"));
+}
+#endif
+
+}
+
+std::string VulkanLibraryPath() {
+#ifdef __APPLE__
+    /* the app bundle's Contents/Frameworks (ExecutableDir() is Contents/Resources there), or next to pt in a build folder;
+       PT_VULKAN_LIBRARY picks another one, such as the Vulkan SDK's loader for the validation layers */
+    static const std::string path = [] {
+        /* MoltenVK lists all its extensions at every start otherwise; MVK_CONFIG_LOG_LEVEL set by the user still wins */
+        setenv("MVK_CONFIG_LOG_LEVEL", "2", 0);
+        if (const char* env = std::getenv("PT_VULKAN_LIBRARY"); env && *env) return std::string(env);
+        const std::filesystem::path base = ExecutableDir();
+        std::error_code ec;
+        for (const std::filesystem::path& candidate :
+             {base / ".." / "Frameworks" / "libMoltenVK.dylib", base / "libMoltenVK.dylib", std::filesystem::path("/opt/homebrew/lib/libMoltenVK.dylib"),
+              std::filesystem::path("/usr/local/lib/libMoltenVK.dylib"), std::filesystem::path("/usr/local/lib/libvulkan.1.dylib")}) {
+            if (std::filesystem::is_regular_file(candidate, ec)) return std::filesystem::weakly_canonical(candidate, ec).string();
+        }
+        return std::string();
+    }();
+    return path;
+#else
+    return {};
+#endif
 }
 
 bool Context::Init(SDL_Window* window, bool validation) {
+#ifdef __APPLE__
+    if (!loader) {
+        loader = LoadVulkanLibrary(window);
+        if (loader) LogInfo("vulkan: {}", VulkanLibraryPath());
+    }
+#endif
     if (loader) {
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
         volkInitializeCustom(loader);
@@ -97,6 +160,15 @@ bool Context::Init(SDL_Window* window, bool validation) {
     app.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     instance_info.pApplicationInfo = &app;
+#ifdef __APPLE__
+    /* MoltenVK is a portability driver: a Vulkan loader lists it only when asked to (SDL already names the extension for a window) */
+    if (HasInstanceExtension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        if (std::none_of(extensions.begin(), extensions.end(), [](const char* e) { return std::strcmp(e, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0; })) {
+            extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        }
+        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+#endif
     instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     instance_info.ppEnabledExtensionNames = extensions.data();
     instance_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
@@ -250,6 +322,10 @@ bool Context::Init(SDL_Window* window, bool validation) {
                 device_extensions.push_back(name);
             }
         };
+        /* a device that implements only part of Vulkan (MoltenVK on macOS) must be created with the extension that says so */
+        if (has("VK_KHR_portability_subset")) {
+            add("VK_KHR_portability_subset");
+        }
         if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;

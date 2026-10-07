@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.28)
+# macOS on Apple silicon (docs/macos.md): <format> needs 13.3, every Apple silicon Mac runs 14; ignored elsewhere. Left empty
+# (a build folder configured before this line) the build would run only on the macOS it was built on
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Oldest macOS the build runs on" FORCE)
+endif()
 project(pt_port LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -147,6 +152,9 @@ endif()
 include(cmake/Upscalers.cmake)
 include(cmake/EnhancedTextures.cmake)
 include(cmake/OpenXR.cmake)
+if(APPLE)
+  include(cmake/MacOS.cmake)
+endif()
 list(APPEND PT_UPSCALER_RUNTIME_FILES ${PT_OPENXR_RUNTIME_FILES})
 list(APPEND PT_UPSCALER_NOTICES ${PT_OPENXR_NOTICES})
 foreach(file ${PT_UPSCALER_RUNTIME_FILES})

@@ -44,6 +44,11 @@ set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(WHISPER_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+if(APPLE)
+  # CPU only on macOS too (docs/macos.md): ggml would add its Metal and Accelerate backends by default
+  set(GGML_METAL OFF CACHE BOOL "" FORCE)
+  set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+endif()
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(BUILD_SHARED_LIBS ON)
 add_subdirectory(${whisper_SOURCE_DIR} ${whisper_BINARY_DIR} EXCLUDE_FROM_ALL)
@@ -54,10 +59,14 @@ add_dependencies(pt_voice_runtime whisper)
 foreach(lib whisper ggml ggml-base)
   set_target_properties(${lib} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PT_VOICE_DIR} LIBRARY_OUTPUT_DIRECTORY ${PT_VOICE_DIR})
   if(NOT WIN32)
-    # plain libwhisper.so files (no version symlinks to package) that find each other in voice/
+    # plain libwhisper.so (macOS: .dylib) files (no version symlinks to package) that find each other in voice/
     set_property(TARGET ${lib} PROPERTY VERSION)
     set_property(TARGET ${lib} PROPERTY SOVERSION)
-    set_target_properties(${lib} PROPERTIES BUILD_RPATH "$ORIGIN")
+    if(APPLE)
+      set_target_properties(${lib} PROPERTIES BUILD_RPATH "@loader_path")
+    else()
+      set_target_properties(${lib} PROPERTIES BUILD_RPATH "$ORIGIN")
+    endif()
   endif()
 endforeach()
 # ggml gives clang-cl only the MSVC /arch switch of a variant, which leaves out the instruction sets its intrinsics
@@ -71,10 +80,16 @@ set(PT_GGML_VARIANT_FLAGS
   "cascadelake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavx512f -mavx512cd -mavx512vl -mavx512dq -mavx512bw -mavx512vnni"
   "icelake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavx512f -mavx512cd -mavx512vl -mavx512dq -mavx512bw -mavx512vbmi -mavx512vnni"
   "alderlake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavxvnni")
-foreach(variant x64 sse42 sandybridge ivybridge piledriver haswell skylakex cannonlake cascadelake icelake cooperlake zen4 alderlake sapphirerapids)
+# the Apple silicon variants (apple_m1, apple_m2_m3, apple_m4) are MODULE libraries, libggml-cpu-apple_m4.so even on macOS
+foreach(variant x64 sse42 sandybridge ivybridge piledriver haswell skylakex cannonlake cascadelake icelake cooperlake zen4 alderlake sapphirerapids
+    apple_m1 apple_m2_m3 apple_m4)
   if(TARGET ggml-cpu-${variant})
     add_dependencies(pt_voice_runtime ggml-cpu-${variant})
     set_target_properties(ggml-cpu-${variant} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PT_VOICE_DIR} LIBRARY_OUTPUT_DIRECTORY ${PT_VOICE_DIR})
+    if(APPLE)
+      # dyld finds libggml-base.dylib through the variant's own rpath, not through the copy already loaded
+      set_target_properties(ggml-cpu-${variant} PROPERTIES BUILD_RPATH "@loader_path")
+    endif()
   endif()
 endforeach()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)

@@ -106,4 +106,8 @@ private:
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
 
+/* The Vulkan library to load: on macOS MoltenVK, shipped with the game (docs/macos.md); empty elsewhere, where volk finds the
+   system's loader. The window's surface must come from the same library, so it is also SDL's (SDL_HINT_VULKAN_LIBRARY). */
+std::string VulkanLibraryPath();
+
 }
