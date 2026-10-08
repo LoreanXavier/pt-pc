@@ -25,6 +25,25 @@ FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_
 FetchContent_Declare(lua51 URL https://www.lua.org/ftp/lua-5.1.5.tar.gz
   URL_HASH SHA256=2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333)
 
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSROOT)
+  # SDL loads X11, ALSA, PulseAudio, ... at run time by the name FindLibraryAndSONAME derives from the REALPATH of
+  # libXext.so (-> libXext.so.6.4.0 gives libXext.so.6). make_sysroot.py stores symlinks as copies, so in the sysroot
+  # libXext.so is a plain file and SDL would dlopen "libXext.so", a name only the -dev packages install: on a player's
+  # system SDL_Init then fails with "No available video device" (and "Failed loading libasound.so" for audio).
+  # Hand SDL the versioned files so it records the run time names.
+  foreach(lib X11 Xext Xcursor Xi Xfixes Xrandr Xrender Xss Xtst asound pulse pipewire-0.3 jack sndio
+              wayland-client wayland-egl wayland-cursor xkbcommon decor-0 drm gbm udev fribidi thai)
+    string(TOUPPER "${lib}" var)
+    string(REGEX REPLACE "-" "_" var "${var}")
+    file(GLOB versioned "${CMAKE_SYSROOT}/usr/lib/x86_64-linux-gnu/lib${lib}.so.[0-9]*")
+    list(FILTER versioned INCLUDE REGEX "/lib${lib}\\.so\\.[0-9]+$")
+    if(versioned AND NOT ${var}_LIB)
+      list(GET versioned 0 versioned)
+      set(${var}_LIB "${versioned}" CACHE FILEPATH "run time name of lib${lib} for SDL's dynamic loading")
+    endif()
+  endforeach()
+endif()
+
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sdl3 zlib)
 
