@@ -311,7 +311,7 @@ def ipa(code, word='Jack'):
 # vowel, a devoiced onset, a clipped word without its k, very slow, very fast, whispered or shouted
 ACCENT_POSITIVE = {
     'ac_zhak': ipa('\u0292\u00e6k'), 'ac_zhak_a': ipa('\u0292ak'), 'ac_dzak_open': ipa('d\u0292\u0251k'),
-    'ac_jakku': ipa('d\u0292\u00e6k\u028a'), 'ac_dzaak': ipa('d\u0292\u0251\u02d0k'), 
+    'ac_jakku': ipa('d\u0292\u00e6k\u028a'), 'ac_dzaak': ipa('d\u0292\u0251\u02d0k'),
     'ac_dzek_long': ipa('d\u0292\u025b\u02d0k'), 'ac_clip': ipa('d\u0292\u00e6'), 'ac_jaaack': 'Jaaack',
     'ac_jek_slow': "<prosody rate='x-slow'>Jek</prosody>", 'ac_slow_low': "<prosody rate='x-slow' pitch='x-low'>Jack</prosody>",
     'ac_fast': "<prosody rate='x-fast'>Jack</prosody>", 'ac_whisper': "<prosody volume='x-soft' rate='slow'>Jack</prosody>",
