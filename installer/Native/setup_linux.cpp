@@ -104,6 +104,13 @@ void Extract(const fs::path& staging, const fs::path& package) {
         throw std::runtime_error("PKG extraction failed. " + details.substr(0, 600));
     }
 }
+void WriteDesktop(const fs::path& file, const fs::path& destination) {
+    std::ofstream out(file);
+    out << "[Desktop Entry]\nType=Application\nName=" << kProduct << "\nComment=" << kProduct << "\nExec=\""
+        << (destination / "pt").string() << "\"\nPath=" << destination.string() << "\nTerminal=false\nCategories=Game;\n";
+    std::error_code error;
+    if (fs::is_regular_file(destination / "icon0.png", error)) out << "Icon=" << (destination / "icon0.png").string() << "\n";
+}
 void Shortcut(const fs::path& destination) {
     const char* home = std::getenv("HOME");
     if (!home) return;
@@ -112,10 +119,16 @@ void Shortcut(const fs::path& destination) {
     fs::create_directories(dir, error);
     fs::path file = dir / (std::string(kSlug) + ".desktop");
     if (fs::exists(file)) file = dir / (std::string(kSlug) + "-" + destination.filename().string() + ".desktop");
-    if (fs::exists(file)) return;
-    std::ofstream out(file);
-    out << "[Desktop Entry]\nType=Application\nName=" << kProduct << "\nComment=" << kProduct << "\nExec=\""
-        << (destination / "pt").string() << "\"\nPath=" << destination.string() << "\nTerminal=false\nCategories=Game;\n";
+    if (!fs::exists(file)) WriteDesktop(file, destination);
+    const fs::path desktop = fs::path(home) / "Desktop";
+    if (fs::is_directory(desktop, error)) {
+        fs::path link = desktop / (std::string(kProduct) + ".desktop");
+        if (fs::exists(link)) link = desktop / (std::string(kProduct) + " " + destination.filename().string() + ".desktop");
+        if (!fs::exists(link)) {
+            WriteDesktop(link, destination);
+            ::chmod(link.c_str(), 0755);
+        }
+    }
 }
 InstallOutcome Install(const fs::path& input, const fs::path& destination, bool shortcut) {
     InstallSteps steps;
@@ -291,6 +304,7 @@ int main(int argc, char** argv) {
             europe.title = "CUSA01114";
             europe.pathid = game / "pathid_list_ps4.bin";
             if (!ConfirmPt(europe) || europe.notes.empty()) failures += " region-refused";
+            failures += SelfTestIcon(root / "icon");
             std::error_code error;
             fs::remove_all(root, error);
             failures += SelfTestUpdate(root / "update");

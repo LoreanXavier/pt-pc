@@ -52,7 +52,7 @@ slot (3 for every encrypted entry here, 2 for license.info).
 | 1004 | 0 | 0 | 0x8CEB80 | 0x55F | pronunciation.xml |
 | 1005 | 0 | 0 | 0x8CF0E0 | 0x14 | pronunciation.sig |
 | 1006 | 0 | 0 | 0x42BA80 | 0x4A30FF | pic1.png |
-| 1200 | 0 | 0 | 0x18660 | 0x906A4 | icon0.png |
+| 1200 | 0 | 0 | 0x18660 | 0x906A4 | icon0.png (plaintext; the desktop shortcut icon, not shipped in this repository) |
 | 1220 | 0 | 0 | 0xA8D10 | 0x382D6D | pic0.png |
 
 ## Key chain
@@ -93,6 +93,6 @@ This outer PFS holds the compressed inner image (PFSC magic, zlib blocks), which
 | `texture.qar` | 892,291,044 | footer magic `0x7161` | Fox QAR, 1,061 textures (`textures.md`) |
 | `pathid_list_ps4.bin` | 93,248 | | PathCode64 to path table for all 4,955 shipped files (`textures.md`) |
 | `sce_discmap.plt` | 857,976 | `PLT ` | PlayGo disc map, not used |
-| `sce_sys/*` | | | system files, not used |
+| `sce_sys/*` | | | system files, not used by the game. The installer reads plaintext `icon0.png` from the PKG entry table (id 0x1200) for the desktop shortcut only |
 
 The port reads `chunk1.psarc`, `texture.qar` and `pathid_list_ps4.bin` only.
