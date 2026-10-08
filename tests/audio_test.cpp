@@ -21,6 +21,7 @@
 #include "engine/audio/wem.h"
 #include "engine/core/log.h"
 #include "engine/fs/vfs.h"
+#include "game/game_sound.h"
 
 namespace fs = std::filesystem;
 using namespace pt::audio;
@@ -937,9 +938,48 @@ int RunScanEvents(const Options& options) {
     return 0;
 }
 
+bool TestOneShotObjectPool() {
+    constexpr pt::audio::GameObjectId base = 0x10000;
+    pt::game::OneShotObjectPool pool(base, 2);
+    std::vector<pt::audio::PlayingId> live{11, 22};
+    const auto is_playing = [&](pt::audio::PlayingId id) {
+        return std::find(live.begin(), live.end(), id) != live.end();
+    };
+    const auto first = pool.Acquire(is_playing);
+    const auto second = pool.Acquire(is_playing);
+    pool.Track(first, 11);
+    pool.Track(second, 22);
+    const auto third = pool.Acquire(is_playing);
+    if (first != base || second != base + 1 || third != base + 2 || pool.Size() != 3) {
+        std::printf("one-shot pool reused a live emitter instead of allocating overflow\n");
+        return false;
+    }
+    live.clear();
+    const auto reused = pool.Acquire(is_playing);
+    if (reused < base || reused >= base + 3) {
+        std::printf("one-shot pool failed to reuse an emitter after playback ended\n");
+        return false;
+    }
+    pt::game::OneShotObjectPool failed_post_pool(base + 100, 1);
+    const auto failed_post_object = failed_post_pool.Acquire(is_playing);
+    failed_post_pool.Track(failed_post_object, 0);
+    if (failed_post_pool.Acquire(is_playing) != failed_post_object) {
+        std::printf("one-shot pool treated a failed post as a live sound\n");
+        return false;
+    }
+    pool.Reset();
+    const auto after_reset = pool.Acquire(is_playing);
+    if (pool.Size() != 2 || after_reset < base || after_reset >= base + 2) {
+        std::printf("one-shot pool failed to reset overflow objects for shutdown\n");
+        return false;
+    }
+    return true;
+}
+
 void Usage() {
     std::printf(
         "pt_audio_test [--game DIR] [--dump DIR]\n"
+        "  --one-shot-pool                 verify positional emitters stay owned until playback ends\n"
         "  --decode-all                      decode every media and compare with the vgmstream WAVs in --dump\n"
         "  --event NAME [--seconds N] [--position X Y Z] [--forward X Y Z] [--listener PX PY PZ FX FY FZ UX UY UZ] [--aux BUS LEVEL]\n"
         "               [--state G S] [--switch G V] [--rtpc NAME V] [--at T EVENT] [--seed N]\n"
@@ -966,7 +1006,9 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
-        if (arg == "--game") {
+        if (arg == "--one-shot-pool") {
+            return TestOneShotObjectPool() ? 0 : 1;
+        } else if (arg == "--game") {
             options.game = next("--game");
         } else if (arg == "--dump") {
             options.dump = next("--dump");

@@ -38,6 +38,7 @@ private:
     };
     struct ElementState {
         bool was_in_view = false;
+        bool last_logged = false;
         float timer = 0.0f;
         bool done = false;
     };
@@ -68,6 +69,7 @@ private:
     float TrapYaw(const Context& ctx) const;
     bool TargetInView(const Context& ctx, const fox2::Entity* locator, float area, glm::vec3* position) const;
     bool ButtonPressed(const std::string& button) const;
+    bool GougePressed() const;
 
     Game& game_;
     std::unordered_map<Key, bool, KeyHash> traps_;

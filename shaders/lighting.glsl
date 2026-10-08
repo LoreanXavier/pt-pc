@@ -1,6 +1,17 @@
+#ifdef PT_SHADOW_GATHER
+/* macOS (docs/macos.md): a comparison sampler on images[] makes SPIRV-Cross declare the whole array depth2d, and Metal then reads the
+   G-buffer through it as one channel (normal (r, r, r)); the sampler's bilinear 2x2 LESS comparison from a gather instead */
+float ShadowTap(vec2 uv, float zref) {
+    vec4 d = textureGather(sampler2D(images[IMG_SHADOW], samplers[SMP_POINT_CLAMP]), uv, 0);
+    vec2 f = fract(uv * ImgSize(IMG_SHADOW) - 0.5);
+    vec4 lit = vec4(lessThan(vec4(zref), d));
+    return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
+}
+#else
 float ShadowTap(vec2 uv, float zref) {
     return texture(sampler2DShadow(images[IMG_SHADOW], samplers[SMP_SHADOW]), vec3(uv, zref));
 }
+#endif
 
 vec2 Dither2x2(vec3 frag) {
     return vec2(fract(0.5 * (frag.x - 0.5)) >= 0.3 ? 1.0 : -1.0, fract(0.5 * (frag.y - 0.5)) >= 0.3 ? 1.0 : -1.0);
@@ -85,9 +96,18 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
     const vec3 dither_frag = vec3(frag, v.exposure.w);
     diffuse = vec3(0.0);
     specular = vec3(0.0);
-    if (l.info.z != 0) {
+    if (l.info.z == 1) {
         vec3 q = (l.area * vec4(s.world, 1.0)).xyz;
         if (1.0 - max(abs(q.z), max(abs(q.x), abs(q.y))) < 0.0) {
+            return false;
+        }
+    } else if (l.info.z == 2) {
+        vec4 q = l.area * vec4(s.world, 1.0);
+        if (q.w <= 0.0) {
+            return false;
+        }
+        vec3 aperture = q.xyz / q.w;
+        if (0.5 - max(abs(aperture.z), max(abs(aperture.x), abs(aperture.y))) < 0.0) {
             return false;
         }
     }

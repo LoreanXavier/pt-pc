@@ -45,7 +45,15 @@ void main() {
         vec3 d=SampleScreen(source,in_uv+vec2(0,texel.y));
         vec3 lo=min(color,min(min(a,b),min(c,d))), mx=max(color,max(max(a,b),max(c,d)));
         vec3 sharpened=color+(color-(a+b+c+d)*.25)*pass.f1.x;
-        color=clamp(sharpened,max(vec3(0),lo-(mx-lo)*.1),min(vec3(1),mx+(mx-lo)*.1));
+        if (pass.f1.y > 0.5) {
+            color=max(sharpened,max(vec3(0),lo-(mx-lo)*.1));
+        } else {
+            color=clamp(sharpened,max(vec3(0),lo-(mx-lo)*.1),min(vec3(1),mx+(mx-lo)*.1));
+        }
+    }
+    if (pass.f1.y > 0.5) {
+        out_color = vec4(SrgbDecode(max(color, vec3(0.0))), 1.0);
+        return;
     }
     vec3 seed = fract(vec3(gl_FragCoord.xyx) * vec3(0.1031, 0.1030, 0.0973));
     seed += dot(seed, seed.yxz + 33.33);

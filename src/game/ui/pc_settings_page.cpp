@@ -458,7 +458,7 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
     }
     if (input.back || input.close) {
         if (!confirming_) {
-            if (!input.close && source_ && source_->Back()) {
+            if (source_ && source_->Back()) {
                 SourceChanged();
                 if (game.Audio()) {
                     game.Audio()->PostEvent(kCursorSound, nullptr);

@@ -17,7 +17,7 @@ SoundSystem::~SoundSystem() {
     Shutdown();
 }
 
-bool SoundSystem::Init(Vfs& vfs, bool open_device) {
+bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
     Shutdown();
     vfs_ = &vfs;
     auto banks = std::make_unique<SoundBankSet>();
@@ -46,7 +46,8 @@ bool SoundSystem::Init(Vfs& vfs, bool open_device) {
     if (open_device) {
         auto output = std::make_unique<AudioOutput>();
         SoundEngine* engine = engine_.get();
-        if (output->Open(kOutputRate, [engine](float* out, uint32_t frames) { engine->Render(out, frames); })) {
+        if (output->Open(kOutputRate, surround_output,
+                         [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); })) {
             output_ = std::move(output);
         } else {
             LogWarn("audio: no playback device, offline rendering only");
@@ -314,6 +315,26 @@ uint64_t SoundSystem::RenderedFrames() const {
 
 MotionLevels SoundSystem::Motion() const {
     return engine_ ? engine_->Motion() : MotionLevels{};
+}
+
+void SoundSystem::SetControllerCaptureEvent(uint32_t event_id) {
+    if (engine_) {
+        engine_->SetControllerCaptureEvent(event_id);
+    }
+}
+
+void SoundSystem::SetControllerCaptureEvents(std::span<const uint32_t> event_ids) {
+    if (engine_) {
+        engine_->SetControllerCaptureEvents(event_ids);
+    }
+}
+
+bool SoundSystem::TryReadControllerPcm(ControllerPcmBlock& block) {
+    return engine_ && engine_->TryReadControllerPcm(block);
+}
+
+uint32_t SoundSystem::ControllerPcmDroppedBlocks() const {
+    return engine_ ? engine_->ControllerPcmDroppedBlocks() : 0;
 }
 
 void SoundSystem::SetFrozen(bool frozen) {

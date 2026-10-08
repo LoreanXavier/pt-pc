@@ -33,7 +33,9 @@ bool Placeholder(std::string_view url) {
 struct Value {
     std::string text;
     std::map<std::string, Value> members;
+    std::vector<Value> items;
     bool object = false;
+    bool is_string = false;
 };
 class Reader {
 public:
@@ -85,7 +87,10 @@ private:
         Space();
         if (at_ >= s_.size()) return false;
         const char c = s_[at_];
-        if (c == '"') return String(out.text);
+        if (c == '"') {
+            out.is_string = true;
+            return String(out.text);
+        }
         if (c == '{' || c == '[') {
             const char close = c == '{' ? '}' : ']';
             out.object = c == '{';
@@ -103,6 +108,7 @@ private:
                 Value item;
                 if (!Read(item, depth + 1)) return false;
                 if (out.object) out.members[key] = std::move(item);
+                else out.items.push_back(std::move(item));
                 Space();
                 if (at_ >= s_.size()) return false;
                 if (s_[at_] == ',') { ++at_; continue; }
@@ -112,6 +118,7 @@ private:
         }
         const size_t start = at_;
         while (at_ < s_.size() && (std::isalnum(static_cast<unsigned char>(s_[at_])) || s_[at_] == '.' || s_[at_] == '-' || s_[at_] == '+')) ++at_;
+        out.text = std::string(s_.substr(start, at_ - start));
         return at_ > start;
     }
     std::string_view s_;
@@ -119,7 +126,27 @@ private:
 };
 const std::string* Text(const Value& object, const char* key) {
     const auto it = object.members.find(key);
-    return it != object.members.end() && !it->second.object && !it->second.text.empty() ? &it->second.text : nullptr;
+    return it != object.members.end() && it->second.is_string && !it->second.text.empty() ? &it->second.text : nullptr;
+}
+
+bool VersionTag(std::string_view tag) {
+    if (tag.size() > 64) return false;
+    if (tag.starts_with('v') || tag.starts_with('V')) tag.remove_prefix(1);
+    bool digit = false;
+    for (const char c : tag) {
+        if (c >= '0' && c <= '9') digit = true;
+        else if (c == '.' && digit) digit = false;
+        else return false;
+    }
+    return digit;
+}
+
+std::string_view AssetName(std::string_view platform) {
+    if (platform == "windows") return "P.T.PC.Port.Setup.exe";
+    if (platform == "linux") return "P.T.PC.Port.Setup-linux";
+    if (platform == "macos-arm64") return "P.T.PC.Port-macOS-arm64.zip";
+    if (platform == "macos-x64") return "P.T.PC.Port-macOS-x64.zip";
+    return {};
 }
 }
 
@@ -133,6 +160,12 @@ std::string_view CurrentVersion() { return PT_VERSION; }
 std::string_view Platform() {
 #ifdef _WIN32
     return "windows";
+#elif defined(__APPLE__)
+#if defined(__aarch64__)
+    return "macos-arm64";
+#else
+    return "macos-x64";
+#endif
 #else
     return "linux";
 #endif
@@ -169,6 +202,27 @@ int CompareVersions(std::string_view a, std::string_view b) {
 std::optional<Release> ParseManifest(std::string_view json, std::string_view platform) {
     Value root;
     if (!Reader(json).Parse(root) || !root.object) return std::nullopt;
+    if (const std::string* tag = Text(root, "tag_name")) {
+        for (const char* flag : {"draft", "prerelease"}) {
+            if (const auto it = root.members.find(flag); it != root.members.end() && it->second.text != "false") return std::nullopt;
+        }
+        const std::string* page = Text(root, "html_url");
+        if (!VersionTag(*tag) || !page || !page->starts_with("https://")) return std::nullopt;
+        Release release{*tag, *page, {}};
+        if (const std::string* body = Text(root, "body")) release.notes = body->substr(0, std::min(body->find('\n'), size_t(200)));
+        if (const auto assets = root.members.find("assets"); assets != root.members.end()) {
+            const std::string_view wanted = AssetName(platform);
+            for (const Value& asset : assets->second.items) {
+                const std::string* name = Text(asset, "name");
+                const std::string* url = Text(asset, "browser_download_url");
+                if (!wanted.empty() && name && *name == wanted && url && url->starts_with("https://") && url->size() <= 2048) {
+                    release.url = *url;
+                    break;
+                }
+            }
+        }
+        return release;
+    }
     const std::string* version = Text(root, "version");
     if (!version) return std::nullopt;
     Release release;
@@ -198,7 +252,7 @@ void Checker::Start() {
         request.url = url;
         request.timeout_ms = 5000;
         request.follow_redirects = true;
-        request.max_body = 64 * 1024;
+        request.max_body = 512 * 1024;
         if (const auto response = http::Get(request); response && response->status == 200) {
             if (auto release = ParseManifest(response->body, Platform()); release && CompareVersions(release->version, CurrentVersion()) > 0) {
                 std::lock_guard lock(state->mutex);

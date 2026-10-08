@@ -15,6 +15,7 @@
 #include "engine/data/fox2.h"
 #include "engine/fs/vfs.h"
 #include "engine/physics/collision_world.h"
+#include "engine/render/mesh.h"
 #include "engine/core/strcode.h"
 #include "game/demo_system.h"
 #include "game/game.h"
@@ -420,7 +421,7 @@ void RenderSceneBuilder::LoadResidentSettings(Game& game) {
             resident_.plugin_flags, resident_.reflection_texture);
 }
 
-void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const glm::vec3& aim_point, float dt, SceneLighting& out) {
+void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const glm::vec3& aim_point, float dt, SceneLighting& out, const TickBlend* blend) {
     const ScreenEffects& fx = game.Effects();
     const glm::vec3 target = fx.handy_light_color;
     if (!handy_initialized_) {
@@ -459,8 +460,17 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
         l.position = pose->first;
         l.direction = pose->second;
     }
-    if (glm::vec3 lens; game.DetachedView() && game.HandyLens(lens)) {
-        l.position = lens;
+    if (glm::vec3 lens; game.HandyLens(lens)) {
+        if (blend && blend->handy_lens_valid && glm::distance(blend->handy_lens, lens) <= 1.0f) {
+            lens = glm::mix(blend->handy_lens, lens, blend->t);
+        }
+        if (game.ThirdPerson() && !game.FreeView()) {
+            const float weight = game.ThirdPersonWeight();
+            const float pose_weight = weight * weight * (3.0f - 2.0f * weight);
+            l.position = glm::mix(l.position, lens, pose_weight);
+        } else if (game.DetachedView()) {
+            l.position = lens;
+        }
     }
     l.up = glm::normalize(up - l.direction * glm::dot(up, l.direction));
     const glm::vec3 color = glm::vec3(p.color[0], p.color[1], p.color[2]) * handy_color_;
@@ -564,8 +574,16 @@ void RenderSceneBuilder::AddMirrors(Game& game, SceneLighting& out) const {
                         SceneMirror mirror{draw.mesh, stage.file_to_world * draw.file_transform};
                         if (area) {
                             const float size = f.GetFloat(*area, "size", 0, 1.0f);
-                            const glm::mat4 placement = stage.file_to_world * f.WorldTransform(*area);
-                            mirror.light_area = glm::translate(glm::mat4(1.0f), glm::vec3(placement[3])) * glm::mat4(glm::mat3(placement)) *
+                            const glm::mat4 local = f.WorldTransform(*area);
+                            const glm::mat4 placement = stage.file_to_world * local;
+                            glm::mat3 axes(local);
+                            for (const fox2::Entity& root : f.Entities()) {
+                                if (root.class_name == "ShRelativeStageLocator") {
+                                    axes = glm::mat3(glm::inverse(f.WorldTransform(root)) * local);
+                                    break;
+                                }
+                            }
+                            mirror.light_area = glm::translate(glm::mat4(1.0f), glm::vec3(placement[3])) * glm::mat4(axes) *
                                                 glm::scale(glm::mat4(1.0f), glm::vec3(size));
                             mirror.has_light_area = true;
                         }
@@ -604,6 +622,52 @@ bool RayEntersBox(const glm::mat4& box, const glm::vec3& o, const glm::vec3& d, 
         }
     }
     at = o + d * enter;
+    return true;
+}
+
+bool MirrorApertureProjection(const SceneMirror& mirror, const glm::vec3& source, const glm::vec3& room_normal, glm::mat4& projection) {
+    if (!mirror.mesh) {
+        return false;
+    }
+    const glm::vec3 extent = mirror.mesh->bounds_max - mirror.mesh->bounds_min;
+    int plane_axis = 0;
+    if (extent.y < extent[plane_axis]) plane_axis = 1;
+    if (extent.z < extent[plane_axis]) plane_axis = 2;
+    const int u_axis = (plane_axis + 1) % 3;
+    const int v_axis = (plane_axis + 2) % 3;
+    if (extent[plane_axis] < 0.0f || extent[u_axis] <= 1.0e-5f || extent[v_axis] <= 1.0e-5f) {
+        return false;
+    }
+
+    const glm::vec3 local_center = 0.5f * (mirror.mesh->bounds_min + mirror.mesh->bounds_max);
+    const glm::vec3 center = glm::vec3(mirror.transform * glm::vec4(local_center, 1.0f));
+    glm::vec3 n = glm::normalize(glm::vec3(mirror.transform[plane_axis]));
+    if (glm::dot(n, room_normal) < 0.0f) n = -n;
+    const glm::vec3 tu = glm::normalize(glm::vec3(mirror.transform[u_axis]));
+    const glm::vec3 tv = glm::normalize(glm::vec3(mirror.transform[v_axis]));
+    const float width = extent[u_axis] * glm::length(glm::vec3(mirror.transform[u_axis]));
+    const float height = extent[v_axis] * glm::length(glm::vec3(mirror.transform[v_axis]));
+    const float d = glm::dot(n, center - source);
+    if (d <= 1.0e-5f || width <= 1.0e-5f || height <= 1.0e-5f) {
+        return false;
+    }
+
+    const float su = glm::dot(tu, source - center);
+    const float sv = glm::dot(tv, source - center);
+    const float sn = glm::dot(n, source);
+    const float u_constant = -d * glm::dot(tu, source) - su * sn;
+    const float v_constant = -d * glm::dot(tv, source) - sv * sn;
+    const glm::vec4 row_u((d * tu + su * n) / width, u_constant / width);
+    const glm::vec4 row_v((d * tv + sv * n) / height, v_constant / height);
+    const glm::vec4 row_z(-0.5f * n, d + 0.5f * sn);
+    const glm::vec4 row_w(n, -sn);
+    projection = glm::mat4(0.0f);
+    for (int column = 0; column < 4; ++column) {
+        projection[column][0] = row_u[column];
+        projection[column][1] = row_v[column];
+        projection[column][2] = row_z[column];
+        projection[column][3] = row_w[column];
+    }
     return true;
 }
 
@@ -667,20 +731,60 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
     l.direction = glm::normalize(a - 2.0f * na * n);
     l.up = glm::normalize(handy->up - 2.0f * glm::dot(handy->up, n) * n);
     l.intensity *= 4.0f;
+    l.source_radius *= 0.5f;
     l.outer_range += 2.0f;
     l.cos_outer = CosHalf(params.umbra_angle * 0.6f);
     l.inv_cone_range = InverseRange(CosHalf(params.penumbra_angle), l.cos_outer);
     l.mask_fov = params.umbra_angle * 0.6f * kPi / 180.0f;
+    static const bool handy_cone = [] {
+        const char* value = std::getenv("PT_MIRROR_SHADOW_CONE");
+        return value && std::string_view(value) == "handy";
+    }();
+    if (!handy_cone) {
+        const float full = handy->shadow_cos_outer + 1.0f / std::max(handy->shadow_inv_cone_range, 1.0e-6f);
+        l.shadow_cos_outer = CosHalf(params.umbra_angle * 0.6f);
+        l.shadow_inv_cone_range = 1.0f / std::max(full - l.shadow_cos_outer, 1.0e-6f);
+    }
     static const bool light_shadow = [] {
         const char* value = std::getenv("PT_MIRROR_LIGHT_SHADOW");
         return !value || std::atoi(value) != 0;
     }();
     l.cast_shadow = light_shadow;
     l.priority = 0x40;
-    l.hidden_views = 1u;
+    static const bool camera_hidden = [] {
+        const char* value = std::getenv("PT_MIRROR_LIGHT_CAMERA");
+        return value && std::atoi(value) == 0;
+    }();
+    l.hidden_views = camera_hidden ? 1u : 0u;
+    static const bool clip_front = [] {
+        const char* value = std::getenv("PT_MIRROR_LIGHT_CLIP");
+        return !value || std::atoi(value) != 0;
+    }();
+    if (clip_front) {
+        constexpr float kHalf = 15.0f;
+        const glm::vec3 up = std::abs(n.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        const glm::vec3 t1 = glm::normalize(glm::cross(n, up));
+        const glm::vec3 t2 = glm::cross(n, t1);
+        l.has_area = true;
+        l.area_world = glm::mat4(glm::vec4(n * kHalf, 0.0f), glm::vec4(t1 * kHalf, 0.0f), glm::vec4(t2 * kHalf, 0.0f), glm::vec4(m + n * kHalf, 1.0f));
+        l.area_to_box = glm::inverse(l.area_world);
+        if (MirrorApertureProjection(*mirror, at, n, l.area_to_box)) {
+            l.area_clip_mode = AreaClipMode::ProjectiveAperture;
+        }
+    }
     if (trace) {
-        LogInfo("mirror trace: on at ({:.3f} {:.3f} {:.3f}) from_mirrored {} beam {:.3f} p ({:.3f} {:.3f} {:.3f})", at.x, at.y, at.z, from_mirrored,
-                glm::length(hit - mirrored), p.x, p.y, p.z);
+        LogInfo("mirror trace: on at ({:.3f} {:.3f} {:.3f}) dir ({:.3f} {:.3f} {:.3f}) hit ({:.3f} {:.3f} {:.3f}) from_mirrored {} beam {:.3f} p ({:.3f} "
+                "{:.3f} {:.3f}) camera view {}",
+                at.x, at.y, at.z, l.direction.x, l.direction.y, l.direction.z, hit.x, hit.y, hit.z, from_mirrored, glm::length(hit - mirrored), p.x, p.y, p.z,
+                l.hidden_views == 0);
+        LogInfo("mirror trace: light area centre ({:.3f} {:.3f} {:.3f}) half axes x ({:.3f} {:.3f} {:.3f}) y ({:.3f} {:.3f} {:.3f}) z ({:.3f} {:.3f} {:.3f})",
+                mirror->light_area[3].x, mirror->light_area[3].y, mirror->light_area[3].z, 0.5f * mirror->light_area[0].x, 0.5f * mirror->light_area[0].y,
+                0.5f * mirror->light_area[0].z, 0.5f * mirror->light_area[1].x, 0.5f * mirror->light_area[1].y, 0.5f * mirror->light_area[1].z,
+                0.5f * mirror->light_area[2].x, 0.5f * mirror->light_area[2].y, 0.5f * mirror->light_area[2].z);
+        LogInfo("mirror trace: plane point ({:.3f} {:.3f} {:.3f}) normal ({:.3f} {:.3f} {:.3f}); handy dist {:.3f} dir ({:.3f} {:.3f} {:.3f}); P' ({:.3f} {:.3f} "
+                "{:.3f}) r ({:.3f} {:.3f} {:.3f}); light dist {:.3f} (negative: behind the plane), r.n {:.3f}",
+                m.x, m.y, m.z, n.x, n.y, n.z, glm::dot(p - m, n), a.x, a.y, a.z, mirrored.x, mirrored.y, mirrored.z, l.direction.x, l.direction.y, l.direction.z,
+                glm::dot(at - m, n), glm::dot(l.direction, n));
     }
     static const bool mirror_light_off = [] {
         const char* off = std::getenv("PT_MIRROR_LIGHT_OFF");
@@ -803,8 +907,24 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     const float focus = FocusDistance(game, camera, dt);
     stamp();
     const bool blended = blend && blend->t < 1.0f;
-    const Camera handy_view = game.DetachedView() ? game.GetPlayer().MakeCamera() : camera;
-    AddHandyLight(game, handy_view, blended ? glm::mix(blend->handy_aim, game.HandyAim(), blend->t) : game.HandyAim(), dt, out);
+    const bool player_view = game.DetachedView() || game.ThirdPersonCameraActive();
+    Camera handy_view = player_view ? game.GetPlayer().MakeCamera() : camera;
+    if (player_view) {
+        handy_view.position += game.GetPlayer().DrawnOffset();
+        if (blended) {
+            const Camera& previous = blend->handy_camera;
+            const float yaw_delta = std::remainder(handy_view.yaw - previous.yaw, 2.0f * kPi);
+            if (glm::distance(previous.position, handy_view.position) <= 1.0f && std::abs(yaw_delta) <= 0.5f &&
+                std::abs(handy_view.pitch - previous.pitch) <= 0.5f) {
+                handy_view.position = glm::mix(previous.position, handy_view.position, blend->t);
+                handy_view.yaw = previous.yaw + yaw_delta * blend->t;
+                handy_view.pitch = glm::mix(previous.pitch, handy_view.pitch, blend->t);
+                handy_view.roll = previous.roll + std::remainder(handy_view.roll - previous.roll, 2.0f * kPi) * blend->t;
+            }
+        }
+    }
+    AddHandyLight(game, handy_view, blended ? glm::mix(blend->handy_aim, game.HandyAim(), blend->t) : game.HandyAim(), dt, out,
+                  blended ? blend : nullptr);
     for (const DemoLight& light : game.Demos().Lights()) {
         AddDemoLight(light, blended ? blend : nullptr, out);
     }

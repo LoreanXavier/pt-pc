@@ -4,6 +4,9 @@ The port reads the game's files from the extracted PS4 data. A mod is a folder u
 stands in for some of those files, and optionally runs a small Lua script. With no `mods` folder the game loads exactly
 what it loads without mod support.
 
+For a first project, start with the [modding quickstart](modding-quickstart.md). The public source also includes
+starter templates and working examples under `examples/mods/`.
+
 A mod can:
 
 - replace any game file under `/Assets/` (packages, data sets, models, scripts, sound packages, banks),
@@ -355,6 +358,8 @@ If nothing about mods appears at all, the game ran without a `mods/` folder, wit
 
 ## Examples
 
-`examples/mods/` has three small mods that were checked in the game: `wall-pictures` (a PNG over the framed wall
-pictures), `radio-tone` (a WAV over the f010 radio broadcast) and `event-logger` (an `init.lua` that logs every
-event). Copy a folder into `mods/` next to the executable to try it.
+`examples/mods/` includes three small working mods: `wall-pictures` (a PNG over the framed wall pictures),
+`radio-tone` (a WAV over the f010 radio broadcast) and `event-logger` (an `init.lua` that logs every event). It also
+includes `native-model-template`, `character-template` and `level-template` for replacements that need compatible Fox
+Engine files. The templates contain instructions and metadata, not original game models, characters or level data;
+provide your own permitted assets. Copy a working mod folder into `mods/` next to the executable to try it.

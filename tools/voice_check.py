@@ -59,12 +59,14 @@ NEGATIVE = {
 RATES = (-3, 0, 3)
 
 
-def tts(cache, out_dir):
+def tts(cache, out_dir, positive=None, negative=None):
+    positive = POSITIVE if positive is None else positive
+    negative = NEGATIVE if negative is None else negative
     out_dir.mkdir(parents=True, exist_ok=True)
     lines = []
-    for (key, text), (vname, voice), rate in itertools.product(POSITIVE.items(), VOICES.items(), RATES):
+    for (key, text), (vname, voice), rate in itertools.product(positive.items(), VOICES.items(), RATES):
         lines.append(f'pos_{key}_{vname}_r{rate}\t{voice}\t{rate}\t{text}')
-    for (key, text), (vname, voice) in itertools.product(NEGATIVE.items(), VOICES.items()):
+    for (key, text), (vname, voice) in itertools.product(negative.items(), VOICES.items()):
         lines.append(f'neg_{key}_{vname}_r0\t{voice}\t0\t{text}')
     todo = [l for l in lines if not (out_dir / (l.split('\t')[0] + '.wav')).exists()]
     if todo:
@@ -300,10 +302,91 @@ def build(args, rng):
     return cases
 
 
+def ipa(code, word='Jack'):
+    return ph(code, word)
+
+
+# renderings of "Jack" the SAPI voices can say that stand for accents and other speakers (2026-10-08): the zh onset of
+# French or Turkish speakers, the open a of Spanish or Asian ones, the epenthetic vowel after the k (Japanese), the long
+# vowel, a devoiced onset, a clipped word without its k, very slow, very fast, whispered or shouted
+ACCENT_POSITIVE = {
+    'ac_zhak': ipa('\u0292\u00e6k'), 'ac_zhak_a': ipa('\u0292ak'), 'ac_dzak_open': ipa('d\u0292\u0251k'),
+    'ac_jakku': ipa('d\u0292\u00e6k\u028a'), 'ac_dzaak': ipa('d\u0292\u0251\u02d0k'), 
+    'ac_dzek_long': ipa('d\u0292\u025b\u02d0k'), 'ac_clip': ipa('d\u0292\u00e6'), 'ac_jaaack': 'Jaaack',
+    'ac_jek_slow': "<prosody rate='x-slow'>Jek</prosody>", 'ac_slow_low': "<prosody rate='x-slow' pitch='x-low'>Jack</prosody>",
+    'ac_fast': "<prosody rate='x-fast'>Jack</prosody>", 'ac_whisper': "<prosody volume='x-soft' rate='slow'>Jack</prosody>",
+    'ac_shout': "<prosody volume='x-loud'>Jack!</prosody>", 'ac_plain': 'Jack', 'ac_hey': 'Hey Jack',
+}
+ACCENT_NEGATIVE = {
+    'pl_jorif_diga': 'Jorif diga', 'pl_jorith': 'Jorith', 'pl_shk_back': 'shk back', 'pl_possessed': 'Possessed, okay',
+    'pl_jarus': 'JARUS!', 'pl_jourissa': 'Jourissa', 'pl_jrest': 'J r est', 'pl_james': 'James', 'pl_hey_you': 'Hey you',
+    'pl_mmm': 'Mmm', 'pl_soutnich': 'Lee Soutnich possessed', 'pl_thats_jeff': "That's Jeff", 'pl_last_time': 'last time',
+    'pl_jon': 'John', 'pl_josh': 'Josh', 'pl_job': 'Job',
+}
+
+
+def reverb(x, rng):
+    """A small room: the dry word plus its tail through an exponentially decaying noise impulse (RT60 0.2 to 0.7 s)."""
+    rt60 = rng.uniform(0.2, 0.7)
+    t = np.arange(int(rt60 * RATE)) / RATE
+    rir = rng.normal(size=len(t)) * np.exp(-6.9 * t / rt60)
+    rir /= np.sqrt((rir ** 2).sum()) + 1e-9
+    wet = sps.fftconvolve(x, rir)[:len(x)]
+    mix = rng.uniform(0.3, 0.7)
+    return ((1 - mix) * x + mix * wet * (np.std(x) / (np.std(wet) + 1e-9))).astype(np.float32)
+
+
+def hard_clip(x, rng):
+    """A microphone overdriven by 12 to 24 dB."""
+    g = 10 ** (rng.uniform(12, 24) / 20)
+    return np.clip(x * g / (np.abs(x).max() + 1e-9), -1, 1).astype(np.float32)
+
+
+def build_accent(args, rng):
+    """The accent and real-microphone set: ACCENT_POSITIVE (3 voices' rates, 4 variations each), the player's words
+    (ACCENT_NEGATIVE) and the ordinary negatives under the same effects. Effects: reverb, a clipped microphone, low
+    gain, headset or telephone band, noise under the word, a pitch/speed change."""
+    cache = args.out / 'cache'
+    pos = tts(cache, cache / 'tts', ACCENT_POSITIVE, ACCENT_NEGATIVE)
+    ordinary = [w for w in tts(cache, cache / 'tts') if w.stem.startswith('neg_')]
+    folder = args.out / 'clips'
+    folder.mkdir(parents=True, exist_ok=True)
+    game = {}
+    if args.game_audio:
+        ga = Path(args.game_audio)
+        for name, rel in (('ambience', '../audio_game/bg_startroom_ingame.wav'), ('hallway', '../audio_game/boot_to_hallway.wav')):
+            if (ga / rel).exists():
+                game[name] = load(ga / rel)
+    backgrounds = ['pink', 'white', 'fan'] + list(game)
+    cases = []
+    accent_keys = [k for k in list(ACCENT_POSITIVE) + list(ACCENT_NEGATIVE)]
+    clips = [w for w in pos if any(f'_{k}_' in w.stem for k in accent_keys)]
+    ordinary = ordinary[::6]
+    for wav in clips + ordinary:
+        positive = wav.stem.startswith('pos_')
+        key = re.match(r'(pos|neg)_(.+)_(david|zira|mark|davidm|ziram)_r', wav.stem)[2]
+        x = load(wav)
+        for i in range(4 if positive else 2):
+            fx = ['none', 'reverb', 'clip', 'lowgain'][i % 4]
+            word = speed(x, float(rng.choice([0.85, 0.9, 1.0, 1.1, 1.15])))
+            if fx == 'reverb':
+                word = reverb(word, rng)
+            elif fx == 'clip':
+                word = hard_clip(word, rng)
+            level = float(rng.choice([-55, -58, -62])) if fx == 'lowgain' else float(rng.choice([-20, -30, -40, -50]))
+            bg = 'pink' if fx == 'lowgain' else str(rng.choice(backgrounds))
+            mic = str(rng.choice(['flat', 'headset', 'phone']))
+            audio = scene(word, level, bg, float(rng.choice([10, 15, 20, 30])), rng, game, mic)
+            name = f'{wav.stem}_{fx}_{int(level)}db_{bg}_{mic}.wav'
+            write(folder / name, audio)
+            cases.append(dict(name=name, group=('pos_' if positive else 'neg_') + key, positive=positive))
+    return cases
+
+
 def run(args, cases):
-    listing = args.out / 'list.txt'
+    listing = args.out / f'list{args.tag}.txt'
     listing.write_text('\n'.join(str((args.out / 'clips' / c['name']).resolve()) for c in cases) + '\n', encoding='utf-8')
-    work = args.out / 'run'
+    work = args.out / ('run' + args.tag)
     work.mkdir(exist_ok=True)
     env = {**__import__('os').environ, 'SDL_AUDIO_DRIVER': 'dummy'}
     if args.cpu:
@@ -321,7 +404,7 @@ def run(args, cases):
     return found, log
 
 
-def report(cases, found, out):
+def report(cases, found, out, tag=''):
     groups = {}
     decode = []
     errors = []
@@ -356,7 +439,7 @@ def report(cases, found, out):
     if opened:
         lines += ['fan noise alone (segments the VAD opened):'] + ['  ' + o for o in opened]
     text = '\n'.join(lines + [''] + errors)
-    (out / 'report.txt').write_text(text, encoding='utf-8')
+    (out / f'report{tag}.txt').write_text(text, encoding='utf-8')
     print(text)
     return p_hit, p_total, n_hit, n_total
 
@@ -372,6 +455,8 @@ def main():
     p.add_argument('--reuse', action='store_true', help='run on the clips of a previous build of the set')
     p.add_argument('--cpu', help='force a ggml CPU variant (x64 is SSE2 only)')
     p.add_argument('--limit', type=int, default=1, help='keep every Nth clip')
+    p.add_argument('--tag', default='', help='suffix of the run folder and report, to run several configurations on one set')
+    p.add_argument('--accent', action='store_true', help='the accent and real-microphone set (build_accent)')
     p.add_argument('--fan', action='store_true', help='the noisy laptop set (build_fan) instead of the main one')
     args = p.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -380,11 +465,11 @@ def main():
     if args.reuse and cases_file.exists():
         cases = json.loads(cases_file.read_text())
     else:
-        cases = build_fan(args, rng) if args.fan else build(args, rng)
+        cases = build_fan(args, rng) if args.fan else build_accent(args, rng) if args.accent else build(args, rng)
         cases_file.write_text(json.dumps(cases, indent=1))
     cases = cases[::max(1, args.limit)]
     found, _ = run(args, cases)
-    report(cases, found, args.out)
+    report(cases, found, args.out, args.tag)
 
 
 if __name__ == '__main__':

@@ -34,16 +34,16 @@ Psarc::~Psarc() {
 bool Psarc::Open(const std::filesystem::path& path) {
     file_ = os::OpenFile(path, "rb");
     if (!file_) {
-        LogError("psarc: cannot open {}", path.string());
+        LogError("psarc: cannot open {}", pt::os::PathToUtf8(path));
         return false;
     }
     uint8_t header[32];
     if (std::fread(header, 1, sizeof(header), file_) != sizeof(header) || std::memcmp(header, "PSAR", 4) != 0) {
-        LogError("psarc: bad header in {}", path.string());
+        LogError("psarc: bad header in {}", pt::os::PathToUtf8(path));
         return false;
     }
     if (std::memcmp(header + 8, "zlib", 4) != 0) {
-        LogError("psarc: unsupported compression in {}", path.string());
+        LogError("psarc: unsupported compression in {}", pt::os::PathToUtf8(path));
         return false;
     }
     const uint32_t toc_length = ReadBe32(header + 12);
@@ -90,7 +90,7 @@ bool Psarc::Open(const std::filesystem::path& path) {
     for (size_t i = 1; i < names_.size() && i < entries_.size(); ++i) {
         index_[names_[i]] = i;
     }
-    LogInfo("psarc: {} entries in {}", entries_.size() - 1, path.filename().string());
+    LogInfo("psarc: {} entries in {}", entries_.size() - 1, pt::os::PathToUtf8(path.filename()));
     return true;
 }
 

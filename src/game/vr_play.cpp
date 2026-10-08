@@ -138,7 +138,7 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
     std::optional<std::pair<glm::vec3, glm::vec3>> light;
     const int hand = std::clamp(settings_.flashlight_hand, 0, 1);
     if (settings_.flashlight == 1 && !screen && centered_ && eye_height_ >= 0.0f && c.aim[hand].valid) {
-        const glm::vec3 position = last_anchor_ + rig_.Offset(c.aim[hand].position) + last_correction_;
+        const glm::vec3 position = last_anchor_ + ScaleVrTrackedOffset(rig_.Offset(c.aim[hand].position), settings_.world_scale) + last_correction_;
         const glm::vec3 direction = glm::normalize(rig_.ToWorld(c.aim[hand].orientation) * glm::vec3(0.0f, 0.0f, -1.0f));
         light = std::make_pair(position, direction);
     }
@@ -165,9 +165,11 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     const glm::vec3 eye = player.Eye();
     const float height = eye.y - feet.y;
     eye_height_ = eye_height_ < 0.0f ? height : eye_height_ + (height - eye_height_) * (1.0f - std::exp(-std::max(dt, 0.0f) / 0.6f));
-    const glm::vec3 anchor = logic.position + (feet - eye) + glm::vec3(0.0f, eye_height_, 0.0f);
+    const float height_offset = ClampVrHeightOffset(settings_.height_offset);
+    const glm::vec3 anchor = VrEyeAnchor(logic.position, feet, eye, eye_height_, height_offset);
     const xr::ViewPose& head = host_.Head();
-    const glm::vec3 offset = rig_.Offset(head.position);
+    const glm::vec3 head_offset = rig_.Offset(head.position);
+    const glm::vec3 offset = ScaleVrTrackedOffset(head_offset, settings_.world_scale);
     glm::vec3 kept = offset;
     const float reach = glm::length(glm::vec2(kept.x, kept.z));
     if (reach > kHeadReach) {
@@ -189,10 +191,12 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     for (int i = 0; i < 2; ++i) {
         const xr::ViewPose& pose = host_.Eye(i);
         out.poses[i] = pose;
-        out.eyes[i] = xr::EyeCamera(anchor + rig_.Offset(pose.position) + correction, rig_.ToWorld(pose.orientation), frusta_[i], kNearPlane);
+        const glm::vec3 eye_relative_offset = rig_.Offset(pose.position) - head_offset;
+        const glm::vec3 eye_offset = MapVrEyeOffset(head_offset, eye_relative_offset, settings_.world_scale);
+        out.eyes[i] = xr::EyeCamera(anchor + eye_offset + correction, rig_.ToWorld(pose.orientation), frusta_[i], kNearPlane);
     }
     out.render = {render_size_.x, render_size_.y};
-    Place(head.position, xr::AnglesOf(head.orientation).yaw, menu_open, dt);
+    Place(head.position + glm::vec3(0.0f, height_offset, 0.0f), xr::AnglesOf(head.orientation).yaw, menu_open, dt);
     auto target = [&](xr::Swapchain& sc, const glm::vec4& rect, XrTarget& t) {
         if (!host_.Acquire(sc)) return false;
         t.image = sc.images[sc.index];
@@ -236,7 +240,8 @@ bool VrPlay::PrepareScreen(XrTarget& out) {
     if (!screen_placed_) {
         const float yaw = host_.ViewsValid() ? xr::AnglesOf(head.orientation).yaw : 0.0f;
         screen_orientation_ = xr::YawRotation(yaw);
-        screen_position_ = head.position + screen_orientation_ * glm::vec3(0.0f, 0.0f, -kScreenDistance);
+        screen_position_ = head.position + glm::vec3(0.0f, ClampVrHeightOffset(settings_.height_offset), 0.0f) +
+                           screen_orientation_ * glm::vec3(0.0f, 0.0f, -kScreenDistance);
         screen_placed_ = true;
     }
     xr::Swapchain& sc = host_.ScreenSwapchain();

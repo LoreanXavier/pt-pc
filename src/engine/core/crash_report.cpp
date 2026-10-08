@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "engine/core/crash_report.h"
 
 #include <atomic>
@@ -101,7 +102,7 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
         LogExit(3, "terminate");
         std::_Exit(3);
     });
-    LogInfo("crash reporting: build {}, dumps to {}", g_build, g_dump_dir.empty() ? std::string(".") : g_dump_dir.string());
+    LogInfo("crash reporting: build {}, dumps to {}", g_build, g_dump_dir.empty() ? std::string(".") : pt::os::PathToUtf8(g_dump_dir));
 }
 
 std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointers) {
@@ -129,7 +130,7 @@ std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointer
         path.clear();
     }
 #endif
-    LogError("crash: {}, dump {}", reason, path.empty() ? std::string("not written") : path.string());
+    LogError("crash: {}, dump {}", reason, path.empty() ? std::string("not written") : pt::os::PathToUtf8(path));
     return path;
 }
 
@@ -138,7 +139,7 @@ void FatalError(const std::string& reason, bool show_message, int code) {
     const std::filesystem::path dump = WriteCrashDump(reason.c_str());
     if (show_message) {
         const std::string text = "P.T. stopped: " + reason + "\n\nThe log and a crash dump were written to:\n" +
-                                 (dump.empty() ? g_dump_dir.string() : dump.parent_path().string()) +
+                                 (dump.empty() ? pt::os::PathToUtf8(g_dump_dir) : pt::os::PathToUtf8(dump.parent_path())) +
                                  "\n\nPlease send pt.log and the .dmp file with your report.";
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
     }

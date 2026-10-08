@@ -11,6 +11,7 @@
 #include "engine/render/model_cache.h"
 #include "engine/render/scene_renderer.h"
 #include "game/archive.h"
+#include "game/archive_model_camera.h"
 #include "game/game.h"
 #include "game/game_sound.h"
 #include "game/input_script.h"
@@ -462,6 +463,8 @@ void ArchiveTheater::StartModel() {
         }
     }
     target_ = spot_ + glm::vec3(0.0f, std::max(lo.y, 0.0f) + extent.y * 0.5f, 0.0f);
+    model_home_ = target_;
+    model_radius_ = size * 0.5f;
     distance_ = std::clamp(size * 1.9f + 0.05f, 0.1f, 6.0f);
     min_distance_ = std::max(0.08f, size * 0.6f);
     game_->Effects().ev_pinned = true;
@@ -483,18 +486,20 @@ void ArchiveTheater::UpdateModel(float dt, const InputState& input) {
         g.world = place * model_offset_;
         if (type == GimmickType::Ocho) game_->Objects().SetOchoTransform(g.world);
     }
-    float turn = input.right_stick.x + input.left_stick.x;
+    float turn = input.right_stick.x;
     float tilt = input.right_stick.y;
     if (input.raw_held & kRawLeft) turn -= 1.0f;
     if (input.raw_held & kRawRight) turn += 1.0f;
     if (input.raw_held & kRawUp) tilt += 1.0f;
     if (input.raw_held & kRawDown) tilt -= 1.0f;
-    float zoom = -input.left_stick.y;
+    float zoom = 0.0f;
     if (input.raw_held & kRawR2) zoom -= 1.0f;
     if (input.raw_held & kRawL2) zoom += 1.0f;
     yaw_ -= turn * 1.6f * dt;
     pitch_ = std::clamp(pitch_ - tilt * 1.2f * dt, -1.2f, 1.2f);
     distance_ = std::clamp(distance_ * (1.0f + zoom * 1.2f * dt), min_distance_, max_distance_);
+    const Camera camera = ViewCamera();
+    target_ = PanArchiveModel(target_, model_home_, camera.Right(), camera.Up(), input.left_stick, dt, distance_, model_radius_);
 }
 
 }

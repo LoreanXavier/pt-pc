@@ -22,9 +22,10 @@ bool Near(float a, float b) { return std::abs(a - b) <= 1e-5f * std::max(1.0f, s
 bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
     const auto& x = a.display;
     const auto& y = b.display;
-    return x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
+    return x.hdr==y.hdr && x.fps_limit==y.fps_limit && a.audio.surround==b.audio.surround && a.audio.controller_speaker==b.audio.controller_speaker && Near(a.audio.controller_speaker_volume,b.audio.controller_speaker_volume) && a.input.rumble_profile==b.input.rumble_profile && x.width == y.width && x.height == y.height && x.fullscreen == y.fullscreen && x.vsync == y.vsync &&
            x.pause_on_focus_loss == y.pause_on_focus_loss && x.mute_in_background == y.mute_in_background && x.letterbox == y.letterbox &&
-           Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
+           Near(a.input.mouse_sensitivity, b.input.mouse_sensitivity) && Near(a.input.gamepad_sensitivity, b.input.gamepad_sensitivity) &&
+           Near(a.input.gamepad_dead_zone, b.input.gamepad_dead_zone) &&
            a.input.rumble == b.input.rumble && Near(a.camera.roll, b.camera.roll) && a.camera.third_person == b.camera.third_person && Near(a.audio.volume, b.audio.volume) &&
            a.voice.device == b.voice.device && a.voice.key == b.voice.key && a.upscaling.upscaler == b.upscaling.upscaler &&
            a.upscaling.quality == b.upscaling.quality && Near(a.upscaling.scale, b.upscaling.scale) &&
@@ -57,6 +58,14 @@ int main(int argc, char** argv) {
     Check("defaults", Same(RoundTrip(ini, {}), {}));
     const std::vector<std::pair<std::string, std::function<void(pt::AppSettings&)>>> changes = {
         {"display.width/height", [](auto& s) { s.display.width = 2560; s.display.height = 1080; }},
+        {"display.hdr", [](auto& s) { s.display.hdr = true; }},
+        {"display.fps_limit", [](auto& s) { s.display.fps_limit = 144; }},
+        {"audio.controller_speaker", [](auto& s) { s.audio.controller_speaker = true; }},
+        {"audio.controller_speaker_volume", [](auto& s) { s.audio.controller_speaker_volume = 0.25f; }},
+        {"audio.surround", [](auto& s) { s.audio.surround = true; }},
+        {"input.rumble_profile", [](auto& s) { s.input.rumble_profile = 1; }},
+        {"vr.height_offset", [](auto& s) { s.vr.height_offset = -0.2f; }},
+        {"vr.world_scale", [](auto& s) { s.vr.world_scale = 1.5f; }},
         {"display.fullscreen", [](auto& s) { s.display.fullscreen = 2; }},
         {"display.vsync", [](auto& s) { s.display.vsync = false; }},
         {"display.pause_on_focus_loss", [](auto& s) { s.display.pause_on_focus_loss = false; }},
@@ -64,6 +73,7 @@ int main(int argc, char** argv) {
         {"display.letterbox 1", [](auto& s) { s.display.letterbox = 1; }},
         {"display.letterbox 2", [](auto& s) { s.display.letterbox = 2; }},
         {"input.mouse_sensitivity", [](auto& s) { s.input.mouse_sensitivity = 0.35f; }},
+        {"input.gamepad_sensitivity", [](auto& s) { s.input.gamepad_sensitivity = 1.5f; }},
         {"input.gamepad_dead_zone", [](auto& s) { s.input.gamepad_dead_zone = 0.25f; }},
         {"input.rumble", [](auto& s) { s.input.rumble = false; }},
         {"camera.roll", [](auto& s) { s.camera.roll = 0.0f; }},
@@ -106,6 +116,7 @@ int main(int argc, char** argv) {
     };
     for (const auto& [name, change] : changes) {
         pt::AppSettings s;
+    s.display.hdr=true; s.display.fps_limit=144; s.audio.surround=true; s.input.rumble_profile=1; s.vr.height_offset=-0.15f;
         change(s);
         const pt::AppSettings loaded = RoundTrip(ini, s);
         Check(name + " changes the settings", !Same(s, pt::AppSettings{}));
@@ -113,7 +124,7 @@ int main(int argc, char** argv) {
     }
     const pt::AppSettings odd = LoadText(ini,
         "[display]\nletterbox = 7\nfullscreen = -3\nwidth = 99999\n[graphics]\nanisotropy = 5\nfilm_grain = nan\nclarity = 3\n"
-        "shadow_quality = 9\ntexture_detail = -1\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\n[nothing]\nx = 1\n"
+        "shadow_quality = 9\ntexture_detail = -1\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"
         "[vr]\nturn = 3\nresolution_scale = 9\nsnap_degrees = nan\n");
     Check("letterbox clamped", odd.display.letterbox == 2);
     Check("fullscreen clamped", odd.display.fullscreen == 0);
@@ -124,6 +135,7 @@ int main(int argc, char** argv) {
     Check("shadow quality clamped", odd.graphics.shadow_quality == 3);
     Check("texture detail clamped", odd.graphics.texture_detail == 0);
     Check("traced shadows clamped", odd.ray_tracing.shadows == 2);
+    Check("gamepad sensitivity clamped", odd.input.gamepad_sensitivity == 4.0f);
     Check("malformed volume keeps the default", odd.audio.volume == 1.0f);
     Check("yes reads as on", odd.input.rumble);
     Check("vr turn clamped", odd.vr.turn == 1);

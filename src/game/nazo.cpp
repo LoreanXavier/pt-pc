@@ -70,6 +70,16 @@ void NazoManager::RegisterStage(Stage& stage) {
             LogInfo("nazo: NazoManageData of stage {} ({}) registered", stage.id, stage.label);
         }
     }
+    const uint32_t xmark = word_[Index(NazoId::XMark)];
+    if (xmark != 0) {
+        ApplyVisuals(NazoId::XMark);
+        LogInfo("nazo: XMark state {:#x} applied to the registered stage {}", xmark, stage.id);
+    }
+    const uint32_t photo = word_[Index(NazoId::Photo)];
+    if (photo != 0) {
+        ApplyVisuals(NazoId::Photo);
+        LogInfo("nazo: Photo state {:#x} applied to the registered stage {}", photo, stage.id);
+    }
     const uint32_t hello = word_[Index(NazoId::Hello)];
     const bool hello_floor = game_.Floor().IsCurrentFloorName("f070") || game_.Floor().IsCurrentFloorName("f080") ||
                              game_.Floor().IsCurrentFloorName("f090") || game_.Floor().IsCurrentFloorName("f100");
@@ -403,6 +413,12 @@ void NazoManager::SetCondition(std::string_view c, const glm::vec3& target) {
             game_.ShowCaption(kCaptionXMark);
         }
     } else if (c == "Hello") {
+        {
+            const glm::vec3 feet = game_.GetPlayer().Feet();
+            const glm::vec3 eye = game_.GetCamera().position;
+            LogInfo("nazo: Hello condition (active {}, word {:#x}) feet ({:.2f} {:.2f} {:.2f}) camera ({:.2f} {:.2f} {:.2f}) target ({:.2f} {:.2f} {:.2f})",
+                    IsActive(NazoId::Hello), w[1], feet.x, feet.y, feet.z, eye.x, eye.y, eye.z, target.x, target.y, target.z);
+        }
         if (IsActive(NazoId::Hello)) {
             HelloStep();
         }
@@ -641,8 +657,10 @@ void NazoManager::Update(float dt) {
         active_mask_ &= ~2u;
     }
     UpdatePeephole(dt);
-    if (IsActive(NazoId::Photo) && word_[3] == 0x1F8) {
+    if ((word_[3] & 0x1F8) == 0x1F8) {
         game_.NoteArchive("photo:complete");
+    }
+    if (IsActive(NazoId::Photo) && word_[3] == 0x1F8) {
         OnClear(NazoId::Photo);
         active_mask_ &= ~8u;
     }

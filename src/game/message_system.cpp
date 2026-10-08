@@ -12,6 +12,9 @@ bool FloorMatches(Game& game, const MessageScript& script) {
     if (!script.order_floor) {
         return true;
     }
+    if (script.floor_names.empty() && script.class_name == "ShDemoScript" && script.demo_id == "gc_p00_010") {
+        return true;
+    }
     for (const std::string& floor : script.floor_names) {
         if (game.Floor().IsCurrentFloorName(floor)) {
             return true;

@@ -351,6 +351,7 @@ private:
     static constexpr float kCameraCutDistance = 3.0f;
 
     Renderer* renderer_ = nullptr;
+    VkFormat ldr_format_ = VK_FORMAT_R8G8B8A8_UNORM;
     TextureManager* textures_ = nullptr;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     glm::vec3 last_eye_{0.0f};
@@ -518,6 +519,7 @@ private:
     gpu::FrameData* frame_ = nullptr;
     std::vector<glm::mat4> skin_matrices_;
     std::vector<Draw> draws_;
+    std::vector<const Draw*> decal_order_;
     std::vector<ShadowView> shadow_views_;
     std::vector<uint32_t> probe_order_;
     std::vector<const SceneLight*> light_sources_;

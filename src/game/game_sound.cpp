@@ -65,8 +65,8 @@ std::vector<glm::mat4> ShapeTransforms(const Stage& stage, const fox2::DataSetFi
 
 }
 
-bool GameSound::Init(bool open_device, std::string_view language) {
-    ready_ = system_.Init(game_.GetVfs(), open_device);
+bool GameSound::Init(bool open_device, std::string_view language, bool surround) {
+    ready_ = system_.Init(game_.GetVfs(), open_device, surround);
     if (!ready_) {
         LogError("sound: init failed");
         return false;
@@ -101,10 +101,15 @@ void GameSound::Shutdown() {
         ready_ = false;
     }
     dialogue_objects_.clear();
+    one_shot_objects_.Reset();
 }
 
 audio::GameObjectId GameSound::OneShotObject(const glm::vec3& position) {
-    const audio::GameObjectId id = kOneShotBase + (next_one_shot_++ % kOneShotCount);
+    const size_t previous_size = one_shot_objects_.Size();
+    const audio::GameObjectId id = one_shot_objects_.Acquire([&](audio::PlayingId playing) { return system_.IsPlaying(playing); });
+    if (one_shot_objects_.Size() != previous_size) {
+        system_.RegisterObject(id, "OneShot");
+    }
     system_.SetObjectTransform(id, position, glm::vec3(0.0f, 0.0f, 1.0f));
     SetAreaSends(id, position);
     return id;
@@ -133,7 +138,10 @@ uint32_t GameSound::PostEvent(std::string_view name, const glm::vec3* position) 
         return 0;
     }
     NoteArchiveEvent(name);
-    return system_.PostEvent(name, position ? OneShotObject(*position) : 0);
+    const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
+    const audio::PlayingId playing = system_.PostEvent(name, object);
+    if (position) one_shot_objects_.Track(object, playing);
+    return playing;
 }
 
 void GameSound::NoteArchiveEvent(std::string_view name) {
@@ -146,14 +154,20 @@ uint32_t GameSound::PostEventId(uint32_t id, const glm::vec3* position) {
     if (!ready_) {
         return 0;
     }
-    return system_.PostEventId(id, position ? OneShotObject(*position) : 0);
+    const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
+    const audio::PlayingId playing = system_.PostEventId(id, object);
+    if (position) one_shot_objects_.Track(object, playing);
+    return playing;
 }
 
 uint32_t GameSound::PostEventMedia(std::string_view name, std::vector<uint32_t> media_ids, const glm::vec3* position) {
     if (!ready_) {
         return 0;
     }
-    return system_.PostEventMedia(name, std::move(media_ids), position ? OneShotObject(*position) : 0);
+    const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
+    const audio::PlayingId playing = system_.PostEventMedia(name, std::move(media_ids), object);
+    if (position) one_shot_objects_.Track(object, playing);
+    return playing;
 }
 
 uint32_t GameSound::PostRecordEvent(int record, std::string_view name, const glm::vec3& position) {
@@ -222,7 +236,10 @@ uint32_t GameSound::PlayStream(std::vector<uint8_t> wem, const glm::vec3* positi
     if (!ready_) {
         return 0;
     }
-    return system_.PlayStream(std::move(wem), position ? OneShotObject(*position) : 0);
+    const audio::GameObjectId object = position ? OneShotObject(*position) : 0;
+    const audio::PlayingId playing = system_.PlayStream(std::move(wem), object);
+    if (position) one_shot_objects_.Track(object, playing);
+    return playing;
 }
 
 void GameSound::SeekPlayingId(uint32_t playing_id, float seconds) {
@@ -308,7 +325,10 @@ audio::PlayingId GameSound::PostDialogueAt(uint32_t dialogue_event, std::span<co
     if (!ready_) {
         return 0;
     }
-    return system_.PostDialogueEventId(dialogue_event, arguments, OneShotObject(position));
+    const audio::GameObjectId object = OneShotObject(position);
+    const audio::PlayingId playing = system_.PostDialogueEventId(dialogue_event, arguments, object);
+    one_shot_objects_.Track(object, playing);
+    return playing;
 }
 
 void GameSound::UpdateGimmickDialogue() {

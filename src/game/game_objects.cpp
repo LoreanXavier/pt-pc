@@ -336,7 +336,6 @@ void OchoLogic::UpdateWarp() {
             wait_ = static_cast<float>(Random() % 50) + 40.0f;
             visible_ = false;
             Show(false);
-            game_.PostSoundId(kHeraldStop);
             StopVoice();
         }
     }
@@ -373,11 +372,11 @@ void OchoLogic::UpdateChase() {
 
 bool OchoLogic::UpdateLookBack() {
     ring_[ring_count_++ % ring_.size()] = player_yaw_;
-    float sum = 0.0f;
+    float offset_sum = 0.0f;
     for (float v : ring_) {
-        sum += v;
+        offset_sum += Wrap(player_yaw_ - v);
     }
-    const float deviation = std::abs(Wrap(player_yaw_ - sum / static_cast<float>(ring_.size())));
+    const float deviation = std::abs(Wrap(offset_sum / static_cast<float>(ring_.size())));
     if (deviation <= 1.8325957f) {
         if (look_phase_ != 0 && timer_a_ > 5.0f) {
             timer_a_ = 0.0f;

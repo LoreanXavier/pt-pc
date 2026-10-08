@@ -1,6 +1,7 @@
 #include "game/ui/photo_panel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <iterator>
 
@@ -14,9 +15,7 @@ namespace {
 constexpr float kFocusSteps[] = {0.3f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 7.0f, 10.0f, 15.0f};
 constexpr float kApertures[] = {1.4f, 2.0f, 2.8f, 4.0f, 5.6f, 8.0f, 11.0f, 16.0f};
 constexpr const char* kApertureNames[] = {"f/1.4", "f/2", "f/2.8", "f/4", "f/5.6", "f/8", "f/11", "f/16"};
-constexpr int kFovMin = 20;
-constexpr int kFovMax = 100;
-constexpr int kRollMax = 45;
+constexpr int kRollMax = 90;
 constexpr int kAngleStep = 5;
 constexpr int kExposureSteps = PhotoSettings::kExposureZero * 2 + 1;
 constexpr float kRepeatDelay = 0.4f;
@@ -32,7 +31,7 @@ struct RowText {
 
 constexpr RowText kRows[] = {
     {"pc_photo_take", "pc_note_photo_take", "pc_photo_section_camera"},
-    {"pc_photo_fov", "pc_note_photo_fov", nullptr},
+    {"pc_photo_focal_length", "pc_note_photo_focal_length", nullptr},
     {"pc_photo_roll", "pc_note_photo_roll", nullptr},
     {"pc_photo_speed", "pc_note_photo_speed", nullptr},
     {"pc_photo_reset", "pc_note_photo_reset", nullptr},
@@ -44,7 +43,9 @@ constexpr RowText kRows[] = {
     {"pc_lens_distortion", "pc_note_lens_distortion", nullptr},
     {"pc_film_grain", "pc_note_photo_grain", nullptr},
     {"pc_photo_grading", "pc_note_photo_grading", nullptr},
-    {"pc_photo_letterbox", "pc_note_photo_letterbox", nullptr},
+    {"pc_photo_aspect", "pc_note_photo_aspect", nullptr},
+    {"pc_photo_resolution", "pc_note_photo_resolution", nullptr},
+    {"pc_photo_filter", "pc_note_photo_filter", nullptr},
     {"pc_photo_body", "pc_note_photo_body", nullptr},
     {"pc_photo_flashlight", "pc_note_photo_flashlight", nullptr},
 };
@@ -79,12 +80,19 @@ float LetterboxAspect(int choice) {
     return choice == 1 ? 2.39f : choice == 2 ? 1.85f : 0.0f;
 }
 
-float PhotoSettings::LetterboxAspect() const {
-    return pt::game::LetterboxAspect(letterbox);
+float PhotoSettings::AspectRatio(float source_aspect) const {
+    return PhotoAspectRatio(static_cast<PhotoAspectPreset>(aspect), source_aspect);
 }
 
 void PhotoPanel::Open(const PhotoSettings& settings) {
     settings_ = settings;
+    settings_.focal_length_mm = PhotoFocalLengthForStep(PhotoFocalLengthStep(settings_.focal_length_mm));
+    settings_.roll = std::clamp(settings_.roll, -kRollMax, kRollMax);
+    settings_.aspect = std::clamp(settings_.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
+    settings_.resolution = static_cast<PhotoResolution>(std::clamp(static_cast<int>(settings_.resolution), 0,
+                                                                    static_cast<int>(PhotoResolution::Count) - 1));
+    settings_.filter = static_cast<PhotoColorFilter>(std::clamp(static_cast<int>(settings_.filter), 0,
+                                                                 static_cast<int>(PhotoColorFilter::Count) - 1));
     cursor_ = 0;
     held_dirs_ = 0;
     repeat_time_ = 0.0f;
@@ -93,13 +101,15 @@ void PhotoPanel::Open(const PhotoSettings& settings) {
 
 int PhotoPanel::Steps(int row) const {
     switch (row) {
-        case kFov: return (kFovMax - kFovMin) / kAngleStep + 1;
+        case kFocalLength: return PhotoFocalLengthStepCount();
         case kRoll: return kRollMax * 2 / kAngleStep + 1;
         case kSpeed: return 3;
         case kFocus: return static_cast<int>(std::size(kFocusSteps)) + 1;
         case kAperture: return static_cast<int>(std::size(kApertures)) + 1;
         case kExposure: return kExposureSteps;
-        case kLetterbox: return 3;
+        case kAspect: return static_cast<int>(PhotoAspectPreset::Count);
+        case kResolution: return static_cast<int>(PhotoResolution::Count);
+        case kFilter: return static_cast<int>(PhotoColorFilter::Count);
         case kTakePhoto:
         case kReset: return 1;
         default: return 2;
@@ -109,7 +119,7 @@ int PhotoPanel::Steps(int row) const {
 int PhotoPanel::Value(int row) const {
     const PhotoSettings& s = settings_;
     switch (row) {
-        case kFov: return (s.fov - kFovMin) / kAngleStep;
+        case kFocalLength: return PhotoFocalLengthStep(s.focal_length_mm);
         case kRoll: return (s.roll + kRollMax) / kAngleStep;
         case kSpeed: return s.speed;
         case kDof: return s.depth_of_field ? 1 : 0;
@@ -120,7 +130,9 @@ int PhotoPanel::Value(int row) const {
         case kLens: return s.lens ? 1 : 0;
         case kGrain: return s.grain ? 1 : 0;
         case kGrading: return s.grading ? 1 : 0;
-        case kLetterbox: return s.letterbox;
+        case kAspect: return std::clamp(s.aspect, 0, static_cast<int>(PhotoAspectPreset::Count) - 1);
+        case kResolution: return static_cast<int>(s.resolution);
+        case kFilter: return static_cast<int>(s.filter);
         case kBody: return s.body ? 1 : 0;
         case kFlashlight: return s.flashlight ? 1 : 0;
         default: return 0;
@@ -134,7 +146,7 @@ std::string PhotoPanel::ValueText(int row, int language) const {
     switch (row) {
         case kTakePhoto: return text("pc_photo_capture");
         case kReset: return text("pc_reset_value");
-        case kFov: return std::to_string(s.fov);
+        case kFocalLength: return std::format("{} mm", static_cast<int>(std::lround(s.focal_length_mm)));
         case kRoll: return s.roll > 0 ? std::format("+{}", s.roll) : std::to_string(s.roll);
         case kSpeed: return text(s.speed == 0 ? "pc_photo_speed_slow" : s.speed == 2 ? "pc_photo_speed_fast" : "pc_photo_speed_normal");
         case kDof: return on_off(s.depth_of_field);
@@ -148,19 +160,38 @@ std::string PhotoPanel::ValueText(int row, int language) const {
         case kLens: return on_off(s.lens);
         case kGrain: return on_off(s.grain);
         case kGrading: return on_off(s.grading);
-        case kLetterbox: return s.letterbox == 1 ? std::string("2.39:1") : s.letterbox == 2 ? std::string("1.85:1") : text("pc_off");
+        case kAspect: {
+            switch (static_cast<PhotoAspectPreset>(Value(row))) {
+                case PhotoAspectPreset::Cinema239: return "2.39:1";
+                case PhotoAspectPreset::Cinema185: return "1.85:1";
+                case PhotoAspectPreset::FourByThree: return "4:3";
+                case PhotoAspectPreset::ThreeByTwo: return "3:2";
+                case PhotoAspectPreset::Square: return "1:1";
+                default: return text("pc_off");
+            }
+        }
+        case kResolution: return text(s.resolution == PhotoResolution::FourK ? "pc_photo_resolution_4k" : "pc_photo_resolution_native");
+        case kFilter: {
+            switch (s.filter) {
+                case PhotoColorFilter::BlackAndWhite: return text("pc_photo_filter_bw");
+                case PhotoColorFilter::Warm: return text("pc_photo_filter_warm");
+                case PhotoColorFilter::Cool: return text("pc_photo_filter_cool");
+                case PhotoColorFilter::Muted: return text("pc_photo_filter_muted");
+                default: return text("pc_off");
+            }
+        }
         case kBody: return text(s.body ? "pc_photo_shown" : "pc_photo_hidden");
         case kFlashlight: return on_off(s.flashlight);
         default: return {};
     }
 }
 
-void PhotoPanel::Change(Game& game, int delta) {
+void PhotoPanel::Change(GameAudio* audio, int delta) {
     const int n = Steps(cursor_);
     if (n <= 1) {
         return;
     }
-    const bool wrap = n == 2 || cursor_ == kSpeed || cursor_ == kLetterbox;
+    const bool wrap = n == 2 || cursor_ == kSpeed || cursor_ == kAspect || cursor_ == kResolution || cursor_ == kFilter;
     int value = Value(cursor_) + delta;
     value = wrap ? (value % n + n) % n : std::clamp(value, 0, n - 1);
     if (value == Value(cursor_)) {
@@ -168,7 +199,7 @@ void PhotoPanel::Change(Game& game, int delta) {
     }
     PhotoSettings& s = settings_;
     switch (cursor_) {
-        case kFov: s.fov = kFovMin + value * kAngleStep; break;
+        case kFocalLength: s.focal_length_mm = PhotoFocalLengthForStep(value); break;
         case kRoll: s.roll = value * kAngleStep - kRollMax; break;
         case kSpeed: s.speed = value; break;
         case kDof: s.depth_of_field = value == 1; break;
@@ -179,17 +210,23 @@ void PhotoPanel::Change(Game& game, int delta) {
         case kLens: s.lens = value == 1; break;
         case kGrain: s.grain = value == 1; break;
         case kGrading: s.grading = value == 1; break;
-        case kLetterbox: s.letterbox = value; break;
+        case kAspect: s.aspect = value; break;
+        case kResolution: s.resolution = static_cast<PhotoResolution>(value); break;
+        case kFilter: s.filter = static_cast<PhotoColorFilter>(value); break;
         case kBody: s.body = value == 1; break;
         case kFlashlight: s.flashlight = value == 1; break;
         default: break;
     }
-    if (game.Audio()) {
-        game.Audio()->PostEvent(kCursorSound, nullptr);
+    if (audio) {
+        audio->PostEvent(kCursorSound, nullptr);
     }
 }
 
 PhotoPanel::Action PhotoPanel::Update(Game& game, const Input& input, float dt) {
+    return Update(game.Audio(), input, dt);
+}
+
+PhotoPanel::Action PhotoPanel::Update(GameAudio* audio, const Input& input, float dt) {
     flash_frame_ += dt * 60.0f;
     const uint32_t pressed = input.held_dirs & ~held_dirs_;
     uint32_t act = pressed;
@@ -206,29 +243,29 @@ PhotoPanel::Action PhotoPanel::Update(Game& game, const Input& input, float dt) 
     if (act & (kRawUp | kRawDown)) {
         cursor_ = ((cursor_ + ((act & kRawUp) ? -1 : 1)) % kRowCount + kRowCount) % kRowCount;
         flash_frame_ = 0.0f;
-        if (game.Audio()) {
-            game.Audio()->PostEvent(kCursorSound, nullptr);
+        if (audio) {
+            audio->PostEvent(kCursorSound, nullptr);
         }
     } else if (act & kRawLeft) {
-        Change(game, -1);
+        Change(audio, -1);
     } else if (act & kRawRight) {
-        Change(game, 1);
+        Change(audio, 1);
     }
     if (input.accept && (cursor_ == kTakePhoto || cursor_ == kReset)) {
         flash_frame_ = 0.0f;
-        if (game.Audio()) {
-            game.Audio()->PostEvent(kChangeSound, nullptr);
+        if (audio) {
+            audio->PostEvent(kChangeSound, nullptr);
         }
         return cursor_ == kTakePhoto ? Action::TakePhoto : Action::ResetCamera;
     }
     return Action::None;
 }
 
-PhotoPanelView PhotoPanel::View(int language, const std::string& status) const {
+PhotoPanelView PhotoPanel::View(int language, const std::string& status, float source_aspect) const {
     PhotoPanelView view;
     view.language = language;
     view.flash_frame = flash_frame_;
-    view.letterbox = settings_.LetterboxAspect();
+    view.crop = PhotoCropForAspect(source_aspect, settings_.AspectRatio(source_aspect));
     for (int row = 0; row < kRowCount; ++row) {
         if (kRows[row].section) {
             PhotoPanelRow header;
@@ -241,7 +278,7 @@ PhotoPanelView PhotoPanel::View(int language, const std::string& status) const {
         line.value = ValueText(row, language);
         const int n = Steps(row);
         const int value = Value(row);
-        const bool wrap = n == 2 || row == kSpeed || row == kLetterbox;
+        const bool wrap = n == 2 || row == kSpeed || row == kAspect || row == kResolution || row == kFilter;
         line.adjustable = n > 1;
         line.can_decrease = wrap || value > 0;
         line.can_increase = wrap || value + 1 < n;

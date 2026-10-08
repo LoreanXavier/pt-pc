@@ -111,9 +111,18 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
             continue;
         }
         Light l = frame.lights[i];
-        if (l.info.z != 0) {
+        if (l.info.z == 1) {
             vec3 q = (l.area * vec4(hit, 1.0)).xyz;
             if (1.0 - max(abs(q.z), max(abs(q.x), abs(q.y))) < 0.0) {
+                continue;
+            }
+        } else if (l.info.z == 2) {
+            vec4 q = l.area * vec4(hit, 1.0);
+            if (q.w <= 0.0) {
+                continue;
+            }
+            vec3 aperture = q.xyz / q.w;
+            if (0.5 - max(abs(aperture.z), max(abs(aperture.x), abs(aperture.y))) < 0.0) {
                 continue;
             }
         }

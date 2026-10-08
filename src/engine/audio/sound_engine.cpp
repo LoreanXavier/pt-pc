@@ -1,7 +1,13 @@
 #include "engine/audio/sound_engine.h"
 
+#include "engine/audio/channel_layout.h"
+
+#if defined(__aarch64__)
+#include <arm_acle.h>
+#else
 #include <pmmintrin.h>
 #include <xmmintrin.h>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -3102,6 +3108,21 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
     const float inv = 1.0f / static_cast<float>(produced);
     const float block_inv = 1.0f / static_cast<float>(frames);
     BusRuntime* bus = Bus(v.bus_id);
+    if (controller_pcm_capture_.HasSelectedEvents()) {
+        const auto record = playing_.find(v.playing_id);
+        if (record != playing_.end()) {
+            for (uint32_t i = 0; i < produced; ++i) {
+                const float w = (static_cast<float>(i) + 1.0f) * inv;
+                const float fade = fade0 + (fade1 - fade0) * w;
+                const float a = (v.gain_prev[0] + (target[0] - v.gain_prev[0]) * w) * fade;
+                const float b = (v.gain_prev[1] + (target[1] - v.gain_prev[1]) * w) * fade;
+                const float c = (v.gain_prev[2] + (target[2] - v.gain_prev[2]) * w) * fade;
+                const float d = (v.gain_prev[3] + (target[3] - v.gain_prev[3]) * w) * fade;
+                controller_pcm_capture_.Accumulate(record->second.event_id, offset + i, a * out_l[i] + b * out_r[i],
+                                                   c * out_l[i] + d * out_r[i]);
+            }
+        }
+    }
     auto chain_at = [&](const BusRuntime* dest, uint32_t i) {
         return dest->chain_prev + (dest->chain - dest->chain_prev) * (static_cast<float>(offset + i) + 1.0f) * block_inv;
     };
@@ -3328,10 +3349,11 @@ void SoundEngine::ProcessDue(uint64_t block_end) {
     }
 }
 
-void SoundEngine::RenderBlock(float* out, uint32_t frames) {
+void SoundEngine::RenderBlock(float* out, uint32_t frames, uint32_t output_channels) {
     block_end_ = now_ + frames;
     created_this_block_ = 0;
     motion_mix_[0] = motion_mix_[1] = 0.0f;
+    controller_pcm_capture_.BeginBlock(frames);
     for (auto& [id, bus] : buses_) {
         std::fill(bus->left.begin(), bus->left.begin() + frames, 0.0f);
         std::fill(bus->right.begin(), bus->right.begin() + frames, 0.0f);
@@ -3397,6 +3419,7 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
             NotifyVoiceFinished(v);
         }
     }
+    controller_pcm_capture_.SubmitBlock();
     for (BusRuntime* bus : bus_order_) {
         if (bus->has_input) {
             bus->active_until = block_end_ + static_cast<uint64_t>(bus->tail_seconds * kOutputRate);
@@ -3435,8 +3458,18 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
                 effect->SetDetector(sc_peak_.data());
             }
         }
-        for (auto& effect : bus->effects) {
-            effect->Process(bus->left.data(), bus->right.data(), frames);
+        if (bus == master_ && output_channels != 2) {
+            std::array<float*, 8> speakers{};
+            for (size_t channel = 0; channel < speakers.size(); ++channel) {
+                speakers[channel] = sc_[channel].data();
+            }
+            for (auto& effect : bus->effects) {
+                effect->ProcessSurround(bus->left.data(), bus->right.data(), speakers, frames);
+            }
+        } else {
+            for (auto& effect : bus->effects) {
+                effect->Process(bus->left.data(), bus->right.data(), frames);
+            }
         }
         if (BusRuntime* parent = bus->parent; parent && parent->sc_direct && !bus->sc_direct) {
             for (uint32_t i = 0; i < frames; ++i) {
@@ -3455,6 +3488,8 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
     }
     float peak_l = 0.0f;
     float peak_r = 0.0f;
+    const std::array<const float*, 8> speaker_channels = {sc_[0].data(), sc_[1].data(), sc_[2].data(), sc_[3].data(),
+                                                           sc_[4].data(), sc_[5].data(), sc_[6].data(), sc_[7].data()};
     for (uint32_t i = 0; i < frames; ++i) {
         float l = 0.0f;
         float r = 0.0f;
@@ -3464,8 +3499,22 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
         }
         l = std::clamp(l * master_gain_, -1.0f, 1.0f);
         r = std::clamp(r * master_gain_, -1.0f, 1.0f);
-        out[i * 2] = l;
-        out[i * 2 + 1] = r;
+        if (output_channels == 2) {
+            out[i * 2] = l;
+            out[i * 2 + 1] = r;
+        } else if (output_channels == 6) {
+            WwiseToSdl51Frame(speaker_channels, i, out + static_cast<size_t>(i) * output_channels);
+            for (uint32_t channel = 0; channel < output_channels; ++channel) {
+                float& sample = out[static_cast<size_t>(i) * output_channels + channel];
+                sample = std::clamp(sample * master_gain_, -1.0f, 1.0f);
+            }
+        } else {
+            for (uint32_t channel = 0; channel < output_channels; ++channel) {
+                const uint8_t speaker = kWwiseToSdl71[channel];
+                const float sample = sc_[speaker][i] * master_gain_;
+                out[static_cast<size_t>(i) * output_channels + channel] = std::clamp(sample, -1.0f, 1.0f);
+            }
+        }
         peak_l = std::max(peak_l, std::fabs(l));
         peak_r = std::max(peak_r, std::fabs(r));
     }
@@ -3496,13 +3545,26 @@ void SoundEngine::RenderBlock(float* out, uint32_t frames) {
 }
 
 void SoundEngine::Render(float* out, uint32_t frames) {
+    Render(out, frames, 2);
+}
+
+void SoundEngine::Render(float* out, uint32_t frames, uint32_t output_channels) {
+    if (output_channels != 2 && output_channels != 6 && output_channels != 8) {
+        output_channels = 2;
+    }
     if (frozen_.load()) {
-        std::memset(out, 0, sizeof(float) * frames * 2);
+        std::memset(out, 0, sizeof(float) * frames * output_channels);
         motion_levels_.store(0, std::memory_order_relaxed);
         return;
     }
+#if defined(__aarch64__)
+    /* Apple silicon (docs/macos.md): FPCR.FZ is the ARM64 flush to zero of both inputs and results, as FTZ and DAZ below */
+    const uint64_t fpcr = __arm_rsr64("fpcr");
+    __arm_wsr64("fpcr", fpcr | (uint64_t(1) << 24));
+#else
     const unsigned int csr = _mm_getcsr();
     _mm_setcsr(csr | 0x8040);
+#endif
     {
         std::lock_guard lock(command_mutex_);
         command_work_.swap(commands_);
@@ -3514,7 +3576,7 @@ void SoundEngine::Render(float* out, uint32_t frames) {
     uint32_t done = 0;
     while (done < frames) {
         const uint32_t n = std::min(kBlockFrames, frames - done);
-        RenderBlock(out + static_cast<size_t>(done) * 2, n);
+        RenderBlock(out + static_cast<size_t>(done) * output_channels, n, output_channels);
         done += n;
     }
     if (!global_pause_) {
@@ -3555,7 +3617,11 @@ void SoundEngine::Render(float* out, uint32_t frames) {
         stats_.sequencers = static_cast<uint32_t>(sequencers_.size());
         stats_.music = static_cast<uint32_t>(music_.size());
     }
+#if defined(__aarch64__)
+    __arm_wsr64("fpcr", fpcr);
+#else
     _mm_setcsr(csr);
+#endif
 }
 
 }

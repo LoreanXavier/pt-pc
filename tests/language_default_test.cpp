@@ -28,6 +28,8 @@ int main() {
     expect("ar-SA", true, 9);
     expect("ru-RU", true, 10);
     expect("uk-UA", true, 11);
+    expect("cs-CZ", true, 12);
+    expect("cs", true, 12);
     expect("ko-KR", true, 0);
     expect("zh-TW", true, 0);
     expect("zh-Hant-HK", true, 0);

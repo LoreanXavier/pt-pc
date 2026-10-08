@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "engine/audio/motion_generator.h"
+#include "engine/audio/controller_pcm_capture.h"
 #include "engine/audio/subtitles.h"
 #include "engine/audio/wwise_bank.h"
 
@@ -49,7 +50,7 @@ public:
     SoundSystem(const SoundSystem&) = delete;
     SoundSystem& operator=(const SoundSystem&) = delete;
 
-    bool Init(Vfs& vfs, bool open_device);
+    bool Init(Vfs& vfs, bool open_device, bool surround_output = false);
     void Shutdown();
 
     PlayingId PostEvent(std::string_view event_name, GameObjectId object = 0);
@@ -97,6 +98,10 @@ public:
     bool DeviceOpen() const;
     uint64_t RenderedFrames() const;
     MotionLevels Motion() const;
+    void SetControllerCaptureEvent(uint32_t event_id);
+    void SetControllerCaptureEvents(std::span<const uint32_t> event_ids);
+    bool TryReadControllerPcm(ControllerPcmBlock& block);
+    uint32_t ControllerPcmDroppedBlocks() const;
     void SetFrozen(bool frozen);
 
 private:

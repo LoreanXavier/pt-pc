@@ -43,6 +43,23 @@ glm::mat4 FoxView(const glm::mat4& gl_view) {
     return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f)) * gl_view;
 }
 
+bool MirrorLightSkips(const GpuMesh& mesh, int sub) {
+    static const bool all_casters = std::getenv("PT_MIRROR_CASTERS_ALL") != nullptr;
+    for (const char* name : {"coc0_main0_def", "bab0_main0_def", "shsb_clck001.fmdl", "shsb_lght005.fmdl", "handy_lens"}) {
+        if (!all_casters && mesh.name.find(name) != std::string::npos) {
+            return true;
+        }
+    }
+    if (mesh.name.find("shsb_bath001.fmdl") == std::string::npos) {
+        return false;
+    }
+    static const std::string list = [] {
+        const char* v = std::getenv("PT_MIRROR_SKIP_SUB");
+        return "," + std::string(v ? v : "2,10") + ",";
+    }();
+    return list.find("," + std::to_string(sub) + ",") != std::string::npos;
+}
+
 /* The original uses no polygon offset; its spot shadows move the receiver along the view's z by viewBias instead (0xDC07F0). */
 bool ShadowLegacy() {
     static const bool legacy = [] {
@@ -743,7 +760,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         g.shadow_cone = glm::vec4(l.shadow_cos_outer, l.shadow_inv_cone_range, 0.0f, 0.0f);
         g.scales = glm::vec4(l.specular_scale * lod.x, l.diffuse_scale * lod.y, l.shadow_strength * lod.z, l.cast_shadow ? 1.0f : 0.0f);
         const bool own_mask = l.masked && l.mask_texture >= 0;
-        g.info = glm::ivec4(-1, l.masked && !own_mask ? static_cast<int>(gpu::kResMask) : -1, l.has_area ? 1 : 0, own_mask ? l.mask_texture + 1 : 0);
+        g.info = glm::ivec4(-1, l.masked && !own_mask ? static_cast<int>(gpu::kResMask) : -1,
+                            l.has_area ? static_cast<int>(l.area_clip_mode) : 0, own_mask ? l.mask_texture + 1 : 0);
         g.area = l.has_area ? l.area_to_box : glm::mat4(0.0f);
         if (l.masked) {
             const glm::vec3 dir = glm::normalize(l.direction);
@@ -889,7 +907,7 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
             if (legacy_light_cull_ && view.view_bit == 1 && previous_shadowed_.contains(src.name)) {
                 score *= 1.25f;
             }
-            order.push_back({i, score, src.priority, view.view_bit});
+            order.push_back({i, score, src.priority, src.id == kMirrorLightId ? uint8_t{2} : view.view_bit});
         }
         std::stable_sort(order.begin(), order.end(), [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
         std::stable_sort(order.begin(), order.end(), [](const Candidate& a, const Candidate& b) { return a.priority < b.priority; });
@@ -952,7 +970,7 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
     if (rt_active_) {
         const uint32_t samples = raytracing.soft_shadows ? (2u << std::clamp(graphics.ray_quality,0,2)) : 1u;
         for (const Candidate& c : candidates) {
-            const uint32_t casters = c.view_bit;
+            const uint32_t casters = light_sources_[c.light]->id == kMirrorLightId ? 32u : c.view_bit;
             frame_->lights[c.light].info.x = static_cast<int>(casters | (rt_cull_ << 8) | (samples << 16));
         }
         return;
@@ -1156,6 +1174,9 @@ void SceneRenderer::RecordRayTracing(VkCommandBuffer cmd) {
         uint32_t mask = 0;
         if (d.sub->shadow) {
             mask |= ((d.hidden_views & 1u) == 0 ? 1u : 0u) | ((d.hidden_views & 2u) == 0 ? 2u : 0u);
+            if ((d.hidden_views & 2u) == 0 && !MirrorLightSkips(*d.mesh, static_cast<int>(d.sub - d.mesh->submeshes.data()))) {
+                mask |= 32u;
+            }
         }
         if (static const char* exclude = std::getenv("PT_SHADOW_EXCLUDE"); exclude && d.mesh->name.find(exclude) != std::string::npos) {
             mask &= ~3u;
@@ -1242,11 +1263,15 @@ void SceneRenderer::RecordShadows(VkCommandBuffer cmd) {
         SetViewport(cmd, sv.rect);
         vkCmdSetDepthBias(cmd, sv.bias_constant, 0.0f, sv.bias_slope);
         const uint8_t casters = sv.casters;
+        uint32_t shadow_draws = 0, shadow_indices = 0;
         for (const Draw& d : draws_) {
             if (!d.sub->shadow || (d.hidden_views & casters) != 0) {
                 continue;
             }
             if (static const char* exclude = std::getenv("PT_SHADOW_EXCLUDE"); exclude && d.mesh->name.find(exclude) != std::string::npos) {
+                continue;
+            }
+            if (light_sources_[sv.light]->id == kMirrorLightId && MirrorLightSkips(*d.mesh, static_cast<int>(d.sub - d.mesh->submeshes.data()))) {
                 continue;
             }
             if (static const bool skin_shadow_only = std::getenv("PT_SHADOW_SKIN_ONLY") != nullptr; skin_shadow_only && !d.sub->skinned) {
@@ -1261,7 +1286,15 @@ void SceneRenderer::RecordShadows(VkCommandBuffer cmd) {
             if (sv.frustum && !SphereInPlanes(d.center, d.radius, sv.planes)) {
                 continue;
             }
+            ++shadow_draws; shadow_indices += d.sub->index_count;
+            ++shadow_draws; shadow_indices += d.sub->index_count;
+            if (static const bool dump = std::getenv("PT_SHADOW_PASS_DUMP") != nullptr; dump && light_sources_[sv.light]->id == kMirrorLightId) {
+                LogInfo("shadow draw: {}#{} {} verts-radius {:.2f} centre ({:.2f} {:.2f} {:.2f})", d.mesh->name, static_cast<int>(d.sub - d.mesh->submeshes.data()), d.sub->index_count, d.radius, d.center.x, d.center.y, d.center.z);
+            }
             DrawMesh(cmd, d, sv.view, 0, false, false, nullptr, sv.cull, true);
+        }
+        if (static const bool trace = std::getenv("PT_SHADOW_PASS_TRACE") != nullptr; trace) {
+            LogInfo("shadow pass: {} casters {:#x} draws {} indices {} at ({:.3f} {:.3f} {:.3f})", light_sources_[sv.light]->name, sv.casters, shadow_draws, shadow_indices, sv.center.x, sv.center.y, sv.center.z);
         }
     }
     vkCmdEndRendering(cmd);
@@ -1286,12 +1319,22 @@ void SceneRenderer::RecordGBuffer(VkCommandBuffer cmd, const ViewSetup& view) {
         if (pass == 1) {
             vkCmdSetDepthBias(cmd, 1.0f, 0.0f, 1.0f);
         }
+        const RenderPass wanted = pass == 0 ? RenderPass::Opaque : RenderPass::Decal;
+        decal_order_.clear();
         for (const Draw& d : draws_) {
-            const RenderPass wanted = pass == 0 ? RenderPass::Opaque : RenderPass::Decal;
-            if (d.sub->pass != wanted || d.sub->kind != gpu::kKindDeferred || !Visible(d, view)) {
-                continue;
+            if (d.sub->pass == wanted && d.sub->kind == gpu::kKindDeferred && Visible(d, view)) {
+                decal_order_.push_back(&d);
             }
-            DrawMesh(cmd, d, view.index, debug_flags, view.mirrored, false, aux);
+        }
+        static const bool by_layer = [] {
+            const char* env = std::getenv("PT_DECAL_LAYERS");
+            return !env || std::atoi(env) != 0;
+        }();
+        if (pass == 1 && by_layer) {
+            std::stable_sort(decal_order_.begin(), decal_order_.end(), [](const Draw* a, const Draw* b) { return a->sub->layer < b->sub->layer; });
+        }
+        for (const Draw* d : decal_order_) {
+            DrawMesh(cmd, *d, view.index, debug_flags, view.mirrored, false, aux);
         }
     }
     vkCmdEndRendering(cmd);

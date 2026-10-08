@@ -12,7 +12,6 @@
 #include <sl_reflex.h>
 #include <sl_security.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -22,6 +21,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 #include "engine/core/log.h"
+#include "engine/core/crash_report.h"
 #include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/upscale.h"
 #include "engine/render/upscale/upscale_platform.h"
@@ -32,6 +32,7 @@ struct Api {
     PFun_slInit* init = nullptr;
     PFun_slShutdown* shutdown = nullptr;
     PFun_slIsFeatureSupported* is_supported = nullptr;
+    PFun_slIsFeatureLoaded* is_loaded = nullptr;
     PFun_slSetFeatureLoaded* set_loaded = nullptr;
     PFun_slEvaluateFeature* evaluate = nullptr;
     PFun_slSetTagForFrame* set_tag = nullptr;
@@ -141,6 +142,7 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
         return false;
     }
     const bool ok = Load(g_api.init, "slInit") && Load(g_api.shutdown, "slShutdown") && Load(g_api.is_supported, "slIsFeatureSupported") &&
+                    Load(g_api.is_loaded, "slIsFeatureLoaded") &&
                     Load(g_api.set_loaded, "slSetFeatureLoaded") && Load(g_api.evaluate, "slEvaluateFeature") &&
                     Load(g_api.set_tag, "slSetTagForFrame") && Load(g_api.requirements, "slGetFeatureRequirements") &&
                     Load(g_api.set_constants, "slSetConstants") && Load(g_api.feature_function, "slGetFeatureFunction") &&
@@ -244,6 +246,10 @@ bool FrameGenNeedsVsyncOff() {
     return g_vsync_off;
 }
 
+bool IsFrameGenLoaded(bool& loaded) {
+    return g_active && g_api.is_loaded && g_api.is_loaded(sl::kFeatureDLSS_G, loaded) == sl::Result::eOk;
+}
+
 void BeginFrame() {
     if (!g_active) {
         return;
@@ -344,7 +350,7 @@ sl::Result SetFeatureLoaded(sl::Feature feature, bool loaded) {
     return g_active ? g_api.set_loaded(feature, loaded) : sl::Result::eErrorInitNotCalled;
 }
 
-bool UnloadFrameGen() {
+bool DisableFrameGenFeature() {
     if (!g_active || !g_frame_gen) return false;
     const sl::Result result = g_api.set_loaded(sl::kFeatureDLSS_G, false);
     g_frame_gen = false;
@@ -519,28 +525,161 @@ public:
         wanted = wanted && Available(reason);
         if (!initialised_) {
             initialised_ = true;
-            attached_ = streamline::FrameGenSupported(nullptr) && ctx_.surface != VK_NULL_HANDLE;
+            if (ctx_.surface != VK_NULL_HANDLE) {
+                attachment_known_ = RefreshAttachment();
+            } else {
+                attachment_known_ = true;
+            }
         }
         const bool vsync_off = wanted && streamline::FrameGenNeedsVsyncOff();
         const bool vsync_changed = vsync_off != ctx_.force_vsync_off;
         ctx_.force_vsync_off = vsync_off;
-        if (wanted != attached_) {
-            vkDeviceWaitIdle(ctx_.device);
-            if (attached_) {
-                SetMode(sl::DLSSGMode::eOff);
+        target_ = wanted;
+        generating_ = (wanted && attached_) || (preserve_active_mode_ && attached_ && mode_ == sl::DLSSGMode::eOn);
+        return vsync_changed;
+    }
+
+    FrameStartAction FrameStart(bool swapchain_recreation_pending) override {
+        if (!initialised_) {
+            return FrameStartAction::Continue;
+        }
+        const bool menu_open = UpscaleHost::Get().MenuOpen();
+        if (!attachment_known_) {
+            const bool state_change_needed = target_ != attached_ || swapchain_recreation_pending ||
+                                            (attached_ && menu_open && mode_ != sl::DLSSGMode::eOff);
+            if (!state_change_needed) {
+                return FrameStartAction::Continue;
             }
-            DestroyHudless();
-            ctx_.DestroySwapchain();
-            const sl::Result result = streamline::SetFeatureLoaded(sl::kFeatureDLSS_G, wanted);
-            LogInfo("frame generation: DLSS Frame Generation {} (sl.dlss_g {}: {}), swapchain recreated", wanted ? "on" : "off",
-                    wanted ? "loaded" : "unloaded", static_cast<int>(result));
-            attached_ = wanted && result == sl::Result::eOk;
+            if (!RefreshAttachment()) {
+                LogAttachmentError();
+                return KeepCurrentSwapchainOrFatal(
+                    "Streamline could not report whether DLSS Frame Generation is loaded, and no safe swapchain remains. Restart P.T.");
+            }
+        }
+        const bool transition_pending = target_ != attached_;
+
+        if (attached_ && (transition_pending || swapchain_recreation_pending || (menu_open && mode_ != sl::DLSSGMode::eOff))) {
+            if (!SetMode(sl::DLSSGMode::eOff)) {
+                generating_ = attached_ && mode_ == sl::DLSSGMode::eOn;
+                return KeepCurrentSwapchainOrFatal(
+                    "DLSS Frame Generation could not be turned off before the swapchain change. Restart P.T. and try again.");
+            }
+            if (!target_) {
+                generating_ = false;
+            }
+        }
+
+        bool fsr_owner_changed = false;
+        if (transition_pending) {
+            FrameGeneration* fsr = UpscaleHost::Get().FrameGen();
+            const auto* fsr_hook = fsr ? dynamic_cast<const vk::SwapchainHooks*>(fsr) : nullptr;
+            if (fsr_hook && (ctx_.SwapchainOwner() == fsr_hook || ctx_.swapchain_hooks == fsr_hook)) {
+                fsr_owner_changed = fsr->Update(false);
+                if (ctx_.SwapchainOwner() == fsr_hook) {
+                    vkDeviceWaitIdle(ctx_.device);
+                    ctx_.DestroySwapchain();
+                    fsr_owner_changed = true;
+                }
+                fsr->Update(false);
+            }
+            if (ctx_.SwapchainOwner() || ctx_.swapchain_hooks) {
+                if (!owner_wait_logged_) {
+                    LogWarn("frame generation: DLSS switch waiting for the active swapchain owner to detach");
+                    owner_wait_logged_ = true;
+                }
+                return KeepCurrentSwapchainOrFatal(
+                    "Another frame-generation backend still owns the swapchain during a DLSS transition. Restart P.T. and try again.");
+            }
+            owner_wait_logged_ = false;
+        }
+
+        if (menu_open && transition_pending) {
+            if (swapchain_recreation_pending || fsr_owner_changed) {
+                vkDeviceWaitIdle(ctx_.device);
+                DestroyHudless(false);
+                return fsr_owner_changed ? FrameStartAction::RecreateSwapchain : FrameStartAction::Continue;
+            }
+            return FrameStartAction::Continue;
+        }
+
+        if (!transition_pending) {
+            if (attached_ && swapchain_recreation_pending) {
+                vkDeviceWaitIdle(ctx_.device);
+                DestroyHudless(false);
+            }
+            return FrameStartAction::Continue;
+        }
+
+        const bool wanted = target_;
+        vkDeviceWaitIdle(ctx_.device);
+        DestroyHudless(false);
+        ctx_.DestroySwapchain();
+        if (!wanted) {
+            streamline::FreeResources(sl::kFeatureDLSS_G);
+        }
+        const sl::Result result = streamline::SetFeatureLoaded(sl::kFeatureDLSS_G, wanted);
+        if (result == sl::Result::eOk) {
+            attached_ = wanted;
+            attachment_known_ = true;
+        } else {
+            attachment_known_ = RefreshAttachment();
+            LogError("frame generation: slSetFeatureLoaded({}) failed ({}){}", wanted ? "enabled" : "disabled",
+                     static_cast<int>(result), attachment_known_ ? "" : "; attachment state is unknown");
+        }
+        generating_ = target_ && attached_;
+        mode_ = sl::DLSSGMode::eOff;
+        if (wanted && !attached_) {
+            Fail("sl.dlss_g hooks could not be enabled");
+        }
+        LogInfo("frame generation: DLSS Frame Generation transition requested {} (sl.dlss_g hooks {}: {}), attached {}", wanted ? "on" : "off",
+                wanted ? "enabled" : "disabled", static_cast<int>(result), attached_ ? "yes" : "no");
+
+        if (!attachment_known_) {
+            return KeepCurrentSwapchainOrFatal(
+                "Streamline could not confirm the DLSS Frame Generation load state after swapchain teardown. Restart P.T.");
+        }
+        if (wanted && !attached_) {
+            return FrameStartAction::RecreateSwapchain;
+        }
+        if (attached_ != wanted) {
+            return KeepCurrentSwapchainOrFatal(
+                "Streamline did not apply the DLSS Frame Generation hook-state change after swapchain teardown. Restart P.T.");
+        }
+        return FrameStartAction::RecreateSwapchain;
+    }
+
+    bool SwapchainFailed() override {
+        if (!attached_) {
+            return false;
+        }
+        Fail("the swapchain was refused");
+        if (!SetMode(sl::DLSSGMode::eOff)) {
             generating_ = false;
-            mode_ = sl::DLSSGMode::eOff;
+            if (!ctx_.swapchain.handle) {
+                FatalError("DLSS Frame Generation could not be turned off after swapchain creation failed, and no usable swapchain remains. Restart P.T.",
+                           ctx_.surface != VK_NULL_HANDLE);
+            }
             return true;
         }
-        generating_ = wanted && attached_;
-        return vsync_changed;
+        vkDeviceWaitIdle(ctx_.device);
+        DestroyHudless(false);
+        ctx_.DestroySwapchain();
+        streamline::FreeResources(sl::kFeatureDLSS_G);
+        const sl::Result result = streamline::SetFeatureLoaded(sl::kFeatureDLSS_G, false);
+        if (result == sl::Result::eOk) {
+            attached_ = false;
+            attachment_known_ = true;
+        } else {
+            attachment_known_ = RefreshAttachment();
+            LogError("frame generation: could not disable DLSS-G hooks after swapchain refusal ({}){}", static_cast<int>(result),
+                     attachment_known_ ? "" : "; attachment state is unknown");
+        }
+        generating_ = false;
+        if (!attachment_known_ || attached_) {
+            FatalError("DLSS Frame Generation could not be detached after swapchain creation failed, and no usable swapchain remains. Restart P.T.",
+                       ctx_.surface != VK_NULL_HANDLE);
+        }
+        return true;
     }
 
     bool Generating() const override { return generating_; }
@@ -569,18 +708,33 @@ public:
             prepared_ = false;
             return nullptr;
         }
-        const bool generate = generating_ && prepared_ && !UpscaleHost::Get().MenuOpen();
-        prepared_ = false;
+        const bool keep_previous_mode = preserve_active_mode_ && mode_ == sl::DLSSGMode::eOn;
+        bool generate = generating_ && prepared_ && (!UpscaleHost::Get().MenuOpen() || keep_previous_mode);
         if (!generate) {
-            SetMode(sl::DLSSGMode::eOff);
-            return nullptr;
+            const bool has_current_inputs = prepared_;
+            if (!SetMode(sl::DLSSGMode::eOff)) {
+                if (mode_ == sl::DLSSGMode::eOn && has_current_inputs) {
+                    generating_ = true;
+                    preserve_active_mode_ = true;
+                    generate = true;
+                } else if (mode_ == sl::DLSSGMode::eOn) {
+                    FatalError("DLSS Frame Generation remained on without current depth and motion inputs, and could not be turned off. Restart P.T.",
+                               ctx_.surface != VK_NULL_HANDLE);
+                }
+            }
+            if (!generate) {
+                prepared_ = false;
+                return nullptr;
+            }
         }
+        prepared_ = false;
         if (hudless_.size() != ctx_.swapchain.images.size() || extent_.width != ctx_.swapchain.extent.width ||
             extent_.height != ctx_.swapchain.extent.height || format_ != ctx_.swapchain.format) {
             CreateHudless();
         }
         if (image_index >= hudless_.size()) {
-            SetMode(sl::DLSSGMode::eOff);
+            SetModeOffOrFatal(
+                "DLSS Frame Generation remained on without a valid HUD-less target. Restart P.T. and try again.");
             return nullptr;
         }
         const vk::Image& hud = hudless_[image_index];
@@ -593,7 +747,16 @@ public:
         sl::Resource resource = SlImage(image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         const sl::Extent full{0, 0, image.extent.width, image.extent.height};
         const sl::ResourceTag tag(&resource, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &full);
-        streamline::Tag(&tag, 1, VK_NULL_HANDLE);
+        const sl::Result tag_result = streamline::Tag(&tag, 1, VK_NULL_HANDLE);
+        if (tag_result != sl::Result::eOk) {
+            if (!error_logged_) {
+                LogError("frame generation: DLSS HUD-less input tagging failed ({})", static_cast<int>(tag_result));
+                error_logged_ = true;
+            }
+            SetModeOffOrFatal(
+                "DLSS Frame Generation could not tag its HUD-less target, and could not safely turn the feature off. Restart P.T.");
+            return nullptr;
+        }
         SetMode(sl::DLSSGMode::eOn);
         CheckState();
         return &hud;
@@ -612,9 +775,49 @@ public:
     }
 
 private:
-    void SetMode(sl::DLSSGMode mode) {
+    void SetModeOffOrFatal(const char* fatal_reason) {
+        if (!SetMode(sl::DLSSGMode::eOff) && mode_ == sl::DLSSGMode::eOn) {
+            FatalError(fatal_reason, ctx_.surface != VK_NULL_HANDLE);
+        }
+    }
+
+    FrameStartAction KeepCurrentSwapchainOrFatal(const char* fatal_reason) {
+        if (ctx_.swapchain.handle) {
+            generating_ = attached_ && mode_ == sl::DLSSGMode::eOn;
+            preserve_active_mode_ = generating_;
+            return FrameStartAction::KeepCurrentSwapchain;
+        }
+        FatalError(fatal_reason, ctx_.surface != VK_NULL_HANDLE);
+    }
+
+    void Fail(const char* reason) {
+        LogError("frame generation: DLSS Frame Generation turned off for this run: {}", reason);
+        failed_ = true;
+        target_ = false;
+        UpscaleHost::Get().SetDlssFrameGenFailed(true);
+    }
+
+    bool RefreshAttachment() {
+        bool loaded = attached_;
+        if (!streamline::IsFrameGenLoaded(loaded)) {
+            attachment_known_ = false;
+            return false;
+        }
+        attached_ = loaded;
+        attachment_known_ = true;
+        return true;
+    }
+
+    void LogAttachmentError() {
+        if (!attachment_error_logged_) {
+            LogError("frame generation: Streamline DLSS-G attachment state could not be queried; swapchain work is deferred");
+            attachment_error_logged_ = true;
+        }
+    }
+
+    bool SetMode(sl::DLSSGMode mode) {
         if (mode == mode_) {
-            return;
+            return true;
         }
         sl::DLSSGOptions options{};
         options.mode = mode;
@@ -625,17 +828,24 @@ private:
         options.colorHeight = ctx_.swapchain.extent.height;
         options.colorBufferFormat = static_cast<uint32_t>(ctx_.swapchain.format);
         options.hudLessBufferFormat = static_cast<uint32_t>(ctx_.swapchain.format);
+        options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
         options.onErrorCallback = &DlssFrameGeneration::ApiError;
         const sl::Result result = slDLSSGSetOptions(sl::ViewportHandle(streamline::kViewport), options);
         if (result != sl::Result::eOk) {
-            if (!error_logged_) {
-                LogError("frame generation: slDLSSGSetOptions failed ({})", static_cast<int>(result));
-                error_logged_ = true;
+            if (mode == sl::DLSSGMode::eOff && attached_ && mode_ == sl::DLSSGMode::eOn) {
+                preserve_active_mode_ = true;
             }
-            return;
+            if (!mode_error_logged_) {
+                LogError("frame generation: slDLSSGSetOptions({}) failed ({}); the previous mode remains active",
+                         mode == sl::DLSSGMode::eOn ? "on" : "off", static_cast<int>(result));
+                mode_error_logged_ = true;
+            }
+            return false;
         }
         LogInfo("frame generation: DLSS Frame Generation mode {}", mode == sl::DLSSGMode::eOn ? "on" : "off");
         mode_ = mode;
+        preserve_active_mode_ = false;
+        return true;
     }
 
     void CheckState() {
@@ -676,13 +886,15 @@ private:
         LogInfo("frame generation: DLSS Frame Generation for {}x{}, {} hud-less targets", extent_.width, extent_.height, hudless_.size());
     }
 
-    void DestroyHudless() {
+    void DestroyHudless(bool clear_tag = true) {
         if (hudless_.empty()) {
             return;
         }
         vkDeviceWaitIdle(ctx_.device);
-        const sl::ResourceTag tag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
-        streamline::Tag(&tag, 1, VK_NULL_HANDLE);
+        if (clear_tag) {
+            const sl::ResourceTag tag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
+            streamline::Tag(&tag, 1, VK_NULL_HANDLE);
+        }
         for (vk::Image& image : hudless_) {
             ctx_.DestroyImage(image);
         }
@@ -702,11 +914,17 @@ private:
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     sl::DLSSGMode mode_ = sl::DLSSGMode::eOff;
     bool initialised_ = false;
+    bool target_ = false;
     bool attached_ = false;
+    bool attachment_known_ = false;
     bool generating_ = false;
+    bool owner_wait_logged_ = false;
     bool prepared_ = false;
     bool failed_ = false;
     bool error_logged_ = false;
+    bool mode_error_logged_ = false;
+    bool preserve_active_mode_ = false;
+    bool attachment_error_logged_ = false;
     uint64_t rendered_ = 0;
     uint64_t presented_ = 0;
 };
@@ -744,7 +962,8 @@ bool FrameGenSupported(std::string* reason) {
     return false;
 }
 bool FrameGenNeedsVsyncOff() { return false; }
-bool UnloadFrameGen() { return false; }
+bool IsFrameGenLoaded(bool&) { return false; }
+bool DisableFrameGenFeature() { return false; }
 void BeginFrame() {}
 void SetMarker(Marker) {}
 void SetConstants(const FrameConstants&) {}

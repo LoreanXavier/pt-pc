@@ -8,8 +8,8 @@
 int main(int argc, char** argv) {
  if(argc!=2)return 2;pt::Vfs vfs;if(!vfs.Mount(argv[1]))return 2;
  pt::audio::SubtitleTable english;std::string error;if(!english.Load(vfs,"Eng",{},&error))return 2;
- int failures=0;const char* codes[]={"Tur","Zhs","Ara","Rus","Ukr"};
- for(int lang=7;lang<12;++lang){
+ int failures=0;const char* codes[]={"Tur","Zhs","Ara","Rus","Ukr","Ces"};
+ for(int lang=7;lang<13;++lang){
   pt::audio::SubtitleTable translated;
   if(!translated.Load(vfs,codes[lang-7],{},&error)){printf("FAIL: %s\n",error.c_str());++failures;continue;}
   pt::ui::FfntFont font;auto family=lang==8?"Noto Sans SC":lang==9?"Noto Kufi Arabic":"Noto Sans";

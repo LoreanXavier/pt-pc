@@ -321,7 +321,7 @@ void PromptTextures::Init(Vfs& vfs, TextureManager& textures, bool background) {
 }
 
 std::string PromptTextures::VariantFor(const PromptStyle& style) const {
-    if (style.device == PromptDevice::PlayStation) {
+    if (style.device == PromptDevice::PlayStation || style.device == PromptDevice::Steam) {
         return {};
     }
     if (style.device == PromptDevice::Keyboard) {

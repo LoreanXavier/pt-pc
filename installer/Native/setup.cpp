@@ -110,6 +110,7 @@ InstallOutcome Install(const fs::path& input,const fs::path& destination,bool sh
     InstallSteps steps;steps.version=std::string(pt::update::CurrentVersion());
     GUID guid{};CoCreateGuid(&guid);wchar_t id[40];StringFromGUID2(guid,id,40);std::wstring wide(id);steps.unique_id=std::string(wide.begin()+1,wide.end()-1);
     steps.check_parents=CheckParents;steps.verify_integrity=VerifyIntegrity;steps.unpack=Unpack;steps.extract=Extract;steps.shortcut=Shortcut;
+    steps.validate_runtime=[](const std::vector<InstalledFile>& files){RequireProgramFiles(files,{"amd_fidelityfx_vk.dll","nvngx_dlss.dll","libxess.dll"});};
     steps.payload_bytes=[]{auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(100),RT_RCDATA);if(!resource)throw std::runtime_error("Installer payload missing.");
         return PayloadBytes(static_cast<const unsigned char*>(LockResource(LoadResource(nullptr,resource))),SizeofResource(nullptr,resource));};
     return RunInstall(input,destination,shortcut,steps);
@@ -190,6 +191,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 write(game/L"other_list.bin","/Assets/other/level/"+std::string(40,'x'));GameFiles other;other.title="CUSA99999";other.pathid=game/L"other_list.bin";if(ConfirmPt(other))failures+=" other-game-accepted";
                 fs::remove_all(root);
                 failures+=SelfTestUpdate(root/L"update");
+                failures+=SelfTestUnicodePaths(root);
                 fs::remove_all(root);
                 if(!failures.empty())throw std::runtime_error("Self test failed:"+failures);
                 using pt::update::CompareVersions;

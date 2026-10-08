@@ -40,6 +40,7 @@ struct SubMesh {
     bool shadow = true;
     bool shadow_double_sided = false;
     uint16_t group = 0;
+    uint8_t layer = 0;
 };
 
 struct MeshGroup {

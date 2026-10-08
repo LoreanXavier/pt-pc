@@ -1,6 +1,7 @@
 #include "engine/voice/voice_recognizer.h"
 
 #include <whisper.h>
+#include <ggml-backend-impl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +15,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <dlfcn.h>
+#include <pthread.h>
 #else
 #include <dlfcn.h>
 #include <sys/resource.h>
@@ -22,13 +26,36 @@
 #endif
 
 #include "engine/core/log.h"
+#include "engine/platform/os.h"
 
 namespace pt {
 namespace {
 
 constexpr int kChunk = 512;
-constexpr const char* kWhisperModel = "ggml-base.en-q5_1.bin";
+constexpr const char* kDefaultWhisperModel = "ggml-base.en-q5_1.bin";
+constexpr const char* kDefaultRescueModel = "ggml-small.en-q5_1.bin";
 constexpr const char* kVadModel = "ggml-silero-v6.2.0.bin";
+
+std::string WhisperModelName() {
+    const char* name = std::getenv("PT_VOICE_MODEL");
+    return name && name[0] ? name : kDefaultWhisperModel;
+}
+
+bool VoiceDiagnosticsEnabled() {
+    static const bool enabled = [] {
+#ifdef _WIN32
+        char* value = nullptr;
+        size_t length = 0;
+        _dupenv_s(&value, &length, "PT_VOICE_DIAGNOSTICS");
+        const bool present = value != nullptr;
+        std::free(value);
+        return present;
+#else
+        return std::getenv("PT_VOICE_DIAGNOSTICS") != nullptr;
+#endif
+    }();
+    return enabled;
+}
 
 void WhisperLog(ggml_log_level level, const char* text, void*) {
     if (level != GGML_LOG_LEVEL_ERROR && level != GGML_LOG_LEVEL_WARN) return;
@@ -77,6 +104,8 @@ struct WhisperApi {
 #undef PT_WHISPER_POINTER
     bool ready = false;
     std::string cpu;
+    void* cpu_backend = nullptr;
+    decltype(&::ggml_backend_register) register_backend = nullptr;
 };
 WhisperApi g_api;
 std::mutex g_api_mutex;
@@ -85,16 +114,29 @@ std::mutex g_api_mutex;
 using Library = HMODULE;
 constexpr const char* kLibraryPrefix = "";
 constexpr const char* kLibraryExtension = ".dll";
+constexpr const char* kModuleExtension = ".dll";
 Library LoadNear(const std::filesystem::path& path) {
     return LoadLibraryExW(std::filesystem::absolute(path).c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 }
 void* Symbol(Library library, const char* name) { return reinterpret_cast<void*>(GetProcAddress(library, name)); }
 void Unload(Library library) { FreeLibrary(library); }
-std::string LoadError() { return std::format("Windows error {}", GetLastError()); }
+std::string LoadError() {
+    const DWORD code = GetLastError();
+    char text[256] = {};
+    DWORD n = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0, text, sizeof(text) - 1, nullptr);
+    while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r' || text[n - 1] == ' ')) text[--n] = 0;
+    return n > 0 ? std::format("Windows error {}: {}", code, text) : std::format("Windows error {}", code);
+}
 #else
 using Library = void*;
 constexpr const char* kLibraryPrefix = "lib";
+#ifdef __APPLE__
+/* whisper and ggml are shared libraries (.dylib); ggml's CPU variants are CMake MODULE libraries, .so on macOS as well */
+constexpr const char* kLibraryExtension = ".dylib";
+#else
 constexpr const char* kLibraryExtension = ".so";
+#endif
+constexpr const char* kModuleExtension = ".so";
 Library LoadNear(const std::filesystem::path& path) { return dlopen(std::filesystem::absolute(path).c_str(), RTLD_NOW | RTLD_GLOBAL); }
 void* Symbol(Library library, const char* name) { return dlsym(library, name); }
 void Unload(Library library) { dlclose(library); }
@@ -106,14 +148,18 @@ std::string LoadError() {
 
 std::string LibraryName(const char* name) { return std::string(kLibraryPrefix) + name + kLibraryExtension; }
 
-bool LoadRuntime(const std::filesystem::path& dir) {
+bool LoadRuntime(const std::filesystem::path& dir, VoiceRecognizer::Failure& failure) {
     std::lock_guard lock(g_api_mutex);
     if (g_api.ready) return true;
+    failure = VoiceRecognizer::Failure::Runtime;
     const Library base = LoadNear(dir / LibraryName("ggml-base"));
+    std::string error = base ? "" : LoadError();
     const Library ggml = base ? LoadNear(dir / LibraryName("ggml")) : nullptr;
+    if (base && !ggml) error = LoadError();
     const Library whisper = ggml ? LoadNear(dir / LibraryName("whisper")) : nullptr;
+    if (ggml && !whisper) error = LoadError();
     if (!whisper) {
-        LogError("voice: cannot load {} from {} ({})", LibraryName("whisper"), dir.string(), LoadError());
+        LogError("voice: cannot load {} from {} ({})", LibraryName(!base ? "ggml-base" : !ggml ? "ggml" : "whisper"), os::PathToUtf8(dir), error);
         return false;
     }
     bool complete = true;
@@ -122,25 +168,33 @@ bool LoadRuntime(const std::filesystem::path& dir) {
     complete = complete && g_api.name != nullptr;
     PT_WHISPER_FUNCTIONS(PT_WHISPER_RESOLVE)
 #undef PT_WHISPER_RESOLVE
-    using LoadBackend = void* (*)(const char*);
-    const auto load_backend = reinterpret_cast<LoadBackend>(Symbol(ggml, "ggml_backend_load"));
-    if (!complete || !load_backend) {
+    g_api.register_backend = reinterpret_cast<decltype(g_api.register_backend)>(Symbol(ggml, "ggml_backend_register"));
+    if (!complete || !g_api.register_backend) {
         LogError("voice: missing export in {} or {}", LibraryName("whisper"), LibraryName("ggml"));
         return false;
     }
     g_api.whisper_log_set(WhisperLog, nullptr);
     const char* forced = std::getenv("PT_VOICE_CPU");
     std::filesystem::path best;
+    bool registered = false;
     int best_score = 0;
-    std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator(dir, error)) {
-        const std::string name = entry.path().filename().string();
+    int candidates = 0;
+    int loaded = 0;
+    std::string load_error;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string name = os::PathToUtf8(entry.path().filename());
         const std::string prefix = std::string(kLibraryPrefix) + "ggml-cpu-";
-        if (!name.starts_with(prefix) || entry.path().extension() != kLibraryExtension) continue;
-        const std::string variant = name.substr(prefix.size(), name.size() - prefix.size() - std::strlen(kLibraryExtension));
+        if (!name.starts_with(prefix) || entry.path().extension() != kModuleExtension) continue;
+        const std::string variant = name.substr(prefix.size(), name.size() - prefix.size() - std::strlen(kModuleExtension));
         if (forced && variant != forced) continue;
+        ++candidates;
         const Library module = LoadNear(entry.path());
-        if (!module) continue;
+        if (!module) {
+            load_error = std::format("{}: {}", name, LoadError());
+            continue;
+        }
+        ++loaded;
         using Score = int (*)();
         const auto score = reinterpret_cast<Score>(Symbol(module, "ggml_backend_score"));
         const int value = score ? score() : 0;
@@ -151,11 +205,40 @@ bool LoadRuntime(const std::filesystem::path& dir) {
             g_api.cpu = variant;
         }
     }
-    const std::u8string best_path = best.u8string();
-    if (best.empty() || !load_backend(reinterpret_cast<const char*>(best_path.c_str()))) {
-        LogError("voice: no ggml-cpu variant in {} supported by this CPU{}", dir.string(), forced ? std::format(" (PT_VOICE_CPU={})", forced) : "");
+    if (!best.empty()) {
+        g_api.cpu_backend = LoadNear(best);
+        using InitBackend = ggml_backend_reg_t (*)();
+        const auto init_backend = g_api.cpu_backend
+            ? reinterpret_cast<InitBackend>(Symbol(reinterpret_cast<Library>(g_api.cpu_backend), "ggml_backend_init"))
+            : nullptr;
+        if (init_backend) {
+            if (const auto registry = init_backend(); registry && registry->api_version == GGML_BACKEND_API_VERSION) {
+                g_api.register_backend(registry);
+                registered = true;
+            }
+        }
+    }
+    if (!registered) {
+        if (g_api.cpu_backend) {
+            Unload(reinterpret_cast<Library>(g_api.cpu_backend));
+            g_api.cpu_backend = nullptr;
+        }
+        const std::string where = os::PathToUtf8(dir);
+        const std::string note = forced ? std::format(" (PT_VOICE_CPU={})", forced) : "";
+        if (candidates == 0) {
+            LogError("voice: no {}ggml-cpu-*{} library in {}{}", kLibraryPrefix, kModuleExtension, where, note);
+        } else if (loaded == 0) {
+            LogError("voice: none of the {} ggml-cpu libraries in {} could be loaded ({}); a path or blocked or missing DLL problem, not the CPU{}",
+                     candidates, where, load_error, note);
+        } else if (best_score == 0) {
+            LogError("voice: this CPU runs none of the {} ggml-cpu variants in {}{}", loaded, where, note);
+            failure = VoiceRecognizer::Failure::Cpu;
+        } else {
+            LogError("voice: ggml-cpu-{} in {} loaded but did not register (ggml backend API version mismatch or no ggml_backend_init)", g_api.cpu, where);
+        }
         return false;
     }
+    failure = VoiceRecognizer::Failure::None;
     g_api.ready = true;
     LogInfo("voice: whisper.cpp CPU code ggml-cpu-{} (score {})", g_api.cpu, best_score);
     return true;
@@ -283,17 +366,60 @@ bool VoiceRecognizer::MatchesKeyword(std::string_view text, int max_words, int* 
     return (found == Spelling::Word && count <= max_words) || (found == Spelling::Short && count <= 3);
 }
 
+static void ApplyTune(VoiceRecognizer::Settings& s) {
+    const char* text = std::getenv("PT_VOICE_TUNE");
+    if (!text) return;
+    std::string_view rest(text);
+    while (!rest.empty()) {
+        const size_t comma = std::min(rest.find(','), rest.size());
+        const std::string_view item = rest.substr(0, comma);
+        rest.remove_prefix(std::min(comma + 1, rest.size()));
+        const size_t eq = item.find('=');
+        if (eq == std::string_view::npos) continue;
+        const std::string name(item.substr(0, eq));
+        const float v = std::strtof(std::string(item.substr(eq + 1)).c_str(), nullptr);
+        if (name == "start") s.start_seconds = v;
+        else if (name == "end") s.end_seconds = v;
+        else if (name == "startp") s.start_probability = v;
+        else if (name == "endp") s.end_probability = v;
+        else if (name == "preroll") s.preroll_seconds = v;
+        else if (name == "minspeech") s.min_speech_seconds = v;
+        else if (name == "maxsegment") s.max_segment_seconds = v;
+        else if (name == "floor") s.target_floor_db = v;
+        else if (name == "maxgain") s.max_gain_db = v;
+        else if (name == "maxwords") s.max_words = static_cast<int>(v);
+        else if (name == "jackp") s.jack_token_probability = v;
+        else if (name == "threads") s.threads = static_cast<int>(v);
+        else if (name == "prio") s.priority = static_cast<int>(v);
+        else if (name == "bridge") s.bridge_onset = v != 0.0f;
+        else if (name == "beam") s.beam = static_cast<int>(v);
+        else if (name == "rescue") s.rescue = static_cast<int>(v);
+        else if (name == "rescuep") s.rescue_probability = v;
+        else if (name == "rescuewords") s.rescue_words = static_cast<int>(v);
+        else if (name == "rescuesec") s.rescue_seconds = v;
+        else if (name == "rescuejackp") s.rescue_jack_probability = v;
+        else if (name == "nst") s.suppress_nst = v != 0.0f;
+        else continue;
+        LogInfo("voice: PT_VOICE_TUNE {}={}", name, v);
+    }
+}
+
 bool VoiceRecognizer::Init(const std::filesystem::path& model_dir, const std::string& keyword) {
     Shutdown();
     keyword_ = keyword;
-    for (const std::string& name : {std::string(kWhisperModel), std::string(kVadModel), LibraryName("whisper")}) {
+    ApplyTune(settings);
+    if (const char* prompt = std::getenv("PT_VOICE_PROMPT")) settings.prompt = prompt;
+    if (const char* model = std::getenv("PT_VOICE_RESCUE_MODEL")) settings.rescue_model = model;
+    for (const std::string& name : {WhisperModelName(), std::string(kVadModel), LibraryName("whisper")}) {
         if (!std::filesystem::is_regular_file(model_dir / name)) {
-            LogError("voice: {} is missing from {}", name, model_dir.string());
+            LogError("voice: {} is missing from {}", name, os::PathToUtf8(model_dir));
+            failure_ = Failure::Files;
             state_ = State::Failed;
             return false;
         }
     }
     stop_ = false;
+    failure_ = Failure::None;
     state_ = State::Loading;
     worker_ = std::thread(&VoiceRecognizer::Run, this, model_dir);
     return true;
@@ -313,6 +439,7 @@ void VoiceRecognizer::Shutdown() {
     input_.clear();
     fed_ = done_ = 0;
     reset_ = flush_ = busy_ = false;
+    failure_ = Failure::None;
     state_ = State::Off;
 }
 
@@ -330,6 +457,8 @@ void VoiceRecognizer::Reset() {
 bool VoiceRecognizer::Feed(std::span<const int16_t> samples) {
     if (state_ == State::Off || state_ == State::Failed) return false;
     if (!samples.empty()) {
+        size_t dropped = 0;
+        size_t queued = 0;
         {
             std::lock_guard lock(mutex_);
             input_.insert(input_.end(), samples.begin(), samples.end());
@@ -340,7 +469,13 @@ bool VoiceRecognizer::Feed(std::span<const int16_t> samples) {
                 input_.erase(input_.begin(), input_.begin() + static_cast<ptrdiff_t>(drop));
                 fed_ -= drop;
                 reset_ = true;
+                dropped = drop;
+                queued = input_.size();
             }
+        }
+        if (dropped != 0) {
+            LogWarn("voice: microphone backlog dropped {:.2f} s of audio (kept {:.2f} s queued); resetting VAD segment",
+                    static_cast<double>(dropped) / kSampleRate, static_cast<double>(queued) / kSampleRate);
         }
         wake_.notify_one();
     }
@@ -381,10 +516,15 @@ std::vector<VoiceRecognizer::Result> VoiceRecognizer::TakeResults() {
 
 bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
     const auto started = std::chrono::steady_clock::now();
-    if (!LoadRuntime(model_dir)) return false;
+    Failure failure = Failure::None;
+    if (!LoadRuntime(model_dir, failure)) {
+        failure_ = failure;
+        return false;
+    }
+    failure_ = Failure::Model;
     MemoryLoader file;
     if (!file.Open(model_dir / kVadModel)) {
-        LogError("voice: cannot read {}", (model_dir / kVadModel).string());
+        LogError("voice: cannot read {}", os::PathToUtf8(model_dir / kVadModel));
         return false;
     }
     whisper_vad_context_params vad_params = g_api.whisper_vad_default_context_params();
@@ -398,8 +538,8 @@ bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
     }
     /* whisper_vad_init leaves the LSTM state uninitialised; without this reset the VAD sometimes returns a constant 0.349 for every window. */
     g_api.whisper_vad_reset_state(vad_);
-    if (!file.Open(model_dir / kWhisperModel)) {
-        LogError("voice: cannot read {}", (model_dir / kWhisperModel).string());
+    if (!file.Open(model_dir / WhisperModelName())) {
+        LogError("voice: cannot read {}", os::PathToUtf8(model_dir / WhisperModelName()));
         return false;
     }
     whisper_context_params params = g_api.whisper_context_default_params();
@@ -419,15 +559,38 @@ bool VoiceRecognizer::LoadModels(const std::filesystem::path& model_dir) {
             jack_tokens_.push_back(tokens[0]);
         }
     }
+    if (settings.rescue == 4) {
+        const std::string name = settings.rescue_model.empty() ? std::string(kDefaultRescueModel) : settings.rescue_model;
+        MemoryLoader second_file;
+        if (second_file.Open(model_dir / name)) {
+            whisper_model_loader second_loader = second_file.Loader();
+            whisper2_ = g_api.whisper_init_with_params(&second_loader, params);
+        }
+        if (!whisper2_) {
+            LogWarn("voice: second opinion model {} not loaded, short utterances are decoded once", name);
+        } else {
+            for (const char* spelling : {" Jack", " jack", " JACK"}) {
+                whisper_token tokens[8];
+                if (g_api.whisper_tokenize(whisper2_, spelling, tokens, 8) == 1 &&
+                    std::find(jack_tokens2_.begin(), jack_tokens2_.end(), tokens[0]) == jack_tokens2_.end()) {
+                    jack_tokens2_.push_back(tokens[0]);
+                }
+            }
+            LogInfo("voice: second opinion {}", name);
+        }
+    }
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
     threads_ = settings.threads > 0 ? settings.threads : static_cast<int>(std::clamp(cores / 4, 1u, 4u));
-    LogInfo("voice: {} and {} loaded in {:.0f} ms, {} threads", kWhisperModel, kVadModel,
+    failure_ = Failure::None;
+    LogInfo("voice: {} and {} loaded in {:.0f} ms, {} threads", WhisperModelName(), kVadModel,
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(), threads_);
     return true;
 }
 
 void VoiceRecognizer::FreeModels() {
     if (whisper_) g_api.whisper_free(whisper_);
+    if (whisper2_) g_api.whisper_free(whisper2_);
+    whisper2_ = nullptr;
     if (vad_) g_api.whisper_vad_free(vad_);
     whisper_ = nullptr;
     vad_ = nullptr;
@@ -435,9 +598,11 @@ void VoiceRecognizer::FreeModels() {
 
 void VoiceRecognizer::Run(std::filesystem::path model_dir) {
 #ifdef _WIN32
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    SetThreadPriority(GetCurrentThread(), settings.priority < 0 ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_NORMAL);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(settings.priority < 0 ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED, 0);
 #else
-    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), settings.priority < 0 ? 10 : 0);
 #endif
     const bool loaded = LoadModels(model_dir);
     if (!loaded) FreeModels();
@@ -469,7 +634,7 @@ void VoiceRecognizer::Run(std::filesystem::path model_dir) {
             level_history_.clear();
             gain_ = 1.0f;
             in_speech_ = false;
-            speech_chunks_ = silence_chunks_ = voiced_chunks_ = 0;
+            speech_chunks_ = speech_gap_chunks_ = candidate_voiced_chunks_ = silence_chunks_ = voiced_chunks_ = 0;
             g_api.whisper_vad_reset_state(vad_);
         }
         for (const int16_t s : local) pending_.push_back(static_cast<float>(s) / 32768.0f);
@@ -514,26 +679,45 @@ void VoiceRecognizer::ProcessChunk(const float* raw) {
     for (int i = 0; i < kChunk; ++i) lifted[i] = std::clamp(raw[i] * gain_, -1.0f, 1.0f);
     float p = 0.0f;
     if (g_api.whisper_vad_detect_speech_no_reset(vad_, lifted, kChunk) && g_api.whisper_vad_n_probs(vad_) > 0) p = g_api.whisper_vad_probs(vad_)[0];
+    if (VoiceDiagnosticsEnabled()) {
+        LogInfo("voice: VAD p={:.3f} gain={:.2f} speech={} start={}/{} silence={}/{} voiced={:.3f}s",
+                p, gain_, in_speech_ ? 1 : 0, speech_chunks_,
+                std::max(1, static_cast<int>(std::lround(settings.start_seconds * kSampleRate / kChunk))),
+                silence_chunks_, std::max(1, static_cast<int>(std::lround(settings.end_seconds * kSampleRate / kChunk))),
+                static_cast<float>(voiced_chunks_) * kChunk / kSampleRate);
+    }
     const int start_chunks = std::max(1, static_cast<int>(std::lround(settings.start_seconds * kSampleRate / kChunk)));
     const int end_chunks = std::max(1, static_cast<int>(std::lround(settings.end_seconds * kSampleRate / kChunk)));
+    const float voiced_probability = settings.start_probability * 0.5f;
     if (!in_speech_) {
         preroll_.insert(preroll_.end(), raw, raw + kChunk);
         const size_t keep = static_cast<size_t>(settings.preroll_seconds * kSampleRate) + kChunk;
         if (preroll_.size() > keep) preroll_.erase(preroll_.begin(), preroll_.end() - static_cast<ptrdiff_t>(keep));
-        speech_chunks_ = p >= settings.start_probability ? speech_chunks_ + 1 : 0;
+        if (p >= settings.start_probability) {
+            if (speech_chunks_ == 0) candidate_voiced_chunks_ = 0;
+            ++speech_chunks_;
+            ++candidate_voiced_chunks_;
+            speech_gap_chunks_ = 0;
+        } else if (settings.bridge_onset && speech_chunks_ > 0 && speech_gap_chunks_ == 0 && p >= voiced_probability) {
+            ++speech_gap_chunks_;
+            ++candidate_voiced_chunks_;
+        } else {
+            speech_chunks_ = speech_gap_chunks_ = candidate_voiced_chunks_ = 0;
+        }
         if (speech_chunks_ >= start_chunks) {
             in_speech_ = true;
             segment_ = std::move(preroll_);
             preroll_.clear();
             silence_chunks_ = 0;
-            voiced_chunks_ = speech_chunks_;
+            voiced_chunks_ = candidate_voiced_chunks_;
+            speech_gap_chunks_ = 0;
         }
         return;
     }
     segment_.insert(segment_.end(), raw, raw + kChunk);
     if (p >= settings.end_probability) {
         silence_chunks_ = 0;
-        voiced_chunks_ += p >= settings.start_probability ? 1 : 0;
+        ++voiced_chunks_;
     } else {
         ++silence_chunks_;
     }
@@ -546,11 +730,20 @@ void VoiceRecognizer::ProcessChunk(const float* raw) {
 
 void VoiceRecognizer::CloseSegment(bool forced) {
     in_speech_ = false;
-    speech_chunks_ = 0;
+    speech_chunks_ = speech_gap_chunks_ = candidate_voiced_chunks_ = 0;
     std::vector<float> audio = std::move(segment_);
     segment_.clear();
     const float voiced = static_cast<float>(voiced_chunks_) * kChunk / kSampleRate;
-    if (voiced < settings.min_speech_seconds) return;
+    const int min_voiced_chunks = std::max(1, static_cast<int>(std::floor(settings.min_speech_seconds * kSampleRate / kChunk)));
+    if (voiced_chunks_ < min_voiced_chunks) {
+        if (VoiceDiagnosticsEnabled()) {
+            LogInfo("voice: discarded short VAD segment ({:.3f}s voiced < {:.3f}s, {:.3f}s captured, {} silence chunks{})",
+                    voiced, static_cast<float>(min_voiced_chunks) * kChunk / kSampleRate,
+                    static_cast<float>(audio.size()) / kSampleRate, silence_chunks_,
+                    forced ? ", forced close" : "");
+        }
+        return;
+    }
     if (!forced) {
         const size_t tail = static_cast<size_t>(silence_chunks_) * kChunk;
         const size_t keep_tail = static_cast<size_t>(0.2f * kSampleRate);
@@ -566,6 +759,42 @@ void VoiceRecognizer::CloseSegment(bool forced) {
     if (!result.text.empty()) last_hypothesis_ = result.text;
     results_.push_back(std::move(result));
     if (results_.size() > 64) results_.erase(results_.begin());
+}
+
+VoiceRecognizer::Decoded VoiceRecognizer::Decode(whisper_context* ctx, const std::vector<int>& jack_tokens, const std::vector<float>& audio, const char* prompt, int beam, float temperature, int best_of) {
+    Decoded out;
+    whisper_full_params params = g_api.whisper_full_default_params(beam > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+    if (beam > 1) params.beam_search.beam_size = beam;
+    params.n_threads = threads_;
+    params.no_context = true;
+    params.no_timestamps = true;
+    params.single_segment = true;
+    params.print_special = params.print_progress = params.print_realtime = params.print_timestamps = false;
+    params.max_tokens = 16;
+    params.language = "en";
+    params.detect_language = false;
+    params.suppress_blank = true;
+    params.suppress_nst = settings.suppress_nst;
+    params.temperature = temperature;
+    params.temperature_inc = 0.0f;
+    params.greedy.best_of = best_of;
+    if (prompt && prompt[0]) params.initial_prompt = prompt;
+    params.audio_ctx = std::clamp(static_cast<int>(audio.size() * 50 / kSampleRate) + 64, 384, 1500);
+    FirstStep first;
+    first.tokens = &jack_tokens;
+    params.logits_filter_callback = FirstStepLogits;
+    params.logits_filter_callback_user_data = &first;
+    params.abort_callback = [](void* self) { return static_cast<VoiceRecognizer*>(self)->abort_.load(); };
+    params.abort_callback_user_data = this;
+    if (g_api.whisper_full(ctx, params, audio.data(), static_cast<int>(audio.size())) != 0) {
+        if (!abort_) LogWarn("voice: whisper_full failed");
+        return out;
+    }
+    for (int i = 0; i < g_api.whisper_full_n_segments(ctx); ++i) out.text += g_api.whisper_full_get_segment_text(ctx, i);
+    while (!out.text.empty() && out.text.front() == ' ') out.text.erase(out.text.begin());
+    out.probability = first.probability;
+    out.ok = true;
+    return out;
 }
 
 VoiceRecognizer::Result VoiceRecognizer::Transcribe(std::vector<float> audio) {
@@ -584,39 +813,39 @@ VoiceRecognizer::Result VoiceRecognizer::Transcribe(std::vector<float> audio) {
     const size_t minimum = static_cast<size_t>(1.5f * kSampleRate);
     if (audio.size() < minimum) audio.resize(minimum, 0.0f);
 
-    whisper_full_params params = g_api.whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads = threads_;
-    params.no_context = true;
-    params.no_timestamps = true;
-    params.single_segment = true;
-    params.print_special = params.print_progress = params.print_realtime = params.print_timestamps = false;
-    params.max_tokens = 16;
-    params.language = "en";
-    params.detect_language = false;
-    params.suppress_blank = true;
-    params.suppress_nst = true;
-    params.temperature = 0.0f;
-    params.temperature_inc = 0.0f;
-    params.greedy.best_of = 1;
-    params.audio_ctx = std::clamp(static_cast<int>(audio.size() * 50 / kSampleRate) + 64, 384, 1500);
     if (const char* dump = std::getenv("PT_VOICE_DUMP")) WriteSegment(std::filesystem::path(dump), audio);
-    FirstStep first;
-    first.tokens = &jack_tokens_;
-    params.logits_filter_callback = FirstStepLogits;
-    params.logits_filter_callback_user_data = &first;
-    params.abort_callback = [](void* self) { return static_cast<VoiceRecognizer*>(self)->abort_.load(); };
-    params.abort_callback_user_data = this;
-    if (g_api.whisper_full(whisper_, params, audio.data(), static_cast<int>(audio.size())) != 0) {
-        if (!abort_) LogWarn("voice: whisper_full failed");
-        return result;
-    }
-    for (int i = 0; i < g_api.whisper_full_n_segments(whisper_); ++i) result.text += g_api.whisper_full_get_segment_text(whisper_, i);
-    while (!result.text.empty() && result.text.front() == ' ') result.text.erase(result.text.begin());
+    Decoded first = Decode(whisper_, jack_tokens_, audio, settings.prompt.c_str(), settings.beam, 0.0f, 1);
+    if (!first.ok) return result;
+    result.text = first.text;
     result.jack_probability = first.probability;
-    result.decode_ms = static_cast<float>(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
     int words = 0;
     result.detected = MatchesKeyword(result.text, settings.max_words, &words);
     if (!result.detected && words <= 3 && result.jack_probability >= settings.jack_token_probability) result.detected = true;
+    if (!result.detected && settings.rescue > 0 && words <= settings.rescue_words && result.seconds <= settings.rescue_seconds &&
+        result.jack_probability >= settings.rescue_probability) {
+        Decoded second;
+        switch (settings.rescue) {
+        case 1: second = Decode(whisper_, jack_tokens_, audio, "Jack.", 0, 0.0f, 1); break;
+        case 2: second = Decode(whisper_, jack_tokens_, audio, settings.prompt.c_str(), 0, 0.4f, 5); break;
+        case 4:
+            if (whisper2_) second = Decode(whisper2_, jack_tokens2_, audio, settings.prompt.c_str(), 0, 0.0f, 1);
+            break;
+        default: second = Decode(whisper_, jack_tokens_, audio, settings.prompt.c_str(), 5, 0.0f, 1); break;
+        }
+        if (second.ok) {
+            int words2 = 0;
+            bool hit = MatchesKeyword(second.text, 3, &words2);
+            if (!hit && words2 <= 3 && second.probability >= settings.rescue_jack_probability) hit = true;
+            if (VoiceDiagnosticsEnabled() || std::getenv("PT_VOICE_RESCUE_LOG")) {
+                LogInfo("voice: second look '{}' -> '{}' p {:.3f}{}", result.text, second.text, second.probability, hit ? ": the word" : "");
+            }
+            if (hit) {
+                result.detected = true;
+                result.text += " | " + second.text;
+            }
+        }
+    }
+    result.decode_ms = static_cast<float>(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
     return result;
 }
 

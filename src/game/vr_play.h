@@ -3,6 +3,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 #include "engine/platform/input.h"
 #include "engine/platform/settings.h"
 #include "engine/render/camera.h"
@@ -11,6 +14,31 @@
 #include "engine/xr/xr_view.h"
 
 namespace pt::game {
+
+constexpr float kVrHeightOffsetMin = -0.5f;
+constexpr float kVrHeightOffsetMax = 0.5f;
+constexpr float kVrWorldScaleMin = 0.5f;
+constexpr float kVrWorldScaleMax = 2.0f;
+inline float ClampVrHeightOffset(float offset) {
+    return std::isfinite(offset) ? std::clamp(offset, kVrHeightOffsetMin, kVrHeightOffsetMax) : 0.0f;
+}
+
+inline float ClampVrWorldScale(float scale) {
+    return std::isfinite(scale) ? std::clamp(scale, kVrWorldScaleMin, kVrWorldScaleMax) : 1.0f;
+}
+
+inline glm::vec3 ScaleVrTrackedOffset(const glm::vec3& offset, float scale) {
+    return offset * ClampVrWorldScale(scale);
+}
+
+inline glm::vec3 MapVrEyeOffset(const glm::vec3& head_offset, const glm::vec3& eye_relative_offset, float scale) {
+    return ScaleVrTrackedOffset(head_offset, scale) + eye_relative_offset;
+}
+
+inline glm::vec3 VrEyeAnchor(const glm::vec3& logic_position, const glm::vec3& feet, const glm::vec3& eye, float eye_height,
+                             float height_offset) {
+    return logic_position + (feet - eye) + glm::vec3(0.0f, eye_height + ClampVrHeightOffset(height_offset), 0.0f);
+}
 
 class Game;
 

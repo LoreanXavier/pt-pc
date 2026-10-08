@@ -1,0 +1,25 @@
+# The left mouse button (an Act key) with the right one held gouges the X mark too.
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.5
+gfile -1.0 -1.4 7.5
+gfile -7.9 -1.4 7.5
+fent shsb_hous001_pc1a_0000
+swait 5
+sexpect prompts keyboard
+smbutton right 1
+swait 60
+sexpect held zoom 1
+smtap left
+swait 1
+sexpect held zoom 1
+sexpect menu 0
+sexpect paused 0
+swait 30
+smbutton right 0
+slog
+swait 10
+sfree
+swait 30
+sfree
+slog

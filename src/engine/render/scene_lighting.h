@@ -12,6 +12,7 @@ namespace pt {
 struct GpuMesh;
 
 enum class LightType : uint8_t { Point = 0, Spot = 1 };
+enum class AreaClipMode : uint8_t { None = 0, Box = 1, ProjectiveAperture = 2 };
 
 constexpr uint64_t kHandyLightId = 0x48414E44594C4954ull;
 constexpr uint64_t kMirrorLightId = 0x4D4952524F524C54ull;
@@ -42,6 +43,7 @@ struct SceneLight {
     glm::vec4 lod{0.0f};
     bool cast_shadow = false;
     bool has_area = false;
+    AreaClipMode area_clip_mode = AreaClipMode::Box;
     glm::mat4 area_to_box{1.0f};
     glm::mat4 area_world{1.0f};
     bool masked = false;

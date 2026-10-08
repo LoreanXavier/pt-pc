@@ -133,7 +133,12 @@ public:
     const DlssFrameGenSupport& DlssFrameGen() const { return dlss_fg_; }
     void SetMenuOpen(bool open) { menu_open_ = open; }
     bool MenuOpen() const { return menu_open_; }
-    void SetDlssFrameGenFailed(bool failed) { dlss_fg_failed_ = failed; }
+    void SetDlssFrameGenFailed(bool failed) {
+        dlss_fg_failed_ = failed;
+        if (ctx_) {
+            CheckDlssFrameGen();
+        }
+    }
     void FrameTick();
     void Shutdown();
     UpscaleBackend* Backend(UpscalerKind kind);

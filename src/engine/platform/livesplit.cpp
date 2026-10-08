@@ -111,6 +111,10 @@ void LiveSplitClient::StartConnect() {
 #else
     const int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s < 0) return;
+#ifdef __APPLE__
+    const int no_sigpipe = 1;
+    setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+#endif
     fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
     socket_ = static_cast<uintptr_t>(s);
 #endif
@@ -175,6 +179,8 @@ void LiveSplitClient::Poll() {
         std::string& front = queue_.front();
 #ifdef _WIN32
         const int sent = send(static_cast<SOCKET>(socket_), front.data(), static_cast<int>(front.size()), 0);
+#elif defined(__APPLE__)
+        const int sent = static_cast<int>(send(static_cast<int>(socket_), front.data(), front.size(), 0));
 #else
         const int sent = static_cast<int>(send(static_cast<int>(socket_), front.data(), front.size(), MSG_NOSIGNAL));
 #endif

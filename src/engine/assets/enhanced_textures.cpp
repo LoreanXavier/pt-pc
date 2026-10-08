@@ -211,7 +211,7 @@ void EnhancedTextureJob::Run(std::filesystem::path game, std::filesystem::path c
             std::ofstream manifest(cache / "manifest.txt", std::ios::trunc);
             manifest << "cache_version=2\nmodel=" << kModel << "\nmodel_fingerprint=" << model
                 << "\narchive_bytes=" << std::filesystem::file_size(game / "texture.qar")
-                << "\narchive_mtime=" << std::filesystem::last_write_time(game / "texture.qar").time_since_epoch().count()
+                << "\narchive_mtime=" << static_cast<long long>(std::filesystem::last_write_time(game / "texture.qar").time_since_epoch().count())
                 << "\ntextures=" << total << "\nmax_output=" << max_output << "\n";
             if (!manifest) throw std::runtime_error("Cannot save enhanced texture manifest.");
         }

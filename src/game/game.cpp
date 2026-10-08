@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "game/outro_input.h"
 #include "game/archive.h"
 #include "game/loop_browser.h"
 
@@ -182,7 +183,7 @@ void Game::SpawnPlayer(Stage& stage) {
 
 void Game::Update(float dt, const InputState& pad_input) {
     static const InputState kNoInput{};
-    const InputState& input = save_dialog_ ? kNoInput : pad_input;
+    const InputState& input = save_dialog_ || EndingOutroInputBlocked(controller_.Step()) ? kNoInput : pad_input;
     if (loop_reload_pending_) {
         browse_fade_wait_ -= dt;
         if (browse_fade_wait_ <= 0.0f) {
@@ -378,7 +379,8 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         const char* off = std::getenv("PT_MIRROR_BODY");
         return off && *off == '0';
     }();
-    if (body_off || !player_.spawned || (!BodyShown() && (!effects_.mirror_capture || mirror_viewport_bits_ == 0 || demos_.ControlsPlayer() ||
+    const bool third_person_transition = third_person_ && !FreeView() && third_person_weight_ > 0.0f && player_.handy_light.enable;
+    if (body_off || !player_.spawned || (!BodyShown() && !third_person_transition && (!effects_.mirror_capture || mirror_viewport_bits_ == 0 || demos_.ControlsPlayer() ||
         nazo_.IsPeepholeTheaterActive()))) {
         static const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
         if (trace) {
@@ -456,7 +458,7 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         gripped = true;
         return true;
     };
-    const bool grip = DetachedView() && player_.handy_light.enable && glm::length(light_aim_) > 0.0f;
+    const bool grip = (DetachedView() || third_person_transition) && player_.handy_light.enable && glm::length(light_aim_) > 0.0f;
     if (!entry || !entry->mesh || !player_.BodySkin(help.get(), player_skin_, player_.handy_light.enable, sim.get(), grip ? &reach : nullptr)) {
         return;
     }
@@ -639,7 +641,9 @@ void Game::UpdateHandyTarget(float dt) {
     glm::vec3 right = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
     right = glm::length(right) > 1e-4f ? glm::normalize(right) * (glm::dot(right, camera.Right()) < 0.0f ? -1.0f : 1.0f) : camera.Right();
     const glm::vec3 up = glm::normalize(glm::cross(right, forward));
-    const glm::vec2 s = demos_.ControlsPlayer() ? glm::vec2(0.0f) : player_.LightStick() * (demo_camera ? 0.2f : 1.0f);
+    const glm::vec2 s = demos_.ControlsPlayer() || EndingOutroInputBlocked(controller_.Step())
+                            ? glm::vec2(0.0f)
+                            : player_.LightStick() * (demo_camera ? 0.2f : 1.0f);
     const float a = 0.28125f * s.y;
     const float b = 0.375f * s.x;
     const float n2 = 1.0f + a * a + b * b;
@@ -1180,13 +1184,15 @@ void Game::ClearPendingSubtitles() {
 
 bool Game::InViewNdc(const glm::vec3& position, float area) const {
     const Camera camera = player_.MakeCamera();
-    const glm::mat4 projection = glm::perspectiveRH_NO(camera.fov_y, 16.0f / 9.0f, camera.near_plane, 2000.0f);
-    const glm::vec4 clip = projection * camera.View() * glm::vec4(position, 1.0f);
-    if (clip.w == 0.0f) {
+    const glm::vec3 offset = position - camera.position;
+    const float depth = glm::dot(offset, camera.Forward());
+    if (!(depth > 0.0f && depth < camera.far_plane)) {
         return false;
     }
-    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-    return ndc.z > -1.0f && ndc.x > -area && ndc.x < area && ndc.y > -area && ndc.y < area;
+    const float tan_half = std::tan(camera.fov_y * 0.5f);
+    const float ndc_y = glm::dot(offset, camera.Up()) / (depth * tan_half);
+    const float ndc_x = glm::dot(offset, camera.Right()) / (depth * tan_half * (16.0f / 9.0f));
+    return ndc_x > -area && ndc_x < area && ndc_y > -area && ndc_y < area;
 }
 
 void Game::SetMirrorViewportBit(int bit, bool on) {
@@ -1890,7 +1896,7 @@ void Game::PrepareTheaterLoop(int index) {
     browse_arrived_ = index == 0;
     floor_.SetFloorLevel(loop.previous);
     floor_.ResetLoopCount();
-    if (index >= 9) nazo_.ForceClear(NazoId::XMark);
+    if (index >= 8) nazo_.ForceClear(NazoId::XMark);
     if (index >= 12) nazo_.ForceClear(NazoId::Hello);
     if (index >= 14) nazo_.ForceClear(NazoId::Peephole);
     nazo_.CancelPendingClearSound();
@@ -1906,7 +1912,7 @@ bool Game::ApplyBrowseReload() {
     nazo_.ResetAllStates();
     floor_.SetFloorLevel(loop.previous);
     floor_.ResetLoopCount();
-    if (browse_loop_ >= 9) nazo_.ForceClear(NazoId::XMark);
+    if (browse_loop_ >= 8) nazo_.ForceClear(NazoId::XMark);
     if (browse_loop_ >= 12) nazo_.ForceClear(NazoId::Hello);
     if (browse_loop_ >= 14) nazo_.ForceClear(NazoId::Peephole);
     nazo_.CancelPendingClearSound();

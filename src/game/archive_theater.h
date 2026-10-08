@@ -96,6 +96,8 @@ private:
     float yaw_ = 0.0f;
     float pitch_ = -0.1f;
     float distance_ = 2.5f;
+    glm::vec3 model_home_{0.0f};
+    float model_radius_ = 0.5f;
     float min_distance_ = 0.5f;
     float max_distance_ = 6.0f;
 };

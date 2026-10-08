@@ -68,12 +68,16 @@ struct ProgressTrace {
     }
 };
 inline fs::path Utf8Path(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+inline std::string PathUtf8(const fs::path& path) {
+    const std::u8string text = path.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
 
 inline fs::path Contained(const fs::path& root, const std::string& name) {
     const fs::path relative = Utf8Path(name);
     if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) throw std::runtime_error("Unsafe payload path.");
     for (const auto& part : relative) {
-        const std::string text = part.string();
+        const std::string text = PathUtf8(part);
         if (text == ".." || text == "." || text.find(':') != std::string::npos) throw std::runtime_error("Unsafe payload path.");
     }
     return root / relative;
@@ -153,13 +157,13 @@ inline GameFiles FindArchives(const fs::path& folder) {
             const auto size = it->file_size(error);
             if (!error && size >= best_size) { best = it->path(); best_size = size; }
         }
-        if (!best.empty()) found.notes.push_back(std::string(name) + " is named " + best.filename().string() + " in this release; installed as " + name);
+        if (!best.empty()) found.notes.push_back(std::string(name) + " is named " + PathUtf8(best.filename()) + " in this release; installed as " + name);
         return best;
     };
-    auto ext = [](const char* e) { return [e](const fs::path& p) { return Lower(p.extension().string()) == e; }; };
+    auto ext = [](const char* e) { return [e](const fs::path& p) { return Lower(PathUtf8(p.extension())) == e; }; };
     found.psarc = pick("chunk1.psarc", ext(".psarc"), IsPsarc);
     found.qar = pick("texture.qar", ext(".qar"), IsQar);
-    found.pathid = pick("pathid_list_ps4.bin", [](const fs::path& p) { return Lower(p.filename().string()).find("pathid_list") != std::string::npos; }, IsPathList);
+    found.pathid = pick("pathid_list_ps4.bin", [](const fs::path& p) { return Lower(PathUtf8(p.filename())).find("pathid_list") != std::string::npos; }, IsPathList);
     return found;
 }
 inline bool ConfirmPt(GameFiles& files) {
@@ -283,6 +287,54 @@ struct InstalledFile {
     std::string path;
     std::string sha256;
 };
+inline bool IsUserDataPath(std::string path) {
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const size_t slash = path.find('/');
+    std::string first = path.substr(0, slash);
+#ifdef _WIN32
+    while (!first.empty() && (first.back() == '.' || first.back() == ' ')) first.pop_back();
+#endif
+    return Lower(std::move(first)) == "data";
+}
+inline void ProbeWritableDirectory(const fs::path& dir, const std::string& unique_id, const std::string& description) {
+    std::error_code error;
+    if (fs::is_symlink(dir, error) || !fs::is_directory(dir, error))
+        throw std::runtime_error("The " + description + " must be a writable folder.");
+    const fs::path probe = dir / (".pt-write-probe-" + unique_id);
+    if (!fs::create_directory(probe, error) || error)
+        throw std::runtime_error("The " + description + " is not writable.");
+    try {
+        std::ofstream output(probe / "write-test", std::ios::binary | std::ios::trunc);
+        output.put('x');
+        output.flush();
+        if (!output) throw std::runtime_error("The " + description + " is not writable.");
+        output.close();
+        if (!output) throw std::runtime_error("The " + description + " is not writable.");
+        fs::remove_all(probe);
+    } catch (...) {
+        fs::remove_all(probe, error);
+        throw;
+    }
+}
+inline void EnsureDataDirectory(const fs::path& install, const std::string& unique_id,
+                                const std::function<void(const fs::path&)>& check_parents) {
+    const fs::path data = install / "data";
+    std::error_code error;
+    if (!fs::exists(data, error)) fs::create_directory(data, error);
+    if (error) throw std::runtime_error("Could not create the game's data folder.");
+    if (check_parents) check_parents(data);
+    ProbeWritableDirectory(data, unique_id, "game data folder");
+}
+inline void ValidateProgramFiles(const std::vector<InstalledFile>& files) {
+    for (const auto& file : files)
+        if (IsUserDataPath(file.path)) throw std::runtime_error("The installer payload cannot contain files under data/.");
+}
+inline void RequireProgramFiles(const std::vector<InstalledFile>& files, const std::vector<std::string>& required) {
+    ValidateProgramFiles(files);
+    for (const auto& path : required)
+        if (std::none_of(files.begin(), files.end(), [&](const InstalledFile& file) { return Lower(file.path) == Lower(path); }))
+            throw std::runtime_error("The installer payload is missing required runtime file " + path + ".");
+}
 inline uint64_t PayloadBytes(const unsigned char* data, size_t size) {
     Reader reader{data, size};
     if (reader.String(8) != "PTSETUP1") throw std::runtime_error("Invalid installer payload.");
@@ -322,7 +374,8 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
         reader.p += packed;
         reader.left -= packed;
         const fs::path path = Contained(root, name);
-        const std::string folder = path.parent_path() == root ? "program files" : Utf8Path(name).begin()->string();
+        if (IsUserDataPath(name)) throw std::runtime_error("The installer payload cannot contain files under data/.");
+        const std::string folder = path.parent_path() == root ? "program files" : PathUtf8(*Utf8Path(name).begin());
         if (folder != group) {
             group = folder;
             Report("Extracting " + group + "...");
@@ -341,7 +394,7 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
             if (!file) throw std::runtime_error("Could not write installation files.");
         }
         if (hash_file(path) != digest) throw std::runtime_error("Installer payload integrity check failed.");
-        written.push_back({Utf8Path(name).generic_string(), digest});
+        written.push_back({PathUtf8(Utf8Path(name)), digest});
     }
     if (reader.left) throw std::runtime_error("Unexpected payload data.");
     return written;
@@ -388,7 +441,7 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
             if (line.starts_with("file=") && line.size() > 5 + 65) {
                 InstalledFile file{line.substr(5 + 65), line.substr(5, 64)};
                 Contained(dir, file.path);
-                install.files.push_back(std::move(file));
+                if (!IsUserDataPath(file.path)) install.files.push_back(std::move(file));
             }
         }
         return install;
@@ -413,6 +466,9 @@ struct SwapResult {
 };
 inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest, const std::vector<InstalledFile>& files,
                                    const std::vector<std::string>& extra, const ExistingInstall& old, const fs::path& backup, int fail_at = -1) {
+    ValidateProgramFiles(files);
+    for (const auto& path : extra)
+        if (IsUserDataPath(path)) throw std::runtime_error("The installer cannot replace files under data/.");
     struct Step {
         std::string path;
         bool placed;
@@ -456,7 +512,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
             std::error_code error;
             for (fs::recursive_directory_iterator it(dest, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error)) {
                 if (!it->is_regular_file(error)) continue;
-                const std::string path = fs::relative(it->path(), dest).generic_string();
+                const std::string path = PathUtf8(fs::relative(it->path(), dest));
                 if (KnownProgramFile(path) && !shipped(path)) obsolete.push_back(path);
             }
         }
@@ -487,6 +543,7 @@ struct InstallSteps {
     std::function<void()> verify_integrity;
     std::function<uint64_t()> payload_bytes;
     std::function<std::vector<InstalledFile>(const fs::path&)> unpack;
+    std::function<void(const std::vector<InstalledFile>&)> validate_runtime;
     std::function<void(const fs::path&, const fs::path&)> extract;
     std::function<void(const fs::path&)> shortcut;
 };
@@ -516,6 +573,11 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
     Report("Verifying the setup file...");
     steps.verify_integrity();
     fs::create_directories(parent);
+    ProbeWritableDirectory(parent, steps.unique_id, "installation parent folder");
+    if (update) {
+        ProbeWritableDirectory(destination, steps.unique_id, "existing installation folder");
+        EnsureDataDirectory(destination, steps.unique_id, steps.check_parents);
+    }
     if (fs::space(parent).available < (need_archives ? 3ull : 1ull) * 1024 * 1024 * 1024)
         throw std::runtime_error(need_archives ? "At least 3 GB free space is required." : "At least 1 GB free space is required.");
     const fs::path staging = parent / ((update ? ".pt-update-" : ".pt-install-") + steps.unique_id);
@@ -524,7 +586,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
     auto remove_ours = [&](const fs::path& dir) {
         std::error_code error;
         if (fs::exists(dir, error) && dir.parent_path() == parent && !fs::is_symlink(dir, error) &&
-            (dir.filename().string().starts_with(".pt-install-") || dir.filename().string().starts_with(".pt-update-")))
+            (PathUtf8(dir.filename()).starts_with(".pt-install-") || PathUtf8(dir.filename()).starts_with(".pt-update-")))
             fs::remove_all(dir, error);
     };
     try {
@@ -541,6 +603,9 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         progress.Begin(total);
         Report("Preparing native PC runtime...");
         const std::vector<InstalledFile> files = steps.unpack(staging);
+        ValidateProgramFiles(files);
+        if (steps.validate_runtime) steps.validate_runtime(files);
+        if (!update) EnsureDataDirectory(staging, steps.unique_id, steps.check_parents);
         std::vector<std::string> extra;
         if (source) {
             if (source->kind == SourceKind::Package) {
@@ -574,7 +639,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         try {
             outcome.swap = SwapProgramFiles(staging, destination, files, extra, old, backup);
         } catch (const fs::filesystem_error& e) {
-            throw std::runtime_error("Could not replace " + e.path1().filename().string() +
+            throw std::runtime_error("Could not replace " + PathUtf8(e.path1().filename()) +
                                      ": it is in use (is P.T. still running?). Close it and try again. Nothing was changed.");
         }
         remove_ours(backup);
@@ -621,12 +686,21 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         write(dest / "CUSA01127" / "chunk1.psarc", "PSAR old archive");
         write(dest / "CUSA01127" / "texture.qar", qar);
         write(dest / "pt.ini", "player settings");
+        write(dest / "data" / "pt.ini", "user folder settings");
+        write(dest / "data" / "pt.log", "user folder log");
+        write(dest / "data" / "saves" / "progress.dat", "user save");
         write(dest / "mods" / "mine" / "init.lua", "player mod");
         write(dest / "reshade.dll", "player dll");
         if (manifest)
             WriteManifest(dest, "0.0.9", {{kGameExe, std::string(64, '0')}, {"shaders/a.spv", std::string(64, '0')},
                                           {"shaders/gone.spv", std::string(64, '0')}, {"nvngx_dlss.dll", std::string(64, '0')},
-                                          {"voice/cmudict-en-us.dict", std::string(64, '0')}, {"voice/en-us/mdef", std::string(64, '0')}});
+                                          {"voice/cmudict-en-us.dict", std::string(64, '0')}, {"voice/en-us/mdef", std::string(64, '0')},
+                                          {"data/pt.ini", std::string(64, '0')}
+#ifdef _WIN32
+                                          , {"data./pt.log", std::string(64, '0')}, {"data /saves/progress.dat", std::string(64, '0')},
+                                          {"DATA\\pt.ini", std::string(64, '0')}
+#endif
+            });
     };
     auto new_staging = [&](const fs::path& staging) {
         write(staging / kGameExe, "new exe");
@@ -650,8 +724,12 @@ inline std::string SelfTestUpdate(const fs::path& root) {
                 fs::exists(dest / "voice" / "cmudict-en-us.dict", error) || fs::exists(dest / "voice" / "en-us" / "mdef", error))
                 failures += " obsolete kept" + label;
             if (read(dest / "pt.ini") != "player settings" || read(dest / "mods" / "mine" / "init.lua") != "player mod" ||
-                read(dest / "reshade.dll") != "player dll" || read(dest / "CUSA01127" / "chunk1.psarc") != "PSAR old archive")
+                read(dest / "reshade.dll") != "player dll" || read(dest / "CUSA01127" / "chunk1.psarc") != "PSAR old archive" ||
+                read(dest / "data" / "pt.ini") != "user folder settings" || read(dest / "data" / "pt.log") != "user folder log" ||
+                read(dest / "data" / "saves" / "progress.dat") != "user save")
                 failures += " player files" + label;
+            if (std::any_of(old.files.begin(), old.files.end(), [](const InstalledFile& file) { return IsUserDataPath(file.path); }))
+                failures += " data-classified-as-program" + label;
             if (swap.replaced != (manifest ? 3 : 2) || swap.added != (manifest ? 1 : 2) || swap.removed != 4) failures += " counts" + label;
             if (InspectInstall(dest).version != "0.2.0") failures += " manifest" + label;
         } catch (const std::exception& e) {
@@ -664,7 +742,7 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         old_install(dest, true);
         std::vector<std::pair<std::string, std::string>> before;
         for (const auto& entry : fs::recursive_directory_iterator(dest))
-            if (entry.is_regular_file()) before.push_back({fs::relative(entry.path(), dest).generic_string(), read(entry.path())});
+            if (entry.is_regular_file()) before.push_back({PathUtf8(fs::relative(entry.path(), dest)), read(entry.path())});
         const auto files = new_staging(staging);
         bool thrown = false;
         try {
@@ -674,7 +752,7 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         }
         std::vector<std::pair<std::string, std::string>> after;
         for (const auto& entry : fs::recursive_directory_iterator(dest))
-            if (entry.is_regular_file()) after.push_back({fs::relative(entry.path(), dest).generic_string(), read(entry.path())});
+            if (entry.is_regular_file()) after.push_back({PathUtf8(fs::relative(entry.path(), dest)), read(entry.path())});
         std::sort(before.begin(), before.end());
         std::sort(after.begin(), after.end());
         if (!thrown || before != after) failures += " rollback at step " + std::to_string(fail_at);
@@ -685,7 +763,130 @@ inline std::string SelfTestUpdate(const fs::path& root) {
     try { InspectInstall(root / "other"); } catch (...) { refused = true; }
     if (!refused) failures += " other-folder-accepted";
     if (InspectInstall(root / "nothing").found) failures += " new-folder";
+    {
+        const fs::path dest = root / "reserved-data" / "PT", staging = root / "reserved-data" / ".pt-update-t",
+                       backup = root / "reserved-data" / ".pt-update-old-t";
+        old_install(dest, true);
+        write(staging / "data" / "pt.log", "payload overwrite");
+        bool rejected_data = false;
+        try {
+            SwapProgramFiles(staging, dest, {{"data/pt.log", ""}}, {}, InspectInstall(dest), backup);
+        } catch (...) {
+            rejected_data = true;
+        }
+        if (!rejected_data || read(dest / "data" / "pt.log") != "user folder log") failures += " payload-data-overwrite-accepted";
+#ifdef _WIN32
+        for (const std::string& alias : {"data./pt.log", "data /pt.log", "DATA\\pt.log"}) {
+            bool rejected_alias = false;
+            try {
+                SwapProgramFiles(staging, dest, {{alias, ""}}, {}, InspectInstall(dest), backup);
+            } catch (...) {
+                rejected_alias = true;
+            }
+            if (!rejected_alias || read(dest / "data" / "pt.log") != "user folder log")
+                failures += " payload-data-alias-overwrite-accepted";
+        }
+        for (const std::string& alias : {"DATA\\pt.log", "data./pt.log", "data /pt.log"})
+            if (!IsUserDataPath(alias)) failures += " data-alias-not-reserved";
+#endif
+    }
+    {
+        const fs::path writable = root / "write-probe";
+        fs::create_directories(writable);
+        try {
+            ProbeWritableDirectory(writable, "selftest", "test folder");
+            if (fs::exists(writable / ".pt-write-probe-selftest")) failures += " write-probe-left-files";
+        } catch (const std::exception& e) {
+            failures += std::string(" write-probe-writable-folder: ") + e.what();
+        }
+        write(root / "not-a-folder", "x");
+        bool refused_probe = false;
+        try { ProbeWritableDirectory(root / "not-a-folder", "selftest", "test folder"); } catch (...) { refused_probe = true; }
+        if (!refused_probe) failures += " write-probe-accepted-file";
+        const fs::path custom_install = root / "custom install location" / "PT";
+        fs::create_directories(custom_install);
+        auto no_links = [](const fs::path&) {};
+        try {
+            EnsureDataDirectory(custom_install, "custom-selftest", no_links);
+            write(custom_install / "data" / "pt.log", "player log");
+            EnsureDataDirectory(custom_install, "custom-selftest-2", no_links);
+            if (read(custom_install / "data" / "pt.log") != "player log") failures += " custom-data-not-preserved";
+        } catch (const std::exception& e) {
+            failures += std::string(" custom-data-directory: ") + e.what();
+        }
+    }
+    {
+        const std::vector<InstalledFile> complete{{"amd_fidelityfx_vk.dll", ""}, {"nvngx_dlss.dll", ""}, {"libxess.dll", ""}};
+        const std::vector<std::string> required{"amd_fidelityfx_vk.dll", "nvngx_dlss.dll", "libxess.dll"};
+        try { RequireProgramFiles(complete, required); } catch (...) { failures += " complete-upscalers-rejected"; }
+        bool rejected_missing = false;
+        try { RequireProgramFiles({{"amd_fidelityfx_vk.dll", ""}, {"libxess.dll", ""}}, required); } catch (...) { rejected_missing = true; }
+        if (!rejected_missing) failures += " missing-upscaler-accepted";
+    }
     if (UpdateQuestion(InspectInstall(root / "with" / "PT"), "0.2.0").find("up to date") == std::string::npos) failures += " same-version-question";
+    return failures;
+}
+
+inline std::string SelfTestUnicodePaths(const fs::path& root) {
+    auto utf8 = [](const char8_t* value) {
+        const auto* bytes = reinterpret_cast<const char*>(value);
+        return std::string(bytes, bytes + std::char_traits<char8_t>::length(value));
+    };
+    const fs::path base = root / Utf8Path(utf8(u8"Š İ 日本語 😀"));
+    const fs::path game = base / Utf8Path(utf8(u8"dump-日本語"));
+    const fs::path dest = base / Utf8Path(utf8(u8"install-Š-İ-日本語-😀"));
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    std::string qar(0x40, '\0');
+    qar[0x40 - 0x24 + 0x16] = 'a';
+    qar[0x40 - 0x24 + 0x17] = 'q';
+    const fs::path psarc = game / Utf8Path(utf8(u8"chunk-日本語-😀.PSARC"));
+    const fs::path qar_file = game / Utf8Path(utf8(u8"texture-Š.qar"));
+    const fs::path pathid = game / Utf8Path(utf8(u8"pathid_list-İ-日本語.bin"));
+    write(psarc, "PSAR" + std::string(60, '\0'));
+    write(qar_file, qar);
+    write(pathid, "/Assets/sh/level/pt14_hallway/" + std::string(40, 'x'));
+
+    std::string failures;
+    try {
+        const Source source = ResolveSource(game);
+        if (source.kind != SourceKind::Folder || source.path != game || source.files.psarc != psarc || source.files.qar != qar_file || source.files.pathid != pathid)
+            failures += " source";
+    } catch (const std::exception& e) {
+        failures += std::string(" source:") + e.what();
+    }
+
+    try {
+        const fs::path live = dest / "PT";
+        const fs::path stage = dest / ".pt-update-test";
+        const fs::path backup = dest / ".pt-update-old-test";
+        write(live / kGameExe, "old executable");
+        const std::string unicode_payload_path = utf8(u8"voice/日本語😀/dictionary.bin");
+        WriteManifest(live, "0.1.0", {{kGameExe, std::string(64, '0')}, {unicode_payload_path, std::string(64, '2')}});
+        const auto old = InspectInstall(live);
+        if (!old.found || old.version != "0.1.0" || old.files.size() != 2 || old.files.back().path != unicode_payload_path) failures += " inspect";
+        write(stage / kGameExe, "new executable");
+        write(stage / kManifestName, "pt-port-install 1\nversion=0.2.0\n");
+        const std::vector<InstalledFile> files{{kGameExe, std::string(64, '1')}};
+        SwapProgramFiles(stage, live, files, {kManifestName}, old, backup);
+        std::ifstream installed(live / kGameExe, std::ios::binary);
+        const std::string installed_text((std::istreambuf_iterator<char>(installed)), {});
+        if (installed_text != "new executable") failures += " install";
+
+        fs::remove_all(stage);
+        write(stage / kGameExe, "rollback executable");
+        write(stage / kManifestName, "pt-port-install 1\nversion=0.3.0\n");
+        bool failed = false;
+        try { SwapProgramFiles(stage, live, files, {kManifestName}, InspectInstall(live), backup, 1); }
+        catch (...) { failed = true; }
+        std::ifstream restored(live / kGameExe, std::ios::binary);
+        const std::string restored_text((std::istreambuf_iterator<char>(restored)), {});
+        if (!failed || restored_text != "new executable") failures += " rollback";
+    } catch (const std::exception& e) {
+        failures += std::string(" install-update:") + e.what();
+    }
     return failures;
 }
 }

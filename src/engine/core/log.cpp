@@ -1,4 +1,5 @@
 #include "engine/core/log.h"
+#include "engine/platform/os.h"
 
 #include <chrono>
 #include <cstdio>
@@ -28,12 +29,12 @@ const char* LevelTag(LogLevel level) {
 
 }
 
-void LogSetFile(const char* path) {
+void LogSetFile(const std::filesystem::path& path) {
     std::lock_guard lock(g_log_mutex);
     if (g_log_file) {
         std::fclose(g_log_file);
     }
-    g_log_file = std::fopen(path, "w");
+    g_log_file = os::OpenFile(path, "w");
 }
 
 void LogWrite(LogLevel level, std::string_view text) {

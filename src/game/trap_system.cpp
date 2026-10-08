@@ -83,6 +83,10 @@ bool TrapSystem::ButtonPressed(const std::string& button) const {
     return true;
 }
 
+bool TrapSystem::GougePressed() const {
+    return (game_.GetPlayer().FramePressedButtons() & (kPadGouge | kPadAction)) != 0;
+}
+
 bool TrapSystem::TargetInView(const Context& ctx, const fox2::Entity* locator, float area, glm::vec3* position) const {
     if (!locator) {
         return false;
@@ -135,7 +139,7 @@ bool TrapSystem::Check(const Context& ctx, const TrapCallback& callback) {
             if(exec.entity && exec.class_name == "ShTrapExecNazoCallbackDataElement" && f.GetString(*exec.entity,"checkName") == "XMark")gouge=true;
         }
         auto in_view = [&]() { return TargetInView(ctx, locator, area, nullptr) &&
-            (gouge && button == "Action" ? (player.FramePressedButtons() & kPadGouge) != 0 : ButtonPressed(button)); };
+            (gouge && button == "Action" ? GougePressed() : ButtonPressed(button)); };
         if (!f.GetBool(e, "isOutOfViewAfter")) {
             return in_view();
         }
@@ -272,7 +276,7 @@ int TrapSystem::ExecNazo(const Context& ctx, const fox2::Entity& e) {
     glm::vec3 position(0.0f);
     if (!f.GetBool(e, "isOutOfViewAfter")) {
         const bool gouge = f.GetString(e, "checkName") == "XMark";
-        if (!(gouge ? (game_.GetPlayer().FramePressedButtons() & kPadGouge) != 0 : ButtonPressed(f.GetString(e, "button")))) {
+        if (!(gouge ? GougePressed() : ButtonPressed(f.GetString(e, "button")))) {
             return 0;
         }
         if (!TargetInView(ctx, locator, area, &position)) {
@@ -281,6 +285,16 @@ int TrapSystem::ExecNazo(const Context& ctx, const fox2::Entity& e) {
     } else {
         ElementState& state = elements_[{ctx.stage->id, &e}];
         const bool now = TargetInView(ctx, locator, area, &position);
+        if (debug_log && now != state.last_logged) {
+            state.last_logged = now;
+            const glm::vec3 eye = game_.GetCamera().position;
+            const Camera view = game_.GetPlayer().MakeCamera();
+            LogInfo("trap: {} target {} view (flag {}) feet ({:.2f} {:.2f} {:.2f}) eye ({:.2f} {:.2f} {:.2f}) target ({:.2f} {:.2f} {:.2f}) depth {:.2f} (game camera forward ({:.2f} {:.2f} {:.2f}), player camera ({:.2f} {:.2f} {:.2f}))",
+                    f.GetString(e, "checkName"), now ? "enters" : "leaves", TrapFlagString(ctx.flag), game_.GetPlayer().Feet().x,
+                    game_.GetPlayer().Feet().y, game_.GetPlayer().Feet().z, eye.x, eye.y, eye.z, position.x, position.y, position.z,
+                    glm::dot(position - view.position, view.Forward()), game_.GetCamera().Forward().x, game_.GetCamera().Forward().y,
+                    game_.GetCamera().Forward().z, view.position.x, view.position.y, view.position.z);
+        }
         if (!state.was_in_view) {
             if (now) {
                 state.was_in_view = true;

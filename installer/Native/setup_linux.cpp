@@ -294,6 +294,7 @@ int main(int argc, char** argv) {
             std::error_code error;
             fs::remove_all(root, error);
             failures += SelfTestUpdate(root / "update");
+            failures += SelfTestUnicodePaths(root);
             fs::remove_all(root, error);
             if (pt::update::CompareVersions("0.10.0", "0.9.2") <= 0) failures += " version-order";
             if (!failures.empty()) throw std::runtime_error("Self test failed:" + failures);

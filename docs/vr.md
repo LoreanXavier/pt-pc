@@ -31,6 +31,11 @@ hardware. Expect problems those cannot show. It is off by default, and with it o
 The flashlight and the turning can also be changed on the Extras > VR page while playing. A first run on real hardware
 should start at `resolution_scale = 0.7` and the Low preset, and read `pt.log` for `vr:` lines.
 
+The Extras > VR page also includes **Height** and **World scale**. Height shifts the tracked viewpoint without moving the
+player's in-game position. World scale adjusts tracked translation from 50% to 200% (100% by default) for the head,
+eyes and controllers; rotations and game geometry are unchanged. A higher value makes the world feel smaller. These new
+controls have unit and headless coverage, but have not yet been checked on a physical headset.
+
 ## What it does
 
 Each frame the game ticks once and the scene is drawn twice, one full render per eye, from the same game state. The

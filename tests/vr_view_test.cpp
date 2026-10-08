@@ -1,8 +1,11 @@
 #include <cstdio>
+#include <cmath>
+#include <limits>
 #include <random>
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "game/vr_play.h"
 #include "engine/xr/xr_view.h"
 
 namespace {
@@ -21,6 +24,37 @@ float Distance(const glm::vec3& a, const glm::vec3& b) { return glm::length(a - 
 }
 
 int main() {
+    const glm::vec3 logic_position(1.0f, 2.0f, 3.0f);
+    const glm::vec3 feet(1.0f, 0.0f, 3.0f);
+    const glm::vec3 eye(1.0f, 1.6f, 3.0f);
+    const glm::vec3 original_anchor = logic_position + (feet - eye) + glm::vec3(0.0f, 1.6f, 0.0f);
+    const glm::vec3 default_anchor = pt::game::VrEyeAnchor(logic_position, feet, eye, 1.6f, 0.0f);
+    Expect(Distance(default_anchor, original_anchor) < 1e-6f, "zero VR height offset preserves anchor");
+    const glm::vec3 raised_anchor = pt::game::VrEyeAnchor(logic_position, feet, eye, 1.6f, 0.25f);
+    Expect(std::abs(raised_anchor.y - default_anchor.y - 0.25f) < 1e-6f, "VR height offset raises anchor");
+    Expect(std::abs(pt::game::ClampVrHeightOffset(-2.0f) + 0.5f) < 1e-6f &&
+               std::abs(pt::game::ClampVrHeightOffset(2.0f) - 0.5f) < 1e-6f &&
+               pt::game::ClampVrHeightOffset(std::numeric_limits<float>::quiet_NaN()) == 0.0f,
+           "VR height offset clamps to supported range");
+    const glm::vec3 tracked_head_offset(0.1f, 0.2f, -0.3f);
+    Expect(Distance(pt::game::ScaleVrTrackedOffset(tracked_head_offset, 1.0f), tracked_head_offset) < 1e-6f,
+           "default VR world scale preserves tracked translation");
+    Expect(Distance(pt::game::ScaleVrTrackedOffset(tracked_head_offset, 2.0f), tracked_head_offset * 2.0f) < 1e-6f &&
+               std::abs(pt::game::ScaleVrTrackedOffset(tracked_head_offset, 2.0f).y - tracked_head_offset.y * 2.0f) < 1e-6f,
+           "VR world scale affects vertical and horizontal head translation");
+    const glm::vec3 eye_relative_offset(-0.032f, 0.0f, 0.0f);
+    const glm::vec3 mapped_eye = pt::game::MapVrEyeOffset(tracked_head_offset, eye_relative_offset, 2.0f);
+    Expect(Distance(mapped_eye, tracked_head_offset * 2.0f + eye_relative_offset) < 1e-6f,
+           "world scale keeps eye offset relative to the head unscaled");
+    const glm::vec3 mapped_left_eye = pt::game::MapVrEyeOffset(tracked_head_offset, glm::vec3(-0.032f, 0.0f, 0.0f), 2.0f);
+    const glm::vec3 mapped_right_eye = pt::game::MapVrEyeOffset(tracked_head_offset, glm::vec3(0.032f, 0.0f, 0.0f), 2.0f);
+    Expect(std::abs(Distance(mapped_left_eye, mapped_right_eye) - 0.064f) < 1e-6f,
+           "world scale preserves 64 mm interpupillary distance");
+    Expect(std::abs(pt::game::ClampVrWorldScale(0.1f) - 0.5f) < 1e-6f &&
+               std::abs(pt::game::ClampVrWorldScale(5.0f) - 2.0f) < 1e-6f &&
+               pt::game::ClampVrWorldScale(std::numeric_limits<float>::quiet_NaN()) == 1.0f,
+           "VR world scale clamps to supported range");
+
     std::mt19937 rng(7);
     std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
     float worst = 0.0f;
@@ -73,6 +107,11 @@ int main() {
     Expect(glm::length(rig.Offset(head_position)) < 1e-6f, "recentre position");
     const glm::vec3 moved(0.3f, 0.0f, 0.1f);
     const glm::vec3 before = rig.Offset(moved);
+    const glm::vec3 moved_up = moved + glm::vec3(0.0f, 0.2f, 0.0f);
+    const glm::vec3 tracked_up = pt::game::ScaleVrTrackedOffset(rig.Offset(moved_up), 1.0f);
+    const glm::vec3 tracked_level = pt::game::ScaleVrTrackedOffset(rig.Offset(moved), 1.0f);
+    Expect(std::abs((tracked_up.y - tracked_level.y) - 0.2f) < 1e-5f,
+           "tracked head height reaches the rendered eye position");
     rig.Turn(0.5236f, moved);
     Expect(Distance(rig.Offset(moved), before) < 1e-5f, "turn keeps the head", Distance(rig.Offset(moved), before));
     const pt::xr::Angles turned = pt::xr::AnglesOf(rig.ToWorld(head));

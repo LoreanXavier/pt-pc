@@ -142,6 +142,7 @@ public:
     bool FreeView() const { return detached_view_; }
     void SetThirdPerson(bool on);
     bool ThirdPerson() const { return third_person_; }
+    bool ThirdPersonCameraActive() const { return third_person_ && third_person_primed_ && !detached_view_; }
     Camera ViewCamera() const;
     float ThirdPersonWeight() const { return third_person_weight_; }
     Camera ThirdPersonTurn(const Camera& before, const Camera& after) const;

@@ -324,6 +324,7 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     const float k = std::pow(std::clamp(std::sqrt(x * x + y * y), 0.0f, 1.0f), kLookExponent);
     x *= k * sx;
     y *= k * sy;
+    const float gamepad_sensitivity = std::clamp(input.gamepad_sensitivity, 0.25f, 4.0f);
     const float focal = params.focal_length * zoom;
     const float scale = focal > 0.0f ? kLookFocal / focal : 1.0f;
     const float step = std::min(dt, kLookFrame);
@@ -332,8 +333,8 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     for (int i = 0; i < count; ++i) {
         look_velocity_.y = LookVelocity(look_velocity_.y, -x, glm::radians(params.rot_vel_max_y) * scale, step);
         look_velocity_.x = LookVelocity(look_velocity_.x, y, glm::radians(params.rot_vel_max_x) * scale, step);
-        target_yaw += look_velocity_.y * step;
-        const float next_pitch = target_pitch - look_velocity_.x * step;
+        target_yaw += look_velocity_.y * step * gamepad_sensitivity;
+        const float next_pitch = target_pitch - look_velocity_.x * step * gamepad_sensitivity;
         target_pitch = ClampPitch(next_pitch);
         if (target_pitch != next_pitch) {
             look_velocity_.x = 0.0f;

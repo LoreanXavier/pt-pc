@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 union SDL_Event;
@@ -65,8 +66,10 @@ std::span<const KeyBinding> KeyBindings();
 const KeyBinding* FirstBinding(KeyAction action, bool keys_only = false);
 std::string KeyBindingName(const KeyBinding& binding);
 
-enum class PromptDevice : uint8_t { Keyboard, PlayStation, Xbox, Nintendo };
+enum class PromptDevice : uint8_t { Keyboard, PlayStation, Xbox, Nintendo, Steam };
 const char* PromptDeviceName(PromptDevice device);
+
+bool IsSteamGamepadId(uint16_t vendor, uint16_t product);
 
 struct PromptStyle {
     PromptDevice device = PromptDevice::Keyboard;
@@ -93,18 +96,22 @@ struct InputState {
     bool click = false;
     bool right_click = false;
     bool gouge_pressed = false;
+    bool voice_keyword_pressed = false;
     bool house_pressed = false;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     PromptStyle prompts;
     bool vr_look = false;
     glm::vec2 vr_look_angles{0.0f};
+    float gamepad_sensitivity = 1.0f;
 };
 
 struct InputSettings {
     float mouse_sensitivity = 0.0015f;
+    float gamepad_sensitivity = 1.0f;
     float stick_dead_zone = 26.0f / 255.0f;
     bool rumble = true;
+    bool trigger_rumble = false;
 };
 
 struct GamepadInfo {
@@ -135,6 +142,16 @@ uint32_t MouseButtonFromName(std::string_view name);
 
 enum class MouseUse { None, Look, Menu };
 
+class KeyPressLatch {
+public:
+    void ProcessEvent(const SDL_Event& event, uint32_t scancode);
+    bool Consume() { return std::exchange(pressed_, false); }
+    void Discard() { pressed_ = false; }
+
+private:
+    bool pressed_ = false;
+};
+
 class InputDevice {
 public:
     void Init();
@@ -142,8 +159,10 @@ public:
     void ProcessEvent(const SDL_Event& event);
     InputState Poll(bool keyboard_free, MouseUse mouse, bool pads_free = true);
     void SetRumble(uint8_t large_motor, uint8_t small_motor);
+    void SetTriggerRumble(uint8_t left, uint8_t right);
     size_t GamepadCount() const { return pads_.size(); }
     uint32_t RumblePad() const { return rumble_pad_; }
+    SDL_Gamepad* LastUsedGamepad() const;
     const PromptStyle& Prompts() const { return prompts_; }
     void InjectKey(uint32_t scancode, bool down);
     void InjectMouseButton(uint8_t button, bool down);
@@ -158,6 +177,8 @@ private:
         uint64_t last_used = 0;
         PromptStyle style;
         uint32_t previous_gouge = 0;
+        bool previous_voice_chord = false;
+        bool trigger_rumble_supported = false;
     };
 
     void Open(uint32_t id);
@@ -190,12 +211,16 @@ private:
     PromptStyle prompts_;
     uint32_t prompt_pad_ = 0;
     float mouse_travel_ = 0.0f;
+    bool key_pressed_since_poll_ = false;
     MouseUse last_mouse_use_ = MouseUse::None;
     int mouse_settle_ = 0;
     uint32_t rumble_pad_ = 0;
     uint32_t rumble_logged_pad_ = 0;
     uint8_t rumble_want_[2] = {0, 0};
     uint8_t rumble_sent_[2] = {0, 0};
+    uint8_t trigger_rumble_want_[2] = {0, 0};
+    uint16_t trigger_rumble_sent_[2] = {0, 0};
+    uint64_t trigger_rumble_sent_at_ = 0;
     uint64_t rumble_sent_at_ = 0;
 };
 

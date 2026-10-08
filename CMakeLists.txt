@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.28)
+# macOS on Apple silicon (docs/macos.md): <format> needs 13.3, every Apple silicon Mac runs 14. Left empty (a build folder
+# configured before this line) the build would run only on the macOS it was built on; other hosts do not get the cache entry
+if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Oldest macOS the build runs on" FORCE)
+endif()
 project(pt_port LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -22,19 +27,18 @@ include(cmake/Dependencies.cmake)
 file(GLOB_RECURSE PT_ENGINE_SOURCES CONFIGURE_DEPENDS src/engine/*.cpp src/engine/*.h)
 file(GLOB_RECURSE PT_GAME_SOURCES CONFIGURE_DEPENDS src/game/*.cpp src/game/*.h src/decomp/*.cpp src/decomp/*.h)
 
-# The release version and the release manifest the game and the installer check for a newer version (docs/updates.md).
-# The manifest is latest.json attached to the latest GitHub release (tools/ci/release.py writes it); "releases/latest/download"
-# redirects to the newest release's asset, so the address never changes.
+# The release version and metadata endpoint shared by the game and installers (docs/updates.md).
+# GitHub supplies release metadata and platform asset URLs; no separate JSON release asset is needed.
 # This build's version: raised here for each release. tools/ci/release.py --version sets it through the environment at build
 # time (cmake/version.cmake); PT_VERSION_OVERRIDE sets it for one build folder.
 set(PT_VERSION_OVERRIDE "" CACHE STRING "Version for this build folder instead of the one in CMakeLists.txt")
-set(PT_VERSION "1.0.1")
+set(PT_VERSION "1.0.2")
 if(PT_VERSION_OVERRIDE)
   set(PT_VERSION "${PT_VERSION_OVERRIDE}")
 endif()
 # not a cache variable: an old build folder must not keep a stale address (PT_UPDATE_MANIFEST_URL_OVERRIDE sets one for a build folder)
-set(PT_UPDATE_MANIFEST_URL_OVERRIDE "" CACHE STRING "Release manifest for the update check, instead of the GitHub release")
-set(PT_UPDATE_MANIFEST_URL "https://github.com/LoreanXavier/pt-pc/releases/latest/download/latest.json")
+set(PT_UPDATE_MANIFEST_URL_OVERRIDE "" CACHE STRING "Update metadata endpoint, instead of the GitHub Releases API")
+set(PT_UPDATE_MANIFEST_URL "https://api.github.com/repos/LoreanXavier/pt-pc/releases/latest")
 if(PT_UPDATE_MANIFEST_URL_OVERRIDE)
   set(PT_UPDATE_MANIFEST_URL "${PT_UPDATE_MANIFEST_URL_OVERRIDE}")
 endif()
@@ -74,7 +78,14 @@ if(MSVC)
   target_compile_options(pt_engine PRIVATE /W3 /utf-8 /EHsc)
 endif()
 
+if(WIN32)
+  enable_language(RC)
+  configure_file(assets/pt.rc.in "${CMAKE_BINARY_DIR}/pt.rc" @ONLY)
+endif()
 add_executable(pt WIN32 src/main.cpp)
+if(WIN32)
+  target_sources(pt PRIVATE "${CMAKE_BINARY_DIR}/pt.rc")
+endif()
 target_link_libraries(pt PRIVATE pt_engine)
 if(WIN32)
   target_link_libraries(pt PRIVATE dbghelp ole32 uuid)
@@ -89,6 +100,9 @@ add_dependencies(pt pt_build_id)
 # (PT_RELEASE_LOCKS, docs/gameplay.md loop browser); pt (developer) keeps every entry open. tools/ci/release.py
 # builds it and tools/package.py --exe ships it as pt.exe
 add_executable(pt_release WIN32 EXCLUDE_FROM_ALL src/main.cpp)
+if(WIN32)
+  target_sources(pt_release PRIVATE "${CMAKE_BINARY_DIR}/pt.rc")
+endif()
 target_compile_definitions(pt_release PRIVATE PT_RELEASE_LOCKS=1)
 target_include_directories(pt_release PRIVATE "${CMAKE_BINARY_DIR}/generated")
 add_dependencies(pt_release pt_build_id)
@@ -98,6 +112,8 @@ if(WIN32)
 endif()
 add_executable(pt_gouge_input_test tests/gouge_input_test.cpp)
 target_link_libraries(pt_gouge_input_test PRIVATE pt_engine)
+add_executable(pt_outro_input_test tests/outro_input_test.cpp)
+target_link_libraries(pt_outro_input_test PRIVATE pt_engine)
 set(PT_SETUP_PAYLOAD "${CMAKE_SOURCE_DIR}/dump/installer-20261002/native/payload.bin" CACHE FILEPATH "Installer payload")
 # the setup's product strings (installer/Native/setup.rc.in); the setup checks its own integrity stamp (docs/installer.md)
 set(PT_SETUP_PRODUCT "P.T. PC Port")
@@ -147,6 +163,9 @@ endif()
 include(cmake/Upscalers.cmake)
 include(cmake/EnhancedTextures.cmake)
 include(cmake/OpenXR.cmake)
+if(APPLE)
+  include(cmake/MacOS.cmake)
+endif()
 list(APPEND PT_UPSCALER_RUNTIME_FILES ${PT_OPENXR_RUNTIME_FILES})
 list(APPEND PT_UPSCALER_NOTICES ${PT_OPENXR_NOTICES})
 foreach(file ${PT_UPSCALER_RUNTIME_FILES})
@@ -163,19 +182,24 @@ endforeach()
 file(GLOB PT_SHADERS CONFIGURE_DEPENDS shaders/*.vert shaders/*.frag shaders/*.comp)
 set(PT_SPIRV_DIR ${CMAKE_BINARY_DIR}/shaders)
 set(PT_SPIRV_OUTPUTS)
+set(PT_GLSLC_DEFINES)
+if(APPLE)
+  # MoltenVK: no comparison sampler on the images[] array (shaders/lighting.glsl ShadowTap, docs/macos.md)
+  list(APPEND PT_GLSLC_DEFINES -DPT_SHADOW_GATHER)
+endif()
 foreach(shader ${PT_SHADERS})
   get_filename_component(name ${shader} NAME)
   set(out ${PT_SPIRV_DIR}/${name}.spv)
   add_custom_command(OUTPUT ${out}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PT_SPIRV_DIR}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O -MD -MF ${out}.d ${shader} -o ${out}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${PT_GLSLC_DEFINES} -MD -MF ${out}.d ${shader} -o ${out}
     DEPENDS ${shader} DEPFILE ${out}.d VERBATIM)
   list(APPEND PT_SPIRV_OUTPUTS ${out})
 endforeach()
 add_custom_target(pt_shaders ALL DEPENDS ${PT_SPIRV_OUTPUTS})
 add_dependencies(pt pt_shaders)
 target_compile_definitions(pt_engine PUBLIC PT_SHADER_DIR="${PT_SPIRV_DIR}" PT_VOICE_MODEL_DIR="${CMAKE_BINARY_DIR}/voice")
-target_include_directories(pt_engine PRIVATE ${PT_WHISPER_INCLUDE_DIRS})
+target_include_directories(pt_engine PRIVATE ${PT_WHISPER_INCLUDE_DIRS} "${whisper_SOURCE_DIR}/ggml/src")
 # whisper.cpp, ggml and its CPU variants in voice/ for every game target (tools/package.py ships them with any of these)
 foreach(game pt pt_release)
   add_dependencies(${game} pt_voice_runtime)
@@ -230,6 +254,24 @@ add_dependencies(pt_reflection_mix_test pt_reflection_mix_shader)
 add_executable(pt_dualsense_probe EXCLUDE_FROM_ALL tests/dualsense_hid_probe.cpp)
 target_link_libraries(pt_dualsense_probe PRIVATE pt_engine)
 
+add_executable(pt_audio_channel_layout_test tests/audio_channel_layout_test.cpp)
+target_link_libraries(pt_audio_channel_layout_test PRIVATE pt_engine)
+
+add_executable(pt_controller_feedback_test tests/controller_feedback_test.cpp)
+target_link_libraries(pt_controller_feedback_test PRIVATE pt_engine)
+
+add_executable(pt_photo_preset_test tests/photo_preset_test.cpp)
+target_link_libraries(pt_photo_preset_test PRIVATE pt_engine)
+
+add_executable(pt_photo_panel_test tests/photo_panel_test.cpp)
+target_link_libraries(pt_photo_panel_test PRIVATE pt_engine)
+
+add_executable(pt_controller_speaker_route_test tests/controller_speaker_route_test.cpp)
+target_link_libraries(pt_controller_speaker_route_test PRIVATE pt_engine)
+
+add_executable(pt_hdr_output_test tests/hdr_output_test.cpp)
+target_link_libraries(pt_hdr_output_test PRIVATE pt_engine)
+
 add_executable(pt_audio_test tests/audio_test.cpp)
 target_link_libraries(pt_audio_test PRIVATE pt_engine)
 if(MSVC)
@@ -242,6 +284,12 @@ target_link_libraries(pt_graphics_preset_test PRIVATE pt_engine)
 # the full screen blur's pulse start per game frame (0x9231D0), src/game/blur_sway.h
 add_executable(pt_blur_sway_test tests/blur_sway_test.cpp)
 target_link_libraries(pt_blur_sway_test PRIVATE pt_engine)
+
+add_executable(pt_unicode_paths_test tests/unicode_paths_test.cpp)
+target_link_libraries(pt_unicode_paths_test PRIVATE pt_engine)
+
+add_executable(pt_user_data_test tests/user_data_test.cpp)
+target_link_libraries(pt_user_data_test PRIVATE pt_engine)
 
 add_executable(pt_settings_roundtrip_test tests/settings_roundtrip_test.cpp)
 target_link_libraries(pt_settings_roundtrip_test PRIVATE pt_engine)
@@ -310,3 +358,12 @@ target_link_libraries(pt_platform_test PRIVATE pt_engine)
 add_executable(pt_mods_test tests/mods_test.cpp)
 target_link_libraries(pt_mods_test PRIVATE pt_engine)
 
+
+add_executable(pt_archive_model_camera_test tests/archive_model_camera_test.cpp)
+target_link_libraries(pt_archive_model_camera_test PRIVATE pt_engine)
+
+add_executable(pt_display_modes_test tests/display_modes_test.cpp)
+target_link_libraries(pt_display_modes_test PRIVATE pt_engine)
+
+add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
+target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)

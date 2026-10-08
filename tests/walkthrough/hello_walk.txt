@@ -1,0 +1,16 @@
+sanchor
+gfile 0 -1.4 -4.0
+gfile 0 -1.4 6.9
+swait 10
+sexpect hello 4
+gfile 0 -1.4 7.7
+slook 0.02 0 5
+swait 5
+slook -0.04 0 5
+swait 5
+slook 0.02 0 5
+swait 5
+gfile -3.0 -1.4 7.6
+swait 10
+sexpect hello 4
+slog

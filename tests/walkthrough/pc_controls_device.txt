@@ -1,0 +1,23 @@
+# The controls page follows the active prompt device, even while a controller stays connected.
+pattach 0 ps5
+sui menu pc
+swait 150
+sexpect pcvalue pc_gamepad_sensitivity 2
+stap 0 r1
+swait 4
+sexpect pcrow pc_volume
+stap 0 down
+swait 4
+stap 0 down
+swait 4
+stap 0 down
+swait 4
+sexpect pcrow pc_gamepad_sensitivity
+sexpect pcvalue pc_gamepad_sensitivity 2
+stap 0 right
+swait 4
+sexpect pcvalue pc_gamepad_sensitivity 3
+sktap W 2
+swait 30
+sexpect pcvalue pc_mouse 4
+slog

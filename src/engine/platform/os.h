@@ -11,6 +11,14 @@
 
 namespace pt::os {
 
+inline std::filesystem::path PathFromUtf8(std::string_view text) {
+    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
+}
+inline std::string PathToUtf8(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
 FILE* OpenFile(const std::filesystem::path& path, const char* mode);
 int SeekFile(FILE* file, int64_t offset, int origin);
 std::string GetEnv(const char* name);

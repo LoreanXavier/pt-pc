@@ -26,17 +26,16 @@ void main() {
         s.P = ViewPosition(v, PixelNdc(v, gl_FragCoord.xy), depth);
         s.world = (v.inv_view * vec4(s.P, 1.0)).xyz;
         vec4 g_material = ImgFetch(IMG_MATERIAL, pixel);
-        s.N = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
         s.roughness = g_material.x;
         s.specular = g_material.y;
         s.material_u = g_material.z;
-        s.translucency = g_material.w;
-        vec3 dh;
-        vec3 sh;
-        if (EvaluateLight(l, v, s, pass.ids.z != 0u, gl_FragCoord.xy, dh, sh)) {
-            float whole = Luma709(max(ImgFetch(IMG_DIFFUSE, pixel).rgb, vec3(0.0)));
-            float handy = clamp(Luma709(max(dh, vec3(0.0))), 0.0, whole);
-            factor = (whole + pass.f0.x) / (whole - handy + pass.f0.x);
+        vec3 to_light = (v.view * vec4(l.position.xyz, 1.0)).xyz - s.P;
+        s.N = to_light / max(length(to_light), 1.0e-6);
+        s.translucency = 0.0;
+        vec3 beam;
+        vec3 specular;
+        if (EvaluateLight(l, v, s, false, gl_FragCoord.xy, beam, specular)) {
+            factor = min(65504.0, 1.0 + Luma709(max(beam, vec3(0.0))) / pass.f0.x);
         }
     }
     out_color = vec4(hdr.rgb / factor, hdr.a);

@@ -8,12 +8,14 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "engine/audio/dsp.h"
+#include "engine/audio/controller_pcm_capture.h"
 #include "engine/audio/motion_generator.h"
 #include "engine/audio/sound_package.h"
 #include "engine/audio/wem.h"
@@ -101,9 +103,14 @@ public:
     EngineStats Stats() const;
     uint64_t RenderedFrames() const { return rendered_frames_.load(); }
     MotionLevels Motion() const;
+    void SetControllerCaptureEvent(uint32_t event_id) { controller_pcm_capture_.SetEvent(event_id); }
+    void SetControllerCaptureEvents(std::span<const uint32_t> event_ids) { controller_pcm_capture_.SetEvents(event_ids); }
+    bool TryReadControllerPcm(ControllerPcmBlock& block) { return controller_pcm_capture_.TryPop(block); }
+    uint32_t ControllerPcmDroppedBlocks() const { return controller_pcm_capture_.DroppedBlocks(); }
     void SetFrozen(bool frozen) { frozen_.store(frozen); }
 
     void Render(float* out, uint32_t frames);
+    void Render(float* out, uint32_t frames, uint32_t channels);
 
     struct LayerLink {
         const Layer* layer = nullptr;
@@ -492,7 +499,7 @@ private:
     uint32_t RenderMotion(Voice& voice, uint32_t offset, uint32_t frames);
     std::shared_ptr<const MotionGeneratorParams> MotionParams(uint32_t source_id);
     void ApplyVoiceLpf(Voice& voice, float* left, float* right, uint32_t frames);
-    void RenderBlock(float* out, uint32_t frames);
+    void RenderBlock(float* out, uint32_t frames, uint32_t channels);
     void ProcessDue(uint64_t block_end);
 
     std::unique_ptr<SoundBankSet> banks_;
@@ -555,6 +562,7 @@ private:
     std::vector<float> mix_right_;
     std::vector<float> voice_left_;
     std::vector<float> voice_right_;
+    ControllerPcmCapture controller_pcm_capture_;
     std::array<std::vector<float>, 8> sc_;
     std::array<std::vector<float>, 8> sc_voice_;
     std::vector<float> sc_peak_;

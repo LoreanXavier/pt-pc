@@ -63,7 +63,7 @@ int main() {
     });
     vmaInvalidateAllocation(ctx.allocator, buffer.allocation, 0, bytes);
     const std::array<std::array<float, 4>, 29> expected{{
-        {0.7f, 0.4f, 0.0f, 0.0f}, {0.8f, 0.2f, 0.0f, 0.5f},
+        {0.7f, 0.4f, 0.0f, 0.0f}, {2.0f / 3.0f, 1.0f / 3.0f, 0.0f, 0.3f},
         {0.2f, 0.4f, 0.6f, 0.8f}, {0.1f, 0.2f, 0.3f, 0.3f}, {0.0f, 0.0f, 0.0f, 0.0f},
         {0.6f, 0.0f, 0.8f, 0.0f}, {0.0f, -0.6f, 0.8f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {2.4f, 1.6f, 5.0f, 1.0f}, {0.44f, -0.38f, 0.0f, 0.0f},
         {.010175f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0}, {.01f, 0, 0, 0},

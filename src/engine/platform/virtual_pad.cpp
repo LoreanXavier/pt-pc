@@ -25,6 +25,9 @@ constexpr Kind kKinds[] = {
     {"ps4", "DUALSHOCK 4 Wireless Controller (virtual)", 0x054C, 0x09CC, true},
     {"ps5", "DualSense Wireless Controller (virtual)", 0x054C, 0x0CE6, true},
     {"switch", "Nintendo Switch Pro Controller (virtual)", 0x057E, 0x2009, false},
+    {"steam", "Steam Deck controller (virtual)", 0x28DE, 0x1205, false},
+    {"steam_virtual", "Steam Virtual Gamepad (virtual)", 0x28DE, 0x11FF, false},
+    {"hori_steam", "HORIPAD for Steam (virtual)", 0x0F0D, 0x01AB, false},
     {"generic", "Generic Gamepad (virtual)", 0x0000, 0x0000, false},
 };
 
