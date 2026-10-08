@@ -9,8 +9,9 @@ rebuilt in C++ from the original's behaviour and the renderer is written on Vulk
 script and cutscene is read at run time from your own copy of the PS4 game. There is no game data in this repository
 and none in the installer.
 
-I made this on my own, in my spare time, because P.T. deserved to keep existing somewhere other than on consoles that
-still have it installed. It plays the whole teaser from the first wake-up to the street, with the voice part included.
+I made this in my spare time, with AI tools (see About AI at the end), because P.T. deserved to keep existing
+somewhere other than on consoles that still have it installed. It plays the whole teaser from the first wake-up to
+the street, with the voice part included.
 
 ## What you need
 
