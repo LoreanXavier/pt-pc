@@ -3344,6 +3344,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     bool frozen = false;
     bool was_focused = true;
+    // X11 and Wayland window managers focus a new window some frames after it maps (on Windows it has the focus when
+    // created): until the window has had the focus once it is not in the background, or the first frames would open
+    // the pause menu in place of the first start's option screen and preface
+    bool had_focus = false;
     float applied_volume = -1.0f;
     while (running) {
         bool visible = PumpEvents(app, &input, running) || vr != nullptr;
@@ -3357,9 +3361,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
         PollEnhancedTextures(app);
         const std::optional<bool> forced_focus = script.ForcedFocus(frame);
         if (app.window || forced_focus || vr) {
-            const bool focused = forced_focus ? *forced_focus
-                                 : vr         ? !vr->Host().FocusLost()
-                                              : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
+            const bool has_focus = forced_focus ? *forced_focus
+                                   : vr         ? !vr->Host().FocusLost()
+                                                : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
+            had_focus |= has_focus || forced_focus || vr;
+            const bool focused = has_focus || !had_focus;
             const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
             if (was_focused && !focused && pause && ui_ready && !ui.MenuOpen() && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
                 stop_freecam();
