@@ -134,3 +134,17 @@ executable.
 
 The port's own code is under the MIT license (see LICENSE). The third-party pieces listed above keep their own
 licenses.
+
+## About AI
+
+I'm open about using AI, and I don't think developers should feel they have to hide it. AI coding tools were used
+heavily throughout this project: to work through the decompiled code, to write and debug large parts of the port and
+its tools, to build and run the tests, and to track down problems when I got stuck. A project of this size would not
+have come together this quickly without them.
+
+What AI did not replace is knowing what to build. The direction, the architecture, the decisions about what has to
+match the original and what can differ, and the checking of the results against the real game are mine, and they rest
+on my years of reverse engineering and of playing and modding P.T. There is a big difference between using AI to
+solve a problem you understand and asking it to make something you don't: recreating a game whose engine source is
+not available, its graphics and its exact behaviour, cannot be done by blind prompting. Every change is tested
+against the original before it ships, and bug reports are always welcome.
