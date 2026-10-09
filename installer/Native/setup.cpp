@@ -4,8 +4,11 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <bcrypt.h>
 #include <zlib.h>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -93,10 +96,42 @@ void Extract(const fs::path& staging,const fs::path& package){
     DWORD code=1;GetExitCodeProcess(process.hProcess,&code);CloseHandle(process.hThread);CloseHandle(process.hProcess);CheckCancel();
     if(code){std::ifstream input(staging/L"install-extraction.log");std::string details((std::istreambuf_iterator<char>(input)),{});throw std::runtime_error("PKG extraction failed. "+details.substr(0,600));}
 }
+bool PngEncoder(CLSID& clsid){
+    UINT count=0,bytes=0;if(Gdiplus::GetImageEncodersSize(&count,&bytes)!=Gdiplus::Ok||!bytes)return false;
+    std::vector<unsigned char> buffer(bytes);auto codecs=reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if(Gdiplus::GetImageEncoders(count,bytes,codecs)!=Gdiplus::Ok)return false;
+    for(UINT i=0;i<count;++i)if(codecs[i].MimeType && std::wstring(codecs[i].MimeType)==L"image/png"){clsid=codecs[i].Clsid;return true;}
+    return false;
+}
+bool WriteIco(const fs::path& png,const fs::path& ico){
+    Gdiplus::GdiplusStartupInput startup;ULONG_PTR token=0;if(Gdiplus::GdiplusStartup(&token,&startup,nullptr)!=Gdiplus::Ok)return false;
+    struct Guard{ULONG_PTR token;~Guard(){Gdiplus::GdiplusShutdown(token);}} guard{token};
+    Gdiplus::Bitmap source(png.c_str());if(source.GetLastStatus()!=Gdiplus::Ok)return false;
+    CLSID png_clsid{};if(!PngEncoder(png_clsid))return false;
+    const int sizes[]={256,48,32,16};std::vector<std::string> images;images.reserve(4);
+    for(int size:sizes){
+        Gdiplus::Bitmap frame(size,size,PixelFormat32bppARGB);Gdiplus::Graphics graphics(&frame);
+        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);graphics.DrawImage(&source,0,0,size,size);
+        IStream* stream=nullptr;if(CreateStreamOnHGlobal(nullptr,TRUE,&stream)!=S_OK)return false;
+        const bool saved=frame.Save(stream,&png_clsid,nullptr)==Gdiplus::Ok;STATSTG stat{};
+        if(!saved || stream->Stat(&stat,STATFLAG_NONAME)!=S_OK || stat.cbSize.QuadPart<=0){stream->Release();return false;}
+        HGLOBAL memory=nullptr;GetHGlobalFromStream(stream,&memory);const char* bytes=static_cast<const char*>(GlobalLock(memory));
+        images.emplace_back(bytes,bytes+ULONG(stat.cbSize.QuadPart));GlobalUnlock(memory);stream->Release();
+    }
+    std::ofstream out(ico,std::ios::binary);if(!out)return false;
+    auto u16=[&](uint16_t v){out.put(char(v));out.put(char(v>>8));};auto u32=[&](uint32_t v){for(int i=0;i<4;++i)out.put(char(v>>(8*i)));};
+    u16(0);u16(1);u16(uint16_t(images.size()));uint32_t offset=6+16*uint32_t(images.size());
+    for(size_t i=0;i<images.size();++i){const int dim=sizes[i]>=256?0:sizes[i];out.put(char(dim));out.put(char(dim));out.put(0);out.put(0);u16(1);u16(32);u32(uint32_t(images[i].size()));u32(offset);offset+=uint32_t(images[i].size());}
+    for(const auto& image:images)out.write(image.data(),std::streamsize(image.size()));
+    return bool(out);
+}
 void Shortcut(const fs::path& destination){
+    std::error_code error;const fs::path png=destination/L"icon0.png",ico=destination/L"icon0.ico";
+    if(fs::is_regular_file(png,error))WriteIco(png,ico);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);IShellLinkW* link=nullptr;
     if(SUCCEEDED(CoCreateInstance(CLSID_ShellLink,nullptr,CLSCTX_INPROC_SERVER,IID_IShellLinkW,reinterpret_cast<void**>(&link)))){
         link->SetPath((destination/L"pt.exe").c_str());link->SetWorkingDirectory(destination.c_str());link->SetDescription(kProduct);
+        if(fs::is_regular_file(ico,error))link->SetIconLocation(ico.c_str(),0);
         PWSTR desktop=nullptr;IPersistFile* persist=nullptr;
         if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&desktop)) && SUCCEEDED(link->QueryInterface(IID_IPersistFile,reinterpret_cast<void**>(&persist)))){
             fs::path name=fs::path(desktop)/(std::wstring(kProduct)+L".lnk");if(fs::exists(name))name=fs::path(desktop)/(std::wstring(kProduct)+L" "+destination.filename().native()+L".lnk");
@@ -188,6 +223,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 write(game/L"data_ps4.psarc",std::string(64,'\x5a'));
                 bool refused=false;try{ResolveSource(game);}catch(...){refused=true;}if(!refused)failures+=" encrypted-accepted";
                 GameFiles europe;europe.title="CUSA01114";europe.pathid=game/L"pathid_list_ps4.bin";if(!ConfirmPt(europe) || europe.notes.empty() || europe.notes[0].find("Europe")==std::string::npos)failures+=" region-refused";
+                failures+=SelfTestIcon(root/L"icon");
                 write(game/L"other_list.bin","/Assets/other/level/"+std::string(40,'x'));GameFiles other;other.title="CUSA99999";other.pathid=game/L"other_list.bin";if(ConfirmPt(other))failures+=" other-game-accepted";
                 fs::remove_all(root);
                 failures+=SelfTestUpdate(root/L"update");
@@ -216,7 +252,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     pkg_edit=Control(L"EDIT",L"",ES_AUTOHSCROLL|WS_TABSTOP,24,128,376,28,14);Control(L"BUTTON",L"PKG...",WS_TABSTOP,410,128,90,28,10);Control(L"BUTTON",L"Folder...",WS_TABSTOP,506,128,90,28,17);
     PWSTR local=nullptr;SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local);std::wstring dest=local?(fs::path(local)/L"Programs"/kFolder).native():L"";CoTaskMemFree(local);
     dest_edit=Control(L"EDIT",dest.c_str(),ES_AUTOHSCROLL|WS_TABSTOP,24,166,472,28,15);Control(L"BUTTON",L"Location...",WS_TABSTOP,506,166,90,28,11);
-    shortcut_check=Control(L"BUTTON",L"Create desktop shortcut",BS_AUTOCHECKBOX|WS_TABSTOP,24,205,300,24,16);SendMessageW(shortcut_check,BM_SETCHECK,BST_CHECKED,0);
+    shortcut_check=Control(L"BUTTON",L"Create desktop shortcut with your game icon",BS_AUTOCHECKBOX|WS_TABSTOP,24,205,420,24,16);SendMessageW(shortcut_check,BM_SETCHECK,BST_CHECKED,0);
     progress_bar=Control(PROGRESS_CLASSW,L"",PBS_MARQUEE,24,242,572,15,0);status_label=Control(L"STATIC",L"Select your PKG or dumped game folder, and a new installation folder.",0,24,271,572,55,0);
     update_label=Control(L"STATIC",L"",0,24,337,364,30,0);
     install_button=Control(L"BUTTON",L"Install",BS_DEFPUSHBUTTON|WS_TABSTOP,398,337,94,30,12);cancel_button=Control(L"BUTTON",L"Close",WS_TABSTOP,502,337,94,30,13);

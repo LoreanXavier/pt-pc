@@ -219,6 +219,79 @@ inline Source ResolveSource(const fs::path& input) {
     if (packages.size() > 1) throw std::runtime_error("This folder has several PKG files. Select the P.T. package itself.");
     throw std::runtime_error(kNotPt);
 }
+inline constexpr uint64_t kIconMaxBytes = 8ull * 1024 * 1024;
+inline bool IsPng(const std::string& bytes) { return bytes.size() >= 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0; }
+inline uint32_t Be32(const std::string& bytes, size_t at) {
+    const auto* p = reinterpret_cast<const unsigned char*>(bytes.data() + at);
+    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+}
+inline std::string ReadSlice(const fs::path& file, uint64_t offset, uint64_t count) {
+    if (count == 0 || count > kIconMaxBytes) return {};
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return {};
+    input.seekg(0, std::ios::end);
+    const auto end = input.tellg();
+    if (end < 0 || uint64_t(end) < offset || uint64_t(end) - offset < count) return {};
+    input.seekg(std::streamoff(offset));
+    std::string bytes(size_t(count), '\0');
+    input.read(bytes.data(), std::streamsize(count));
+    return input.gcount() == std::streamsize(count) ? bytes : std::string{};
+}
+inline std::optional<std::string> IconFromFolder(const fs::path& dir) {
+    std::error_code error;
+    const fs::path icon = dir / "sce_sys" / "icon0.png";
+    if (!fs::is_regular_file(icon, error)) return std::nullopt;
+    const auto size = fs::file_size(icon, error);
+    if (error || size < 8 || size > kIconMaxBytes) return std::nullopt;
+    const std::string bytes = ReadSlice(icon, 0, size);
+    if (!IsPng(bytes)) return std::nullopt;
+    return bytes;
+}
+inline std::optional<std::string> IconFromPackage(const fs::path& pkg) {
+    const std::string head = ReadSlice(pkg, 0, 0x20);
+    if (head.size() != 0x20 || head.compare(0, 4, "\x7F" "CNT") != 0) return std::nullopt;
+    const uint32_t count = Be32(head, 0x10), table = Be32(head, 0x18);
+    if (count == 0 || count > 256) return std::nullopt;
+    const std::string entries = ReadSlice(pkg, table, uint64_t(count) * 32);
+    if (entries.size() != uint64_t(count) * 32) return std::nullopt;
+    uint32_t names_offset = 0, names_size = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t at = size_t(i) * 32;
+        if (Be32(entries, at) != 0x0200) continue;
+        names_offset = Be32(entries, at + 16);
+        names_size = Be32(entries, at + 20);
+    }
+    if (names_size == 0 || names_size > 1024 * 1024) return std::nullopt;
+    const std::string names = ReadSlice(pkg, names_offset, names_size);
+    if (names.size() != names_size) return std::nullopt;
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t at = size_t(i) * 32;
+        const uint32_t id = Be32(entries, at), flags1 = Be32(entries, at + 8), offset = Be32(entries, at + 16), size = Be32(entries, at + 20);
+        if (id < 0x1000 || (flags1 & 0x80000000u) || size < 8 || size > kIconMaxBytes) continue;
+        const uint32_t name_at = Be32(entries, at + 4);
+        if (name_at >= names.size()) continue;
+        if (std::string(names.c_str() + name_at) != "icon0.png") continue;
+        const std::string bytes = ReadSlice(pkg, offset, size);
+        if (IsPng(bytes)) return bytes;
+    }
+    return std::nullopt;
+}
+inline std::optional<std::string> FindIconPng(const fs::path& input) {
+    std::error_code error;
+    if (input.empty() || !fs::exists(input, error)) return std::nullopt;
+    if (fs::is_regular_file(input, error)) {
+        if (IsPackage(input)) {
+            if (auto icon = IconFromPackage(input)) return icon;
+        }
+        if (auto icon = IconFromFolder(input.parent_path())) return icon;
+        return std::nullopt;
+    }
+    if (auto icon = IconFromFolder(input)) return icon;
+    for (fs::directory_iterator it(input, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error))
+        if (it->is_directory(error))
+            if (auto icon = IconFromFolder(it->path())) return icon;
+    return std::nullopt;
+}
 inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
     fs::create_directories(assets);
     std::vector<char> buffer(4 * 1024 * 1024);
@@ -623,6 +696,16 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                                      "install-notes.txt", "install-extraction.log"})
                 if (fs::is_regular_file(staging / name, error)) extra.push_back(name);
         }
+        if (shortcut) {
+            const fs::path look = source ? source->path : input;
+            if (!look.empty()) {
+                if (const auto icon = FindIconPng(look)) {
+                    std::ofstream icon_file(staging / "icon0.png", std::ios::binary);
+                    icon_file.write(icon->data(), std::streamsize(icon->size()));
+                    if (icon_file) extra.push_back("icon0.png");
+                }
+            }
+        }
         WriteManifest(staging, steps.version, files);
         CheckCancel();
         if (!update) {
@@ -644,6 +727,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         }
         remove_ours(backup);
         remove_ours(staging);
+        if (shortcut) steps.shortcut(destination);
         return outcome;
     } catch (...) {
         remove_ours(staging);
@@ -824,6 +908,56 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         if (!rejected_missing) failures += " missing-upscaler-accepted";
     }
     if (UpdateQuestion(InspectInstall(root / "with" / "PT"), "0.2.0").find("up to date") == std::string::npos) failures += " same-version-question";
+    return failures;
+}
+inline std::string SelfTestIcon(const fs::path& root) {
+    std::string failures;
+    const std::string png =
+        "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x78\x9c\x63\xf8\xcf\xc0\x00\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    auto be = [](uint32_t value) {
+        std::string out(4, '\0');
+        out[0] = char(value >> 24);
+        out[1] = char(value >> 16);
+        out[2] = char(value >> 8);
+        out[3] = char(value);
+        return out;
+    };
+    auto package = [&](bool encrypt) {
+        const std::string names("icon0.png", 10);
+        const uint32_t table = 0x80, names_at = table + 64, png_at = names_at + uint32_t(names.size());
+        std::string bytes(table, '\0');
+        bytes[0] = '\x7f';
+        bytes[1] = 'C';
+        bytes[2] = 'N';
+        bytes[3] = 'T';
+        bytes.replace(0x13, 1, 1, '\x02');
+        bytes[0x1b] = char(table);
+        auto entry = [&](uint32_t id, uint32_t flags, uint32_t offset, uint32_t size) {
+            return be(id) + be(0) + be(flags) + be(0) + be(offset) + be(size) + std::string(8, '\0');
+        };
+        bytes += entry(0x0200, 0x40000000u, names_at, uint32_t(names.size()));
+        bytes += entry(0x1200, encrypt ? 0x80000000u : 0, png_at, uint32_t(png.size()));
+        bytes += names;
+        bytes += png;
+        return bytes;
+    };
+    const fs::path dir = root / "dump";
+    write(dir / "sce_sys" / "icon0.png", png);
+    const auto from_folder = FindIconPng(dir);
+    if (!from_folder || *from_folder != png) failures += " folder-icon";
+    write(dir / "sce_sys" / "icon0.png", "not a png file");
+    if (FindIconPng(dir)) failures += " folder-nonpng";
+    const fs::path pkg = root / "game.pkg";
+    write(pkg, package(false));
+    const auto from_pkg = FindIconPng(pkg);
+    if (!from_pkg || *from_pkg != png) failures += " pkg-icon";
+    write(pkg, package(true));
+    if (FindIconPng(pkg)) failures += " encrypted-icon";
+    if (FindIconPng(root / "missing")) failures += " missing-icon";
     return failures;
 }
 

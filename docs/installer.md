@@ -126,12 +126,34 @@ delisted in 2015, so in practice the source is a console that still has it insta
 3. A staging folder `.pt-install-<id>` next to the destination receives the payload (runtime and helper).
 4. The game archives go to `staging/CUSA01127/`: the helper extracts them from a PKG, or setup copies them from a folder.
    Only `chunk1.psarc`, `texture.qar` and `pathid_list_ps4.bin` are written, under these names whatever the release calls
-   them, plus `source.txt` (title ID, region, notes); the eboot, `sce_sys` and modules are not used by the port. Only
-   these fixed names are written, so names inside a PKG cannot escape the folder. Notes go to `install-notes.txt`.
+   them, plus `source.txt` (title ID, region, notes). The eboot, `sce_sys` and modules are not used by the game.
+   `icon0.png` is the exception: it is read from `sce_sys`, or from the plaintext PKG entry of that name, and only to
+   give the desktop shortcut the PS4 icon. Only these fixed names are written, so names inside a PKG cannot escape the
+   folder. Notes go to `install-notes.txt`.
 5. `pt-install-manifest.txt` is written: `pt-port-install 1`, `version=<PT_VERSION>`, then `file=<sha256> <path>` for every
    program file (everything the payload wrote; not the game archives, notes or anything the player adds).
 6. The staging folder is renamed to the destination and the optional desktop shortcut made. On any error or cancel only
    that staging folder is removed.
+
+### Desktop shortcut
+
+The setup window has "Create desktop shortcut with your game icon", on by default. Windows writes a shortcut on the
+desktop. Linux writes a launcher in `~/.local/share/applications` and, when `~/Desktop` exists, a desktop file there too.
+An update makes the shortcut as well, if the box is checked.
+
+The picture is the game's own icon, taken from the copy you selected. It is not in this repository, and the installer
+does not ship a stand-in. Nothing here decrypts a store PKG to get it. The same file the PS4 uses is already plaintext:
+
+| Where you look | What it is |
+| --- | --- |
+| fake PKG entry `icon0.png` | entry id `0x1200`, flags1 bit 31 clear, so it sits in the PKG entry table outside the encrypted PFS. `python tools/pkginfo.py <your.pkg> --extract <empty dir>` writes it with the other plaintext `sce_sys` entries (`docs/formats/pkg.md`) |
+| console dump | `sce_sys/icon0.png` in the folder that holds `chunk1.psarc`, or one folder down |
+| inside `chunk1.psarc` | `as/sh/save/promotion/PS4/ICON_jp.png`, the save-data icon, same artwork |
+
+A file that is not a PNG, or an encrypted PKG entry, is ignored. The shortcut is still created and then uses the program
+icon. When the PNG is found it is copied to `icon0.png` in the install folder (only because you asked for the shortcut;
+it is not a program file and not in the install manifest). Windows also writes `icon0.ico` beside it, scaled from that
+PNG, and points the shortcut at the ico. Linux sets `Icon=` to the PNG.
 
 The game finds the data without `--game`: `game/CUSA01127` or `CUSA01127` next to it or up to four folders above, then
 the folder remembered in the user data folder, then (windowed runs) a folder picker.

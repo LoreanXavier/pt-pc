@@ -33,8 +33,10 @@ the street, with the voice part included.
 Download the installer from the Releases page: `P.T.PC.Port.Setup.exe` on Windows, the Linux setup binary on Linux.
 Point it at your dump folder or fake PKG and at a destination folder (the default on Windows is
 `%LocalAppData%\Programs\P.T. PC Port`). It copies the three game archives it needs (`chunk1.psarc`,
-`texture.qar`, `pathid_list_ps4.bin`) next to the port and makes a shortcut if you want one. The eboot, modules and
-system files are not used.
+`texture.qar`, `pathid_list_ps4.bin`) next to the port and makes a desktop shortcut if you want one. The shortcut
+uses `icon0.png` from your own copy, the icon the PS4 shows for the game. This repository does not contain the
+package or that image: the installer reads it from the PKG or dump you select. The eboot, modules and the rest of
+`sce_sys` are not used.
 
 Linux: `chmod +x` the setup and run it from a terminal. The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
