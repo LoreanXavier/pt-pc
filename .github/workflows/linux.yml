@@ -1,0 +1,92 @@
+name: Linux
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install compilers, Vulkan headers/shaderc, and all SDL3 video backend headers
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            ninja-build \
+            glslc \
+            libvulkan-dev \
+            vulkan-tools \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxss-dev \
+            libxxf86vm-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libdecor-0-dev
+
+      - name: Version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^set(PT_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          PT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cmake -G Ninja -B build/linux \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSDL_WAYLAND=ON \
+            -DSDL_X11=ON
+          cmake --build build/linux --target pt pt_release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          # Bundle the release binary and executable script
+          cp build/linux/pt_release dist/pt || cp build/linux/pt dist/pt
+          chmod +x dist/pt
+          cd dist
+          zip -r "P.T.PC.Port-Linux-x64.zip" pt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: P.T.PC.Port-Linux-x64-${{ steps.version.outputs.version }}
+          path: dist/P.T.PC.Port-Linux-x64.zip
+
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: zips
+          merge-multiple: true
+
+      - name: Release app assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" zips/P.T.PC.Port-Linux-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
