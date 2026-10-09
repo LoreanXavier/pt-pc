@@ -90,6 +90,15 @@ bool UiaPlayers::Playing(const ui::UiaAnimation* animation) const {
     return false;
 }
 
+bool UiaPlayers::AnyPlaying() const {
+    for (const Player& p : players_) {
+        if (Playing(p.animation)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void UiaPlayers::Apply(UifView& view) const {
     const ui::UifModel* model = view.Model();
     if (!model) {

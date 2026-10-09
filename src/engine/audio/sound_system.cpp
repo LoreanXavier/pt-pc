@@ -29,6 +29,8 @@ bool SoundSystem::Init(Vfs& vfs, bool open_device, bool surround_output) {
     LogInfo("audio: {} banks, {} media", banks->Banks().size(), banks->AllMedia().size());
     engine_ = std::make_unique<SoundEngine>(std::move(banks));
     engine_->SetRtpc(Fnv1Hash32("volumeRtpc"), 1.0f, 0, false);
+    // test switches: PT_SOLO_EVENT=<event> posts that event alone (a capture measures it without the rest of the mix),
+    // PT_SET_RTPC=<parameter id>=<value> sets a global game parameter at the start
     if (const char* solo = std::getenv("PT_SOLO_EVENT")) {
         solo_event_ = Fnv1Hash32(solo);
         LogInfo("audio: only {} ({:08X}) is posted", solo, solo_event_);

@@ -61,6 +61,7 @@ bool Available() { return true; }
 
 namespace {
 
+// every OpenXR function the host calls, loaded through xrGetInstanceProcAddr
 #define PT_XR_FUNCTIONS(X)                    \
     X(xrDestroyInstance)                      \
     X(xrGetInstanceProperties)                \
@@ -113,7 +114,7 @@ glm::vec3 ToGlm(const XrVector3f& v) { return glm::vec3(v.x, v.y, v.z); }
 XrQuaternionf ToXr(const glm::quat& q) { return {q.x, q.y, q.z, q.w}; }
 XrVector3f ToXr(const glm::vec3& v) { return {v.x, v.y, v.z}; }
 
-}
+}  // namespace
 
 struct Host::Impl {
 #ifdef _WIN32
@@ -149,10 +150,11 @@ struct Host::Impl {
         if (XR_SUCCEEDED(result)) {
             return true;
         }
-        char name[128] = {};
+        char name[128] = {};  // XR_MAX_RESULT_STRING_SIZE is 64; the named fallbacks below are longer
         if (instance && xrResultToString) {
             xrResultToString(instance, result, name);
         } else {
+            // before an instance exists the loader cannot name the result; the ones a start without a runtime gives
             const char* known = nullptr;
             switch (result) {
             case XR_ERROR_RUNTIME_UNAVAILABLE: known = "XR_ERROR_RUNTIME_UNAVAILABLE (no OpenXR runtime is installed or active)"; break;
@@ -331,6 +333,7 @@ namespace {
 
 bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>& formats, uint32_t width, uint32_t height, Swapchain& out,
                      const char* name) {
+    // 8-bit sRGB first: the eye and screen images are sRGB-encoded at heart, and an sRGB swapchain keeps their 8 bits exact
     /* sRGB 8-bit first: the eye images are sRGB encoded, and a UNORM swapchain would re-encode them and lose bits. */
     static constexpr VkFormat kPreferred[] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT,
                                               VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
@@ -384,7 +387,7 @@ bool CreateSwapchain(Host::Impl& x, vk::Context& ctx, const std::vector<int64_t>
     return true;
 }
 
-}
+}  // namespace
 
 bool Host::StartSession(vk::Context& ctx, float scale) {
     Impl& x = *impl_;
@@ -413,6 +416,7 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
         return false;
     }
 
+    // actions: one set, bound for the common controllers
     XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
     std::snprintf(set_info.actionSetName, sizeof(set_info.actionSetName), "gameplay");
     std::snprintf(set_info.localizedActionSetName, sizeof(set_info.localizedActionSetName), "Gameplay");
@@ -458,6 +462,7 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
         suggested.interactionProfile = x.Path(profile);
         suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
         suggested.suggestedBindings = bindings.data();
+        // a runtime that does not know a profile may refuse it; the others still apply
         x.Ok(x.xrSuggestInteractionProfileBindings(x.instance, &suggested), profile);
     };
     suggest("/interaction_profiles/khr/simple_controller",
@@ -538,6 +543,8 @@ bool Host::StartSession(vk::Context& ctx, float scale) {
 void Host::Shutdown() {
     Impl& x = *impl_;
     if (x.session && x.running) {
+        // the runtime takes the session to stopping after the request, which may take frames: the loop runs on without layers
+        // until it is there (PollEvents ends the session), at most about a second
         if (frame_open_) {
             EndFrame({});
         }
@@ -585,6 +592,7 @@ void Host::Shutdown() {
     }
     /* The OpenXR loader stays loaded on purpose: the Vulkan instance it created may still be destroyed after this. */
     x.ctx = nullptr;
+    // the loader stays loaded: the Vulkan instance it made may still be destroyed after this
 }
 
 void Host::PollEvents() {

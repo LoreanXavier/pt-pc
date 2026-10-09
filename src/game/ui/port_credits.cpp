@@ -6,6 +6,7 @@ namespace pt::game::port_credits {
 namespace {
 
 constexpr float kFps = 60.0f;
+// a short pause on the bare fade between two cards
 constexpr float kGap = 0.5f;
 constexpr float kEndScale = 1.2f;
 
@@ -19,6 +20,7 @@ std::vector<Card> MakeCards() {
     std::vector<Card> cards;
     cards.push_back({{"P.T. PC Port", "pc_credits_by"}, true, 1.4f});
 #if defined(PT_WITH_DLSS) || defined(PT_WITH_STREAMLINE)
+    // the NVIDIA RTX SDKs licence, exhibit 7.1 (b) and (c): the use of the SDK attributed and the NVIDIA Marks in the credits
     cards.push_back({{"NVIDIA RTX", "pc_credits_dlss",
 #if defined(PT_WITH_STREAMLINE)
                       "NVIDIA Streamline, NVIDIA DLSS Frame Generation and NVIDIA Reflex",
@@ -27,6 +29,7 @@ std::vector<Card> MakeCards() {
                      false, 1.0f});
 #endif
 #if defined(PT_WITH_FSR) || defined(PT_WITH_XESS)
+    // the MIT notice of the FidelityFX SDK and the copyright notice the Intel Simplified Software License asks to reproduce
     Card upscalers{{}, false, 1.0f};
 #if defined(PT_WITH_FSR)
     upscalers.lines.insert(upscalers.lines.end(), {"AMD FidelityFX Super Resolution 3 (FidelityFX SDK 1.1.4)",

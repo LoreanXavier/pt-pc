@@ -1,9 +1,6 @@
 # Fox file encryption (0xA0F8EFE6)
 
-All `.lua` files in chunk1.psarc and inside the packages use this wrapper. `tools/foxcrypt.py <source> <target>`
-removes it from a file or a whole directory (`tools/fpk.py --extract` does it for package entries). The algorithm is
-`Decrypt2Stream` of Atvaark's GzsTool (MIT, github.com/Atvaark/GzsTool), written for MGSV; the P.T. files decrypt with
-it unchanged.
+All `.lua` files in chunk1.psarc use this wrapper. `tools/foxcrypt.py` removes it. The algorithm matches `Decrypt2Stream` in Atvaark's GzsTool (MIT license, github.com/Atvaark/GzsTool), which was written for MGSV; the P.T. files decrypt with it unchanged.
 
 ## Layout
 
@@ -27,5 +24,6 @@ The trailing 0..3 bytes that do not fill a word are stored in the clear.
 
 ## Result on P.T.
 
-The encrypted entries decrypt to Lua 5.1 source text (not bytecode), UTF-8 with Japanese comments, CRLF line endings
-in most files. A mod that replaces a script ships plain text; the game decrypts only its own entries (docs/modding.md).
+27 of the 28 `.lua`/`.gnd` entries are encrypted with the 8-byte header. They decrypt to Lua 5.1 source text (not bytecode), UTF-8 with Japanese comments, CRLF line endings in most files. Lua total outside `shaders/`: 2,299 lines.
+
+The decryption routine should also exist in eboot, since the game loads these files; not located yet.

@@ -16,6 +16,8 @@
 namespace pt {
 namespace {
 
+// A mod's PNG (docs/modding.md) as RGBA8 levels down to 1 x 1, each the average of four texels of the one above (in linear
+// light for a colour texture). Uncompressed, so loading never stalls on an encoder.
 bool ModImageLevels(const std::vector<uint8_t>& png, bool srgb, std::vector<std::vector<uint8_t>>& levels, uint32_t& width,
                     uint32_t& height, std::string& error) {
     int w = 0, h = 0, channels = 0;
@@ -179,6 +181,7 @@ bool TextureManager::Init(vk::Context& ctx) {
 }
 
 void TextureManager::Shutdown() {
+    StopEnhancedWorker();
     for (std::future<void>& worker : decode_workers_) {
         worker.wait();
     }
@@ -247,6 +250,7 @@ int TextureManager::SetAnisotropy(int level) {
     if (!sampler) {
         return anisotropy_;
     }
+    // every texture descriptor takes the new sampler; frames in flight still read the old ones
     vkDeviceWaitIdle(ctx_->device);
     std::vector<VkDescriptorImageInfo> infos(images_.size());
     for (size_t i = 0; i < images_.size(); ++i) {
@@ -504,6 +508,7 @@ uint32_t TextureManager::PumpDecoded(const QarArchive& qar, uint32_t count) {
 
 uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& key, const std::string& stem, const std::vector<uint8_t>& png,
                                       bool raw) {
+    // the game's texture, when there is one, says whether the picture is colour (sRGB) and whether a PNG can stand in for it
     FtexTexture original;
     const bool has_original = LoadFtex(qar, stem, original);
     if (has_original && (original.faces != 1 || original.depth > 1)) {
@@ -548,6 +553,7 @@ void TextureManager::LoadEnhancedTexture(uint32_t index, const std::string& path
     }
     const uint64_t key = EnhancedTextureKey(*source, enhanced_model_);
     if (!ReadTextureCache(EnhancedCacheFile(enhanced_cache_, path), key, cached)) return;
+    // twice the source's size, or the source's size where the capped mode reduced the 2x result (a 2048 source capped at 2048)
     const bool doubled = cached.width == source->width * 2 && cached.height == source->height * 2;
     const bool kept = cached.width == source->width && cached.height == source->height;
     if (!(doubled || kept) || cached.Srgb() != source->Srgb()) return;
@@ -579,14 +585,99 @@ void TextureManager::UpdateTextureDescriptor(uint32_t index) {
     vkUpdateDescriptorSets(ctx_->device, 1, &write, 0, nullptr);
 }
 
+void TextureManager::StopEnhancedWorker() {
+    if (enhanced_queue_) enhanced_queue_->stop = true;
+    if (enhanced_worker_.valid()) enhanced_worker_.wait();
+    enhanced_worker_ = {};
+    enhanced_queue_.reset();
+}
+
 void TextureManager::SetEnhancedTextures(bool enabled) {
     if (!ctx_ || enabled == enhanced_enabled_) return;
-    if (enabled) for (const auto& [index, path] : fox_sources_) LoadEnhancedTexture(index, path);
+    StopEnhancedWorker();
+    if (enabled && enhanced_qar_ && enhanced_model_) {
+        std::vector<std::pair<uint32_t, std::string>> todo;
+        for (const auto& [index, path] : fox_sources_) {
+            if (!enhanced_images_.contains(index)) todo.emplace_back(index, path);
+        }
+        auto queue = std::make_shared<EnhancedQueue>();
+        queue->total = todo.size();
+        enhanced_queue_ = queue;
+        const QarArchive* qar = enhanced_qar_;
+        const std::filesystem::path cache = enhanced_cache_;
+        const uint64_t model = enhanced_model_;
+        enhanced_worker_ = std::async(std::launch::async, [queue, todo = std::move(todo), qar, cache, model] {
+            for (const auto& [index, path] : todo) {
+                if (queue->stop) break;
+                FtexTexture source;
+                EnhancedPrepared prepared;
+                if (LoadFtex(*qar, path, source)) {
+                    prepared.key = EnhancedTextureKey(source, model);
+                    if (ReadTextureCache(EnhancedCacheFile(cache, path), prepared.key, prepared.cached)) {
+                        const FtexTexture& c = prepared.cached;
+                        const bool doubled = c.width == source.width * 2 && c.height == source.height * 2;
+                        const bool kept = c.width == source.width && c.height == source.height;
+                        if ((doubled || kept) && c.Srgb() == source.Srgb()) {
+                            prepared.index = index;
+                            prepared.path = path;
+                            std::lock_guard lock(queue->mutex);
+                            queue->ready.push_back(std::move(prepared));
+                        }
+                    }
+                }
+                ++queue->done;
+            }
+        });
+    }
     vkDeviceWaitIdle(ctx_->device);
     enhanced_enabled_ = enabled;
     for (const auto& [index, replacement] : enhanced_images_) UpdateTextureDescriptor(index);
     LogInfo("textures: enhanced textures {}, {} loaded replacements ({:.0f} MB of texture data)", enabled ? "on" : "off", enhanced_images_.size(),
             static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
+}
+
+void TextureManager::PumpEnhancedTextures(double budget_ms) {
+    if (!enhanced_queue_ || !ctx_) return;
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<uint32_t> swapped;
+    for (;;) {
+        EnhancedPrepared prepared;
+        {
+            std::lock_guard lock(enhanced_queue_->mutex);
+            if (enhanced_queue_->ready.empty()) break;
+            prepared = std::move(enhanced_queue_->ready.front());
+            enhanced_queue_->ready.pop_front();
+        }
+        if (!enhanced_images_.contains(prepared.index)) {
+            std::vector<TextureMip> mips;
+            uint64_t bytes = 0;
+            for (uint32_t level = 0; level < prepared.cached.mip_count; ++level) {
+                mips.push_back({prepared.cached.MipWidth(level), prepared.cached.MipHeight(level), prepared.cached.mips[level]});
+                bytes += prepared.cached.mips[level].size();
+            }
+            const uint32_t replacement = Create(prepared.path + std::format("#enhanced-{:016x}", prepared.key), prepared.cached.Format(), mips);
+            if (replacement != kWhite) {
+                enhanced_images_[prepared.index] = replacement;
+                enhanced_bytes_ += bytes;
+                swapped.push_back(prepared.index);
+            }
+        }
+        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budget_ms) break;
+    }
+    if (!swapped.empty() && enhanced_enabled_) {
+        vkDeviceWaitIdle(ctx_->device);
+        for (const uint32_t index : swapped) UpdateTextureDescriptor(index);
+    }
+    bool finished = false;
+    {
+        std::lock_guard lock(enhanced_queue_->mutex);
+        finished = enhanced_queue_->ready.empty() && enhanced_queue_->done.load() >= enhanced_queue_->total;
+    }
+    if (finished) {
+        StopEnhancedWorker();
+        LogInfo("textures: enhanced textures ready, {} replacements ({:.0f} MB of texture data)", enhanced_images_.size(),
+                static_cast<double>(enhanced_bytes_) / (1024.0 * 1024.0));
+    }
 }
 
 uint32_t TextureManager::AddMaterial(const MaterialGpu& material) {

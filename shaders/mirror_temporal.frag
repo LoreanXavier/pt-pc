@@ -30,6 +30,7 @@ void main() {
     out_color = vec4(current, z);
     if (pass.ids.x == 0u || !(z > 0.0)) return;
 
+    // History belongs to the reflected scene, not the physical mirror surface in the main view.
     vec2 ndc = uv * 2.0 - 1.0;
     vec3 world = (capture.inv_view * vec4(ndc * capture.projection_param.xy * z, z, 1.0)).xyz;
     vec4 previous = pass.m * vec4(world, 1.0);

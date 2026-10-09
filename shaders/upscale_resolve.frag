@@ -18,6 +18,8 @@ layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_depth;
 layout(location = 2) out vec4 out_velocity;
 
+// The accumulated floor reflection (reflect_temporal.frag's history, slot ids.z; 0 none) at a render position: bilinear over the
+// floor texels (amount -1 off the floors counts as no reflection)
 vec4 Reflection(vec2 render_uv) {
     ivec2 size = ivec2(pass.f1.xy);
     vec2 texel = render_uv * pass.f1.xy - 0.5;
@@ -40,6 +42,7 @@ void main() {
     vec3 color = source.rgb;
     if (pass.ids.x == 1u) {
         color = ImgFetch(IMG_UPSCALED, ivec2(gl_FragCoord.xy)).rgb;
+        // the handy light back on the upscaled colour (upscale_demod.frag), its factor at this output pixel's render position
         if (pass.f1.z > 0.5) {
             color *= Img(IMG_HANDY_FACTOR, SMP_LINEAR_CLAMP, render_uv).x;
         }
@@ -47,7 +50,11 @@ void main() {
         vec2 motion = Img(IMG_MOTION, SMP_POINT_CLAMP, render_uv).xy;
         color = Img(IMG_UPSCALED, SMP_LINEAR_CLAMP, uv + motion).rgb;
     }
+    // PC addition (12.16): the floor reflection mixed in after the upscaler, as reflect_blend.frag mixes it, so the upscaler
+    // reprojects the floor alone (its motion is the floor's; the reflected image's is not) and the reflection keeps its own history
     if (pass.ids.z != 0u) {
+        // at the output pixel itself, not the jittered render position: the accumulation averages the jitter, and reading
+        // it through this frame's jitter moved a thin bright reflection (a lit baseboard) by up to half a texel every frame
         vec4 reflection = Reflection(uv);
         if (reflection.a > 0.0) {
             color = min(color, vec3(1.0)) * (1.0 - reflection.a) + reflection.rgb;

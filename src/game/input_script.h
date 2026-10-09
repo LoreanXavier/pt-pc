@@ -25,6 +25,7 @@ public:
     bool Parse(const std::string& text);
     void Apply(uint64_t frame, Game& game, InputState& input);
     bool Empty() const { return commands_.empty(); }
+    // every command was applied and no sequenced item waits (the Archive's theater runs its own walks with a script)
     bool Idle() const { return next_ >= commands_.size() && waypoints_.empty(); }
     bool UsesPads() const;
     std::optional<bool> ForcedFocus(uint64_t frame) const;
@@ -71,9 +72,13 @@ private:
         std::vector<float> args;
     };
     std::vector<Waypoint> waypoints_;
+    // the loop browser's queue items (sloop, sbrowsed, sfade): true while the item still waits
     bool BrowseWait(Game& game, Waypoint& item);
+    // sarchive and sarchived (the Archive's viewers)
     bool ArchiveWait(Game& game, Waypoint& item);
+    // a pick that was refused or a wait that gave up: the next sshot is dropped, so no picture of another place is kept under its name
     bool skip_next_shot_ = false;
+    // `sstate save`: the session state (Game::DescribeSessionState) a later `sstate compare` must find again
     std::string saved_state_;
     void Resolve(Game& game, Waypoint& item);
     bool ApplyGoto(uint64_t frame, Game& game, InputState& input);
@@ -84,10 +89,13 @@ private:
     bool anchored_ = false;
     uint64_t stuck_frames_ = 0;
     glm::vec3 last_position_{0.0f};
+    // sfeet: the feet of the previous tick, the ticks the player has stood still since and the ticks waited
     glm::vec3 eye_last_feet_{0.0f};
     int eye_still_ = 0;
     int eye_wait_ = 0;
     int trace_frames_ = 0;
+    // shold: the frame until which the game is held (paused) once it gives control (StartGame ran, controller step 15); a later
+    // control moves the script's remaining lines by the difference
     uint64_t hold_until_ = 0;
     bool holding_ = false;
     bool hold_done_ = false;
@@ -126,9 +134,11 @@ private:
         std::string button;
     };
     std::vector<Release> releases_;
+    // sburst: screenshots left, the next one's index, the path prefix
     int burst_left_ = 0;
     int burst_index_ = 0;
     std::string burst_prefix_;
+    // key and mouse taps (ktap, sktap): scancode, or 0x10000 + mouse button
     std::vector<std::pair<uint64_t, uint32_t>> key_releases_;
     bool KeyCommand(const std::string& op, const std::vector<std::string>& words, const std::vector<float>& args, uint64_t frame);
     int expectations_ = 0;

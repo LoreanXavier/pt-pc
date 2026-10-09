@@ -8,7 +8,7 @@
 set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 BUILD="$REPO/build/linux-cross"
-GAME=${1:-$REPO/game/CUSA01127}
+GAME=${1:-/mnt/c/Projects/pt-port/game/CUSA01127}
 OUT=${2:-$HOME/pt-linux-test}
 SETUP=${3:-/mnt/d/pt-platform-out/P.T.PC.Port.Setup-linux}
 WINEXE="$REPO/build/release/pt.exe"

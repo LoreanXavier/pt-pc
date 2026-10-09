@@ -14,9 +14,14 @@ namespace {
 
 constexpr uint64_t kTextFunctor = 0xECEC4D259E21;
 constexpr uint64_t kRandomBugText = 0x90BA012E9D3E;
+// the cases of 0x77BDB0's switch, each an event of bug_expression.uigb that shows one picture of UI_sys_bug.uif and hides the
+// others. sh_bug_3 (the yellow "Release the game for free" page) has a mesh but no event, so the original never shows it; the
+// port adds it as case 6 (a PC addition the user asked for), built from case 0's event with that mesh shown and the others hidden
 constexpr int kBugCases = 7;
 constexpr uint64_t kBugTexts[6] = {0x119CABD7B66A, 0x69D97AC6AF45, 0xC19FC491E18F, 0xF89D156E5DA1, 0xED7A96A7C6B6, 0xA957904C892D};
 constexpr uint64_t kBug3Mesh = 0x8F1B33D1D824;
+// gc_p02_080 sends it at 5876: the setout of the bug picture
+constexpr uint64_t kBugSetoutText = 0xE77E6C72FA82;
 constexpr const char* kBugPictures[kBugCases] = {"sh_bug_1, grey, mirrored lines", "sh_bug_2, black, Fix this damn bug",
                                                  "sh_bug_4, white, Knowing you ... -J", "sh_bug_5, red, I'm heading there now",
                                                  "sh_bug_6, yellow, I'll call later", "sh_bug_7, black, This game is purely fictitious",
@@ -144,7 +149,14 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
         return false;
     }
     std::vector<ui::UigbAction> added;
+    if ((text & kStrCode64Mask) == kBugSetoutText) {
+        bug_graph_ = 0;
+    }
     if ((text & kStrCode64Mask) == kRandomBugText) {
+        bug_graph_ = graph;
+        bug_shown_ = 0.0f;
+        // 0x77BDB0 picks when the text comes: sceKernelReadTsc's low 32 bits (0x42C9C0), one xorshift32 step (13, 7, 5), modulo 6,
+        // so every fake crash can show another page; the port takes modulo 7 for its seventh page
         uint32_t x = ReadTsc();
         x ^= x << 13;
         x ^= x >> 7;
@@ -152,6 +164,7 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
         const uint32_t pick = bug_screen >= 0 && bug_screen < kBugCases ? static_cast<uint32_t>(bug_screen) : x % kBugCases;
         LogInfo("ui: bug screen {} of {} ({}){}", pick, kBugCases, kBugPictures[pick], bug_screen >= 0 ? ", forced" : "");
         if (pick == 6) {
+            // case 0's actions (the setin and the seven meshes' visibility) with sh_bug_3's mesh the one shown
             if (const ui::UigbEvent* model = instance->data->FindEvent(kBugTexts[0])) {
                 added = model->actions;
                 for (ui::UigbAction& action : added) {
@@ -174,6 +187,29 @@ bool DemoUi::Text(uint64_t graph, uint64_t text, int bug_screen) {
     LogInfo("ui: demo graph {:#x} event {:#x} ({} actions)", graph, text, event->actions.size());
     Run(*instance, event->actions);
     return true;
+}
+
+bool DemoUi::BugScreenStill() const {
+    // the picture is drawn for a few frames first: the capture's frame 10 after the switch (one timeline step) already shows the
+    // page complete and still
+    constexpr float kSetInSeconds = 0.25f;
+    if (!bug_graph_ || bug_shown_ < kSetInSeconds) {
+        return false;
+    }
+    for (const auto& instance : instances_) {
+        if (instance->graph != bug_graph_) {
+            continue;
+        }
+        for (const Layout& layout : instance->layouts) {
+            for (const ModelView& model : layout.models) {
+                if (model.players.AnyPlaying()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 void DemoUi::Run(Instance& instance, const std::vector<ui::UigbAction>& actions) {
@@ -259,6 +295,7 @@ void DemoUi::Update(Game& game, float dt, bool paused) {
         }
     }
     const size_t before = instances_.size();
+    // a demo held as scenery (the street walk) shows no texts: its earlier play's graphs close too
     std::erase_if(instances_, [&](const auto& i) {
         return !i->demo_id.empty() && (!game.Demos().IsPlaying(i->demo_id) || game.Demos().IsHeld(i->demo_id));
     });
@@ -266,6 +303,9 @@ void DemoUi::Update(Game& game, float dt, bool paused) {
         LogInfo("ui: {} demo graphs closed with the demo", before - instances_.size());
     }
     const float step = paused ? 0.0f : dt * game.Demos().time_scale;
+    if (bug_graph_) {
+        bug_shown_ += step;
+    }
     for (auto& instance : instances_) {
         for (Layout& layout : instance->layouts) {
             for (ModelView& model : layout.models) {
@@ -278,6 +318,9 @@ void DemoUi::Update(Game& game, float dt, bool paused) {
 
 void DemoUi::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language) {
     for (auto& instance : instances_) {
+        // DemoUiFunctor_Create (0x77C290 -> 0x7A0D10) only builds the graph; DemoUiFunctor_Start (0x77BB40 -> 0x7A0F30 -> 0xFDD8A0)
+        // runs it, and the start node's actions hide the layouts that are not shown yet (the ending's three logos, whose pictures
+        // are opaque in their UIF, and the narration and credit pictures), so nothing of the graph is on screen before the start
         if (!instance->started) {
             continue;
         }

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -45,6 +46,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
 constexpr const char* kRayQueryExtensions[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME,
                                                VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 
+// Whether the device can run the ray traced shadows: the three extensions and the accelerationStructure, rayQuery and
+// bufferDeviceAddress features. Only a query; nothing is enabled here.
 bool RayQuerySupport(VkPhysicalDevice physical, std::string& missing) {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
@@ -105,6 +108,26 @@ bool HasInstanceExtension(const char* name) {
     return std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& e) { return std::strcmp(e.extensionName, name) == 0; });
 }
 
+#ifdef _WIN32
+// RivaTuner Statistics Server (MSI Afterburner's overlay) installs an implicit Vulkan layer, VK_LAYER_RTSS. With it 1.0.1 died
+// 0.26 s in, between vkCreateDevice and the first pipeline, in RTSSVkLayer64.dll+0x2a01 (two dumps from one RTX 4080 player,
+// 2026-10-07). The loader leaves it out when VK_LOADER_LAYERS_DISABLE names it (loader 1.3.234 and newer) or when the layer's own
+// disable_environment DISABLE_RTSS_LAYER is set; the overlay's other hooks are not affected. PT_ALLOW_RTSS=1 keeps the layer.
+void DisableCrashingImplicitLayers() {
+    if (const char* allow = std::getenv("PT_ALLOW_RTSS"); allow && *allow && *allow != '0') {
+        return;
+    }
+    // _putenv_s updates the process environment the loader reads as well as the CRT's copy
+    const char* current = std::getenv("VK_LOADER_LAYERS_DISABLE");
+    std::string list = current ? current : "";
+    if (list.find("RTSS") == std::string::npos) {
+        list += list.empty() ? "*RTSS*" : ",*RTSS*";
+        _putenv_s("VK_LOADER_LAYERS_DISABLE", list.c_str());
+    }
+    _putenv_s("DISABLE_RTSS_LAYER", "1");
+}
+#endif
+
 }
 
 std::string VulkanLibraryPath() {
@@ -138,6 +161,7 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
 #endif
     if (loader) {
+        // Streamline's interposer (upscale/streamline.h): its proxies create the instance, the device and the swapchain
         /* With Streamline loaded, instance, device and swapchain must come from its proxies, so volk takes the interposer's loader instead of vulkan-1.dll. */
         volkInitializeCustom(loader);
     } else if (!Check(volkInitialize(), "volkInitialize")) {
@@ -160,6 +184,9 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         validation = false;
     }
 
+#ifdef _WIN32
+    DisableCrashingImplicitLayers();
+#endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "pt-port";
     app.pEngineName = "pt-port";
@@ -587,6 +614,9 @@ bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool 
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, nullptr);
     std::vector<VkPresentModeKHR> modes(mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface, &mode_count, modes.data());
+    // v-sync off is IMMEDIATE (frames shown as they finish: no cap from the display, tearing possible), MAILBOX where the
+    // surface has no IMMEDIATE. MAILBOX had been preferred, and a window then held at the display's refresh rate (259 fps at
+    // 260 Hz with a 2.3 ms GPU frame), which read as v-sync still on.
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
     if (!vsync) {
         const bool immediate = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_IMMEDIATE_KHR) != modes.end();

@@ -57,6 +57,7 @@ void TrapSystem::DumpTraps(const Stage& stage) const {
 }
 
 bool TrapSystem::PlayerInside(const Stage& stage, const TrapPlacement& trap) const {
+    // 0xBEEC20: a point query at the trap object
     const glm::vec3 point = game_.GetPlayer().TrapPoint();
     for (const glm::mat4& box : trap.boxes) {
         const glm::vec3 local(glm::inverse(stage.ToWorld(box)) * glm::vec4(point, 1.0f));
@@ -83,6 +84,8 @@ bool TrapSystem::ButtonPressed(const std::string& button) const {
     return true;
 }
 
+// the XMark's trap reads `Action`, the cross bit (0x917AE0) that is also the interact button: the gouge is the action button
+// (E, Enter, Space, left mouse, cross) or the dedicated X (the X key, the pad button that carries the X label)
 bool TrapSystem::GougePressed() const {
     return (game_.GetPlayer().FramePressedButtons() & (kPadGouge | kPadAction)) != 0;
 }
@@ -113,6 +116,7 @@ bool TrapSystem::Check(const Context& ctx, const TrapCallback& callback) {
         const float limit = glm::radians(f.GetFloat(e, "degreeLimit", 0, 45.0f));
         bool dir_ok = true;
         if (f.GetBool(e, "isCheckPlayerDir")) {
+            // 0x915850 reads the published body rotation (+0x40, the previous frame's), not the camera yaw
             dir_ok = std::abs(Wrap(player.PublishedBodyFoxYaw() - ref_yaw)) <= limit;
         }
         bool button_ok = true;
@@ -353,6 +357,10 @@ void TrapSystem::Update(float dt) {
             stage_ids.push_back(stage.id);
         }
     });
+    // 0xBEF490 gathers the hits of every trap the object is in, 0xBEEC20 sorts them into the OUT, ENTER and INSIDE lists, and
+    // only then 0xBEF910 runs the execs: all OUT, then all ENTER, then all INSIDE. So an exec that enables another trap's
+    // condition takes effect in the next frame, and leaving one box while entering another of the same kind (two MirrorSwitch
+    // boxes of one flag) clears before it sets.
     /* All OUT execs run first, then ENTER, then INSIDE, after every hit is gathered (0xBEF910): an exec that enables another trap only takes effect next frame. */
     struct Pending {
         uint32_t stage_id;
@@ -373,6 +381,8 @@ void TrapSystem::Update(float dt) {
                     LogInfo("trap: {} {}", inside ? "enter" : "leave", trap.name);
                 }
                 was_inside = inside;
+                // --trap-log: follow the MirrorSwitch traps (the ones that drive the mirror capture) and the viewport bits
+                // they set. The player's point is the controller sphere's centre 0xB010B0 tests them with.
                 if (debug_log && trap.name.find("Mirror") != std::string::npos) {
                     const glm::vec3 p = game_.GetPlayer().TrapPoint();
                     const glm::vec3 feet = game_.GetPlayer().Feet();
@@ -408,6 +418,7 @@ void TrapSystem::Update(float dt) {
     }
     for (auto* list : {&out, &enter, &in}) {
         for (const Pending& pending : *list) {
+            // an exec may have unloaded the stage (a floor change); its remaining hits go with it
             if (game_.Stages().FindById(pending.stage_id) != pending.ctx.stage) {
                 continue;
             }

@@ -13,7 +13,7 @@ bool Empty(const pt::InputState& input) {
            input.pointer == glm::vec2(0.0f) && !input.vr_look && input.vr_look_angles == glm::vec2(0.0f) && input.gamepad_sensitivity == 1.0f;
 }
 
-}
+}  // namespace
 
 int main() {
     int failures = 0;

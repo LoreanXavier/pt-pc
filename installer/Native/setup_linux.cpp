@@ -1,3 +1,6 @@
+// The installer on Linux (docs/installer.md, "Linux"): the same steps and checks as the Windows setup (setup_core.h), from
+// a terminal, or with zenity file pickers when it is started without one. The payload is appended to this executable by
+// tools/linux/attach_payload.py: payload, then "PTPAYLD1", the payload's offset and size (u64 each) at the very end.
 #include "engine/platform/os.h"
 #include "engine/platform/self_integrity.h"
 #include "engine/platform/update_check.h"
@@ -39,6 +42,7 @@ std::string HashFile(const fs::path& file) {
     pt::integrity::Sha256(bytes.data(), bytes.size(), digest);
     return HexDigest(digest);
 }
+// the payload appended to this executable
 std::vector<unsigned char> Payload() {
     std::ifstream self("/proc/self/exe", std::ios::binary);
     self.seekg(0, std::ios::end);
@@ -57,8 +61,25 @@ std::vector<unsigned char> Payload() {
     if (!self) throw std::runtime_error("Installer payload missing.");
     return data;
 }
+// the target (when it exists) and every folder above it: no symbolic links
+// Symbolic links among the existing parents are resolved first: on Fedora Atomic desktops (Bazzite, Silverblue, Kinoite) /home
+// is a link to /var/home, so every default path held one and players had to type /var/home by hand. A link at or below the
+// chosen folder, which the setup would write through, is still refused.
 void CheckParents(const fs::path& destination) {
-    for (auto p = fs::absolute(destination); !p.empty();) {
+    std::error_code canonical_error;
+    fs::path resolved = fs::absolute(destination);
+    fs::path existing = resolved;
+    while (!existing.empty() && !fs::exists(existing, canonical_error) && existing.parent_path() != existing) existing = existing.parent_path();
+    if (existing != resolved) {
+        const fs::path real = fs::canonical(existing, canonical_error);
+        if (!canonical_error) resolved = real / fs::relative(resolved, existing, canonical_error);
+    } else if (fs::is_symlink(resolved, canonical_error)) {
+        throw std::runtime_error("Choose a destination without symbolic links.");
+    } else {
+        const fs::path real = fs::canonical(resolved, canonical_error);
+        if (!canonical_error) resolved = real;
+    }
+    for (auto p = resolved; !p.empty();) {
         std::error_code error;
         if (fs::is_symlink(p, error)) throw std::runtime_error("Choose a destination without symbolic links.");
         const auto parent = p.parent_path();
@@ -66,10 +87,12 @@ void CheckParents(const fs::path& destination) {
         p = parent;
     }
 }
+// the setup's own file against a corrupt download (self_integrity.h, the stamp of tools/linux/attach_payload.py)
 void VerifyIntegrity() {
     CheckCancel();
     if (!pt::integrity::IntegrityOk()) throw std::runtime_error("This setup file is damaged or was modified. Please download it again.");
 }
+// the payload stores no file modes: the programs get theirs here
 void MarkExecutables(const fs::path& root) {
     for (const char* name : {"pt", "extractor/PT.PkgExtract", "texture-tools/realesrgan-ncnn-vulkan"}) {
         std::error_code error;
@@ -83,6 +106,7 @@ void MarkExecutables(const fs::path& root) {
     }
 }
 void Extract(const fs::path& staging, const fs::path& package) {
+    // the helper's output files, polled for the progress while RunProcess waits
     const fs::path assets = staging / "CUSA01127";
     const uint64_t before = progress.done;
     std::atomic<bool> finished{false};
@@ -104,6 +128,7 @@ void Extract(const fs::path& staging, const fs::path& package) {
         throw std::runtime_error("PKG extraction failed. " + details.substr(0, 600));
     }
 }
+// a menu entry in ~/.local/share/applications
 void WriteDesktop(const fs::path& file, const fs::path& destination) {
     std::ofstream out(file);
     out << "[Desktop Entry]\nType=Application\nName=" << kProduct << "\nComment=" << kProduct << "\nExec=\""
@@ -130,6 +155,7 @@ void Shortcut(const fs::path& destination) {
         }
     }
 }
+// A new install, or the update of the install in `destination` (asked first when interactive)
 InstallOutcome Install(const fs::path& input, const fs::path& destination, bool shortcut) {
     InstallSteps steps;
     steps.version = std::string(pt::update::CurrentVersion());
@@ -139,6 +165,7 @@ InstallOutcome Install(const fs::path& input, const fs::path& destination, bool 
     steps.unique_id = id;
     steps.check_parents = CheckParents;
     steps.verify_integrity = VerifyIntegrity;
+    // the payload is read once: its size for the progress total, then the unpack
     auto payload = std::make_shared<std::vector<unsigned char>>();
     steps.payload_bytes = [payload] {
         if (payload->empty()) *payload = Payload();
@@ -163,23 +190,62 @@ std::string Outcome(const InstallOutcome& outcome) {
     if (!outcome.notes.empty()) text += " Your copy differs from the tested US release; install-notes.txt in the install folder lists how.";
     return text;
 }
-bool HasZenity() {
-    return (std::getenv("DISPLAY") || std::getenv("WAYLAND_DISPLAY")) && std::system("command -v zenity >/dev/null 2>&1") == 0;
+// The desktop dialogs: zenity (GNOME and most desktops) or kdialog (KDE; Bazzite's and Kinoite's KDE images ship without
+// zenity, and started from the file manager the setup then had no way to show anything)
+enum class Dialogs { None, Zenity, Kdialog };
+Dialogs FindDialogs() {
+    if (!std::getenv("DISPLAY") && !std::getenv("WAYLAND_DISPLAY")) return Dialogs::None;
+    if (std::system("command -v zenity >/dev/null 2>&1") == 0) return Dialogs::Zenity;
+    if (std::system("command -v kdialog >/dev/null 2>&1") == 0) return Dialogs::Kdialog;
+    return Dialogs::None;
 }
+// a text in single quotes for the shell
 std::string Quote(const std::string& text) {
     std::string out = "'";
     for (char c : text) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
     return out + "'";
 }
-std::string Zenity(const std::string& args) {
+std::string RunDialog(const std::string& command) {
     std::string out;
-    if (FILE* pipe = popen(("zenity " + args + " 2>/dev/null").c_str(), "r")) {
+    if (FILE* pipe = popen((command + " 2>/dev/null").c_str(), "r")) {
         char buffer[4096];
         while (std::fgets(buffer, sizeof(buffer), pipe)) out += buffer;
         pclose(pipe);
     }
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
     return out;
+}
+std::string HomeDir() {
+    const char* home = std::getenv("HOME");
+    return home ? home : "/";
+}
+std::string PickDirectory(Dialogs d, const std::string& title) {
+    return d == Dialogs::Zenity ? RunDialog("zenity --file-selection --directory --title=" + Quote(title))
+                                : RunDialog("kdialog --title " + Quote(title) + " --getexistingdirectory " + Quote(HomeDir()));
+}
+std::string PickPackage(Dialogs d, const std::string& title) {
+    return d == Dialogs::Zenity ? RunDialog("zenity --file-selection --title=" + Quote(title) + " --file-filter='PS4 package | *.pkg *.PKG'")
+                                : RunDialog("kdialog --title " + Quote(title) + " --getopenfilename " + Quote(HomeDir()) + " 'PS4 package (*.pkg *.PKG)'");
+}
+std::string AskText(Dialogs d, const std::string& text, const std::string& fallback) {
+    return d == Dialogs::Zenity ? RunDialog("zenity --entry --title=" + Quote(kProduct) + " --text=" + Quote(text) + " --entry-text=" + Quote(fallback))
+                                : RunDialog("kdialog --title " + Quote(kProduct) + " --inputbox " + Quote(text) + " " + Quote(fallback));
+}
+bool AskYesNo(Dialogs d, const std::string& text) {
+    const std::string command = d == Dialogs::Zenity ? "zenity --question --title=" + Quote(kProduct) + " --text=" + Quote(text)
+                                                     : "kdialog --title " + Quote(kProduct) + " --yesno " + Quote(text);
+    return std::system((command + " 2>/dev/null").c_str()) == 0;
+}
+void ShowMessage(Dialogs d, bool error, const std::string& text) {
+    if (d == Dialogs::Zenity) RunDialog(std::string("zenity ") + (error ? "--error" : "--info") + " --title=" + Quote(kProduct) + " --text=" + Quote(text));
+    else if (d == Dialogs::Kdialog) RunDialog("kdialog --title " + Quote(kProduct) + (error ? " --error " : " --msgbox ") + Quote(text));
+}
+// "~" and "~/..." as a shell would expand them: the terminal prompt and the dialogs pass the text through as typed, and
+// "~/Games/PT" became a folder named "~" in the working directory
+std::string ExpandHome(std::string path) {
+    while (!path.empty() && (path.back() == ' ' || path.back() == '\t')) path.pop_back();
+    if (path == "~" || path.starts_with("~/")) path = HomeDir() + path.substr(1);
+    return path;
 }
 std::string Ask(const std::string& question, const std::string& fallback) {
     std::cout << question << (fallback.empty() ? "" : " [" + fallback + "]") << ": " << std::flush;
@@ -189,7 +255,8 @@ std::string Ask(const std::string& question, const std::string& fallback) {
 }
 int Interactive() {
     const bool terminal = isatty(0);
-    const bool gui = !terminal && HasZenity();
+    const Dialogs dialogs = terminal ? Dialogs::None : FindDialogs();
+    const bool gui = dialogs != Dialogs::None;
     const char* home = std::getenv("HOME");
     const std::string default_dest = home ? (fs::path(home) / ".local" / "share" / kSlug).string() : "";
     std::cout << kProduct << " setup, version " << pt::update::CurrentVersion() << "\n";
@@ -197,19 +264,20 @@ int Interactive() {
     updates.Start();
     std::string input, destination;
     if (gui) {
-        input = Zenity("--file-selection --directory --title='Select the P.T. game folder from your dump (Cancel to pick a PKG)'");
-        if (input.empty()) input = Zenity("--file-selection --title='Select your P.T. fake PKG' --file-filter='PS4 package | *.pkg *.PKG'");
+        input = PickDirectory(dialogs, "Select the P.T. game folder from your dump (Cancel to pick a PKG)");
+        if (input.empty()) input = PickPackage(dialogs, "Select your P.T. fake PKG");
         if (input.empty()) return 1;
-        destination = Zenity("--entry --title='" + std::string(kProduct) + "' --text='New installation folder' --entry-text=" + Quote(default_dest));
+        destination = ExpandHome(AskText(dialogs, "Installation folder (a new or empty one, or an existing install to update)", default_dest));
         if (destination.empty()) return 1;
     } else if (terminal) {
         std::cout << "Select your P.T. fake PKG or dumped game folder. No game assets are included.\n";
-        destination = Ask("Installation folder (a new one, or an existing install to update)", default_dest);
-        input = Ask("PKG file or game folder (empty to keep the game files of an existing install)", "");
+        destination = ExpandHome(Ask("Installation folder (a new or empty one, or an existing install to update)", default_dest));
+        input = ExpandHome(Ask("PKG file or game folder (empty to keep the game files of an existing install)", ""));
     } else {
-        std::cerr << "Run this setup from a terminal, or install zenity for file pickers.\n";
+        std::cerr << "Run this setup from a terminal, or install zenity or kdialog for file pickers.\n";
         return 2;
     }
+    // one line per step; its percentage is rewritten in place once the install is measured
     struct Line { std::string text; int percent = -1; bool open = false; };
     static Line line;
     hooks.report = [](const std::string& text) {
@@ -230,8 +298,7 @@ int Interactive() {
     try {
         const auto question = UpdateQuestion(InspectInstall(destination), std::string(pt::update::CurrentVersion()));
         if (!question.empty()) {
-            const bool yes = gui ? std::system(("zenity --question --title='" + std::string(kProduct) + "' --text=" + Quote(question) + " 2>/dev/null").c_str()) == 0
-                                 : Ask(question + " (y/n)", "n").starts_with("y");
+            const bool yes = gui ? AskYesNo(dialogs, question) : Ask(question + " (y/n)", "n").starts_with("y");
             if (!yes) return 1;
         }
         result = Outcome(Install(input, destination, true));
@@ -243,7 +310,7 @@ int Interactive() {
     if (const auto newer = updates.Newer()) result += "\nVersion " + newer->version + " is available: " + newer->url;
     if (line.open) std::cout << "\n";
     std::cout << result << "\n";
-    if (gui) Zenity(std::string(code ? "--error" : "--info") + " --title='" + kProduct + "' --text=" + Quote(result));
+    if (gui) ShowMessage(dialogs, code != 0, result);
     return code;
 }
 }
@@ -258,6 +325,7 @@ int main(int argc, char** argv) {
             hooks.cancelled = [] { return cancel.load(); };
             static ProgressTrace trace;
             hooks.progress = [](uint64_t done, uint64_t total) { trace.Note(done, total); };
+            if (!ResultPathWritable(argv[4])) throw std::runtime_error("refusing to overwrite the result file " + std::string(argv[4]));
             const auto outcome = Install(argv[2], argv[3], false);
             std::ofstream out(argv[4]);
             out << (outcome.updated ? "PASS updated" : "PASS installed");
@@ -267,6 +335,7 @@ int main(int argc, char** argv) {
             for (const auto& note : outcome.notes) out << "\nnote: " << note;
             out << "\n" << trace.Summary();
         } else if (mode == "--verify-integrity" && argc == 3) {
+            if (!ResultPathWritable(argv[2])) throw std::runtime_error("refusing to overwrite the result file " + std::string(argv[2]));
             VerifyIntegrity();
             std::ofstream(argv[2]) << "PASS integrity verified";
         } else if (mode == "--check-update" && argc == 3) {
@@ -319,7 +388,8 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         result = 1;
-        std::ofstream(result_file) << e.what();
+        std::cerr << e.what() << "\n";
+        if (ResultPathWritable(result_file)) std::ofstream(result_file) << e.what();
     }
     return result;
 }

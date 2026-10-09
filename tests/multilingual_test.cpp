@@ -8,12 +8,14 @@
 int main(int argc, char** argv) {
  if(argc!=2)return 2;pt::Vfs vfs;if(!vfs.Mount(argv[1]))return 2;
  pt::audio::SubtitleTable english;std::string error;if(!english.Load(vfs,"Eng",{},&error))return 2;
- int failures=0;const char* codes[]={"Tur","Zhs","Ara","Rus","Ukr","Ces"};
- for(int lang=7;lang<13;++lang){
+ int failures=0;const char* codes[]={"Tur","Zhs","Ara","Rus","Ukr","Ces","Pol"};
+ for(int lang=7;lang<14;++lang){
   pt::audio::SubtitleTable translated;
   if(!translated.Load(vfs,codes[lang-7],{},&error)){printf("FAIL: %s\n",error.c_str());++failures;continue;}
   pt::ui::FfntFont font;auto family=lang==8?"Noto Sans SC":lang==9?"Noto Kufi Arabic":"Noto Sans";
   if(!font.LoadUnicodeFont(family,pt::localized::Characters(lang),lang==9,&error)){printf("FAIL: font %s: %s\n",family,error.c_str());++failures;continue;}
+  // Arabic subtitles use Noto Naskh Arabic, the menus Noto Kufi Arabic
+  // the value selectors' arrows: shaped alone (a left-to-right run) they keep their own glyphs, never the bidi mirrored ones
   for(const char* arrow:{"<",">"}){auto s=font.ShapeLine(pt::ui::DecodeUtf8(arrow),0);const auto* own=font.Find(uint8_t(arrow[0]));
    bool same=s.size()==1&&s[0].glyph&&own&&s[0].glyph->width==own->width&&s[0].glyph->height==own->height;
    for(int y=0;same&&y<own->height;++y)for(int x=0;same&&x<own->width;++x)same=font.Coverage(*s[0].glyph,x,y)==font.Coverage(*own,x,y);

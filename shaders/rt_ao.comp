@@ -5,10 +5,17 @@
 #include "common.glsl"
 #include "rt_shadow.glsl"
 
+// Ray traced ambient occlusion (rendering.md 12.21), the first pass: a few rays per pixel over the hemisphere of the G-buffer
+// normal (cosine weighted), against the camera view's G-buffer surfaces (TLAS mask bit 3), up to the reach. Each ray's
+// occlusion falls from 1 at the surface to 0 at the reach, (1 - t / reach)^2; the raw value is 1 minus their mean.
+// rt_ao_filter.comp accumulates it over frames and blurs it; probe.frag with PT_RT_AO multiplies the probe ambient by it.
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(push_constant) uniform PassPush {
+    // x the view, y the frame number, z the rays per pixel
     uvec4 ids;
+    // x the reach in metres
     vec4 f0;
     vec4 f1;
     vec4 f2;
@@ -44,6 +51,7 @@ void main() {
         return;
     }
     vec3 c = ViewPosition(v, PixelNdc(v, vec2(pixel) + 0.5), depth);
+    // the face normal from the depth, on the side whose neighbour is nearer in depth (not across an edge)
     vec3 l = ViewAt(v, max(pixel - ivec2(1, 0), ivec2(0)));
     vec3 r = ViewAt(v, min(pixel + ivec2(1, 0), size - 1));
     vec3 d = ViewAt(v, max(pixel - ivec2(0, 1), ivec2(0)));
@@ -67,6 +75,7 @@ void main() {
     float reach = pass.f0.x;
     vec3 origin = world + ng * max(0.003, 0.0015 * c.z);
     uint rays = max(pass.ids.z, 1u);
+    // per pixel a random start, per frame and ray the R2 sequence on from it
     uint seed = Hash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u);
     vec2 start = vec2(float(seed & 0xFFFFu), float(seed >> 16u)) / 65536.0;
     float occlusion = 0.0;
@@ -76,6 +85,7 @@ void main() {
         float phi = 6.2831853 * e.x;
         float sin_theta = sqrt(e.y);
         vec3 dir = (t * cos(phi) + b * sin(phi)) * sin_theta + n * sqrt(1.0 - e.y);
+        // below the face (a normal map tilts n): mirrored into the face's hemisphere
         float below = dot(dir, ng);
         if (below < 0.0) {
             dir -= 2.0 * below * ng;

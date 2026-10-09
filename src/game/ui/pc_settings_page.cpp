@@ -31,20 +31,23 @@ constexpr uint16_t kTitle = 150;
 constexpr const char* kCursorSound = "Play_sys_cursor_01";
 constexpr const char* kChangeSound = "Play_sys_change_01";
 
+// UIF units of the option screen: headers at x -50 and 15, lines 16 right and 1 below, first entry 5 below its header
 constexpr float kLabelX[2] = {-50.0f, 15.0f};
-constexpr float kValueX[2] = {-18.0f, 47.0f};
+constexpr float kValueX[2] = {-13.0f, 52.0f};
 constexpr float kCenterX = (kLabelX[0] + kValueX[1] + 13.0f) * 0.5f;
 constexpr float kTop = 23.0f;
 constexpr float kFirstRow = 5.0f;
 constexpr float kRowStep = 3.0f;
-constexpr float kRowFloor = -20.0f;
+// Lowest row line that stays clear of the help text at kHelpAt; taller pages tighten their row step to fit
+constexpr float kRowFloor = -14.0f;
 constexpr float kMinRowStep = 2.0f;
 constexpr glm::vec2 kLineOffset{16.0f, -1.0f};
-constexpr glm::vec2 kBackIconAt{-52.0f, -27.0f};
-constexpr glm::vec2 kBackTextAt{-50.0f, -27.0f};
-constexpr glm::vec2 kQuitTextAt{-25.0f, -27.0f};
+constexpr glm::vec2 kBackIconAt{-52.0f, -31.0f};
+constexpr glm::vec2 kBackTextAt{-50.0f, -31.0f};
+constexpr glm::vec2 kQuitTextAt{-25.0f, -31.0f};
 constexpr glm::vec2 kHelpAt{5.0f, -21.5f};
 constexpr glm::vec2 kHelpSize{1100.0f, 60.0f};
+// a browser page (the loop browser, the Archive's lists) shows this many of its rows at a time and scrolls with the cursor
 constexpr int kBrowserRows = 18;
 constexpr float kBrowserStep = 2.0f;
 constexpr float kRepeatDelay = 0.4f;
@@ -90,7 +93,7 @@ void PcSettingsPage::Build(ui::UifModel& model, int icon_atlas, int icon_glow) {
     back_glow_ = Clone(model, kBackGlow, root_, kBackIconAt, "back_glow");
     back_text_ = Clone(model, kBackText, root_, kBackTextAt, "back_text");
     quit_text_ = Clone(model, kBackText, root_, kQuitTextAt, "quit_text");
-    navigation_text_ = Clone(model, kBackText, root_, glm::vec2(2.0f, -27.0f), "navigation_text");
+    navigation_text_ = Clone(model, kBackText, root_, glm::vec2(2.0f, -31.0f), "navigation_text");
     if (icon_atlas >= 0 && icon_glow >= 0) {
         SetCell(model, back_icon_, icon_atlas, 0.5f, 1.0f);
         SetCell(model, back_glow_, icon_glow, 0.5f, 1.0f);
@@ -145,12 +148,14 @@ PcPanel PcSettingsPage::PanelOf(int index) const {
     return row && source_ ? source_->Panel(row->id) : PcPanel{};
 }
 
+// the rows a scrolled page shows at a time: a browser's list, or the wall's strip (the halls page shows all of its rows)
 int PcSettingsPage::WindowRows() const {
     if (Gallery() == PcGallery::Wall) return WallVisible();
     if (Gallery() == PcGallery::Halls || !Browser()) return 1000;
     return kBrowserRows;
 }
 
+// the browser window keeps the cursor in view; other pages show every row
 void PcSettingsPage::Scroll() {
     const int n = static_cast<int>(rows_.size());
     const int window = WindowRows();
@@ -169,6 +174,7 @@ int PcSettingsPage::VisibleRows() const {
     return std::min(static_cast<int>(rows_.size()) - first_, WindowRows());
 }
 
+// the pointer over the Museum's frames: the halls' cells and text rows, or the strip's frames; -1 none
 int PcSettingsPage::GalleryHit(glm::vec2 units) const {
     const glm::vec2 px(MuseumLayout::kCanvasWidth * 0.5f + units.x * UiCanvas::kUnit, MuseumLayout::kCanvasHeight * 0.5f - units.y * UiCanvas::kUnit);
     const int n = static_cast<int>(rows_.size());
@@ -189,6 +195,8 @@ int PcSettingsPage::GalleryHit(glm::vec2 units) const {
     return -1;
 }
 
+// the directions over the Museum: left and right step along the strip (around its ends) or the grid's row, up and down the
+// grid's rows, then the text rows and the back button; true when the press was taken
 bool PcSettingsPage::GalleryMove(Game& game, uint32_t act) {
     const int n = static_cast<int>(rows_.size());
     const int cells = CellCount();
@@ -203,6 +211,7 @@ bool PcSettingsPage::GalleryMove(Game& game, uint32_t act) {
         else if (act & kRawDown) target = std::min(cursor_ + columns, cells);
         else return false;
     } else {
+        // the text rows and the back button, one per step; up from the first of them lands on the grid's last row
         if (act & kRawUp) target = cursor_ - 1;
         else if (act & kRawDown) target = std::min(cursor_ + 1, n);
         else return false;
@@ -215,6 +224,7 @@ glm::vec2 PcSettingsPage::Shown(const Placed& p) const {
     return Browser() && first_ > 0 ? p.label + glm::vec2(0.0f, kBrowserStep * static_cast<float>(first_)) : p.label;
 }
 
+// after the source changed its page (Activate, Back): the cursor on the first row, or where the source puts it
 void PcSettingsPage::SourceChanged() {
     cursor_ = 0;
     first_ = 0;
@@ -242,14 +252,16 @@ void PcSettingsPage::Layout() {
                     continue;
                 }
                 headers_.emplace_back(kLabelX[column], y[column]);
-                const bool compact = sections_.size() == 6;
+                const bool compact = sections_.size() >= 5;
                 const float gap = compact ? 3.0f : kFirstRow;
                 float row_y = y[column] - gap;
+                // a browser page scrolls its rows (kBrowserRows at a time, Shown), so it takes them all at its own step
                 const bool browser = Browser();
                 for (size_t r = 0; r < sections_[s].rows.size() && (browser || static_cast<int>(rows_.size()) < kMaxRows); ++r) {
                     rows_.push_back({static_cast<int>(s), static_cast<int>(r), {kLabelX[column], row_y}, {kValueX[column], row_y}});
-                    if (!browser) lowest = std::min(lowest, row_y);
-                    row_y -= browser ? kBrowserStep : row_step_;
+                    const float extra = browser ? 0.0f : 2.0f * (std::max(1, sections_[s].rows[r].label_lines) - 1);
+                    if (!browser) lowest = std::min(lowest, row_y - extra);
+                    row_y -= (browser ? kBrowserStep : row_step_) + extra;
                 }
                 y[column] = row_y + (browser ? kBrowserStep : row_step_) - gap;
             }
@@ -330,6 +342,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
         if (!accept) {
             return;
         }
+        // an Archive entry opens without leaving its page: the cursor stays where it is unless the source moves it
         const int keep = cursor_;
         source_->Activate(row->id);
         SourceChanged();
@@ -370,6 +383,7 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
         return;
     }
     if (row->ValueDisabled(value) && value != row->value) {
+        // shown greyed with its reason; the setting keeps its value until the cursor steps on to one it can take
         preview_id_ = row->id;
         preview_value_ = value;
     } else {
@@ -402,6 +416,7 @@ void PcSettingsPage::SwitchColumn(Game& game) {
 
 PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input, float dt) {
     if (source_ && source_->FullScreen()) {
+        // a picture over the whole screen: left and right step through the page's rows, everything else goes back to the page
         const uint32_t pressed = input.held_dirs & ~held_dirs_;
         held_dirs_ = input.held_dirs;
         const int n = static_cast<int>(rows_.size());
@@ -458,6 +473,8 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
     }
     if (input.back || input.close) {
         if (!confirming_) {
+            // Escape/close and the Back command traverse the same source page hierarchy. Once the source
+            // reaches its first page, the PC settings page itself returns to the options menu.
             if (source_ && source_->Back()) {
                 SourceChanged();
                 if (game.Audio()) {
@@ -517,6 +534,7 @@ void PcSettingsPage::Step(bool active) {
     }
 }
 
+// a row whose shown value has no text (a link that only goes somewhere)
 bool PcSettingsPage::ValueLess(const PcSettingRow& row) const {
     if (row.values.empty()) return true;
     const int shown = std::clamp(ShownValue(row), 0, static_cast<int>(row.values.size()) - 1);
@@ -536,6 +554,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     const PcGallery gallery = Gallery();
     text(navigation_text_, source_ && source_->IsLoopBrowser() ? "pc_loop_start_hint" : Browser() || gallery != PcGallery::None ? "pc_archive_hint" : "pc_nav_columns");
     view.State(navigation_text_).font_type = UiFontType::PcSystem;
+    // the column hint only where there is a second column to switch to (not on the street question or Extras)
     const bool two_columns = std::any_of(sections_.begin(), sections_.end(), [](const PcSettingSection& s) { return s.column > 0; });
     view.State(navigation_text_).visible = (source_ && source_->IsLoopBrowser()) || two_columns || gallery != PcGallery::None;
     view.State(back_text_).font_type = UiFontType::PcSystem;
@@ -557,6 +576,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         for (const PcSettingSection& section : sections_) {
             if (std::clamp(section.column, 0, 1) == column && header < kMaxSections) {
                 text(section_nodes_[header++].text, section.title);
+                // a scrolled list names where the cursor is in it
                 if (header == 1 && ((Browser() && static_cast<int>(rows_.size()) > kBrowserRows) || gallery == PcGallery::Wall)) {
                     auto& t = view.State(section_nodes_[0].text).text;
                     if (t) *t += std::format("   {} / {}", std::min(cursor_ + 1, static_cast<int>(rows_.size())), rows_.size());
@@ -564,6 +584,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
             }
         }
     }
+    // the Museum's pages draw their rows as frames (ArchiveView::DrawMuseum); the nodes stay hidden
     const int visible = gallery != PcGallery::None ? 0 : VisibleRows();
     for (int i = 0; i < kMaxRows; ++i) {
         const bool used = i < visible;
@@ -596,8 +617,21 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         view.State(row_nodes_[i].label).color = glm::vec4(1.0f, 1.0f, 1.0f, row.enabled ? 1.0f : 0.35f);
         const float label_scale = Browser() || (source_ && source_->CompactRows()) ? .8f : 1.0f;
         view.State(row_nodes_[i].label).scale = glm::vec2(label_scale);
+        // a label ends 2 units before the row's value selector (its left arrow is 12 units left of its centre; the loop browser's
+        // rows have no value and end before the preview column)
         view.State(row_nodes_[i].label).mirror_rtl = true;
         view.State(row_nodes_[i].label).text_end = (p.value.x + (Browser() ? -3.0f : -14.0f) - p.label.x) / label_scale;
+        view.State(row_nodes_[i].label).text_box.reset();
+        view.State(row_nodes_[i].label).text_line_pitch.reset();
+        if (row.label_lines > 1) {
+            auto& label = view.State(row_nodes_[i].label);
+            label.text_end.reset();
+            const float x = 640.0f + 10.0f * (p.label.x - kCenterX);
+            const float y = 360.0f - 10.0f * p.label.y - 10.0f;
+            const float end = 640.0f + 10.0f * (p.value.x - kCenterX - 14.0f);
+            label.text_box = glm::vec4(x, y, end, y + 30.0f * row.label_lines);
+            label.text_line_pitch = 24.0f;
+        }
         view.State(row_nodes_[i].group).offset = p.value;
         view.State(row_nodes_[i].group).color = glm::vec4(1.0f, 1.0f, 1.0f, (selected ? 1.0f : 0.65f) * (row.enabled ? 1.0f : 0.5f));
         const int shown = std::clamp(ShownValue(row), 0, std::max(0, static_cast<int>(row.values.size()) - 1));
@@ -617,6 +651,8 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         view.State(bar_group_).offset = rows_[cursor_].value;
         if (Browser()) view.State(bar_group_).offset = glm::vec2(-27.0f, Shown(rows_[cursor_]).y);
         else if (ValueLess(*current)) {
+            // no value to sit under: the bar goes under the label's text, centred on it as under a value (the label's extent is
+            // the one it drew last frame; before that, near its start)
             const Placed& p = rows_[cursor_];
             const std::optional<glm::vec2> span = view.TextSpan(row_nodes_[cursor_].label);
             view.State(bar_group_).offset = glm::vec2(p.label.x + (span ? (span->x + span->y) * 0.5f : 8.0f), p.value.y);
@@ -642,7 +678,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     }
     if (quit_selected) note = confirming_ ? "pc_note_quit_confirm" : "pc_note_quit";
     if (source_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) view.State(help_).description_samples = source_->DescriptionSamples();
-    view.State(help_).text_box = glm::vec4(90.0f, 585.0f, 1190.0f, 620.0f);
+    view.State(help_).text_box = glm::vec4(90.0f, 540.0f, 1190.0f, 626.0f);
     view.State(help_).font_type = UiFontType::PcSystem;
     view.State(help_).mirror_rtl = true;
     view.State(help_).text = note.empty() ? std::string() : PcNoteText(note, language);

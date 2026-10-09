@@ -116,6 +116,7 @@ std::optional<std::vector<uint8_t>> Psarc::Read(std::string_view name) const {
 
 std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     const Entry& entry = entries_[index];
+    // the archive's sizes are 40 bits; no P.T. file is near 1 GB, so a larger one is a damaged table, refused with a reason
     /* TOC sizes are 40-bit and nothing in P.T. comes near 1 GB, so anything larger is a corrupt table. */
     if (entry.size > (uint64_t(1) << 30)) {
         LogError("psarc: entry {} size {} out of range, bad TOC", index, entry.size);

@@ -1,6 +1,8 @@
 #pragma once
 #include <string_view>
 
+// Italian for the port's own menus (PC settings, extras, photo mode, loop browser, notes and prompts) and the added
+// languages' names on the option screen. The options screen's other texts and the subtitles are the game's own.
 namespace pt::italian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
@@ -48,6 +50,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Russo"},
     {"op_sub_ukrainian","Ucraino"},
     {"op_sub_czech","Ceco"},
+    {"op_sub_polish","Polacco"},
     {"pc_loop_browser","Selezione ciclo"},
     {"pc_note_loop_browser_entry","Avvia qualsiasi ciclo senza sostituire il tuo salvataggio."},
     {"pc_loop_choose","Scegli un ciclo"},

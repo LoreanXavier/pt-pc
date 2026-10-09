@@ -17,12 +17,17 @@ class TextureManager;
 
 namespace pt::game {
 
+// A box of a texture's level 0, in pixels
 struct PromptBox {
     int x0, y0, x1, y1;
     int Width() const { return x1 - x0; }
     int Height() const { return y1 - y0; }
 };
 
+// The button painted into the game's own textures: the R3 chalked beside the fallen photo frame (FrameGround, shsb_labl001_rthr001, the
+// zoom). It follows the prompt device as the menus do: another device's button is painted over the same spot of a copy of the texture, in its format and in every mip, once per device, and
+// the materials that use the texture are pointed at the copy (TextureManager::RedirectTexture). With a window the painting runs on a
+// worker thread and the copy is shown when it is ready; headless runs paint at once, so tests see the switch in the same frame.
 class PromptTextures {
 public:
     PromptTextures() = default;
@@ -40,6 +45,7 @@ private:
         FtexTexture ftex;
         std::map<std::string, uint32_t> variants;
     };
+    // A painting: the patched copies of the target's textures, in their order (false in ok: keep the original)
     struct Painted {
         std::string variant;
         std::vector<FtexTexture> textures;

@@ -15,6 +15,7 @@ public:
     void Update(float dt);
     void Clear() { players_.clear(); }
     bool Playing(const ui::UiaAnimation* animation) const;
+    bool AnyPlaying() const;
     void Apply(UifView& view) const;
 
 private:

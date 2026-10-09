@@ -3,8 +3,13 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 #include "common.glsl"
 
+// Ray traced shadows (rendering.md 12.21): a skinned draw's vertex positions through the frame's skin matrices, as mesh.vert
+// places them, for the draw's BLAS
+
 layout(local_size_x = 64) in;
 
+// Vertex (mesh.h): position 0-2, normal 3-5, tangent 6-9, uv0 10-11, uv1 12-13, color 14-17, joints 18 (4 x u8), weights 19 (4 x unorm8),
+// uv2 20-21
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer SkinVertices {
     float v[];
 };

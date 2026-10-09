@@ -64,6 +64,7 @@ class GameSound final : public GameAudio {
 public:
     static constexpr audio::GameObjectId kPlayerObject = 0x200;
     static constexpr audio::GameObjectId kGimmickObject = 0x300;
+    // one object per ShGimmick record for its CallSound and PostSoundEvent sounds (0x310 + record index)
     static constexpr audio::GameObjectId kRecordSoundBase = 0x310;
     static constexpr int kRecordSoundCount = 8;
     static constexpr audio::GameObjectId kOneShotBase = 0x10000;
@@ -99,7 +100,10 @@ public:
     uint32_t PostRecordEventId(int record, uint32_t id, const glm::vec3& position) override;
     void MoveRecordSound(int record, const glm::vec3& position) override;
     void SetAreaSends(audio::GameObjectId object, const glm::vec3& position);
+    // Keep the native "Gimmick" object type, with an emitter owned by the speaking record for its playback lifetime. One
+    // dialogue plays at a time (the sound control's slot 0): a new post stops the playing one.
     audio::PlayingId PostGimmickDialogue(uint32_t dialogue_event, std::span<const std::string_view> arguments, GimmickType source);
+    // a dialogue event on an object of its own at a place (the Archive plays the bag's talk without the bag)
     audio::PlayingId PostDialogueAt(uint32_t dialogue_event, std::span<const std::string_view> arguments, const glm::vec3& position);
 
 private:
@@ -195,6 +199,7 @@ private:
     std::string current_area_;
     std::string volume_rtpc_ = "volumeRtpc";
     const char* footstep_material_ = nullptr;
+    uint32_t footstep_surface_ = 0;
 };
 
 }

@@ -1,6 +1,8 @@
 #pragma once
 #include <string_view>
 
+// Brazilian Portuguese (as the game's own) for the port's own menus (PC settings, extras, photo mode, loop browser, notes and prompts) and the added
+// languages' names on the option screen. The options screen's other texts and the subtitles are the game's own.
 namespace pt::portuguese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
@@ -48,6 +50,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Russo"},
     {"op_sub_ukrainian","Ucraniano"},
     {"op_sub_czech","Checo"},
+    {"op_sub_polish","Polonês"},
     {"pc_loop_browser","Seleção de loop"},
     {"pc_note_loop_browser_entry","Comece qualquer loop sem substituir seu arquivo salvo."},
     {"pc_loop_choose","Escolha um loop"},

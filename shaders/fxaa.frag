@@ -12,6 +12,7 @@ layout(push_constant) uniform PassPush {
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
+// Native Fxaa b9d819a5fe5c845d searches through eight texels, then extends unresolved spans by sixteen.
 const float kSteps[13] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0, 16.0);
 
 vec4 Sample(vec2 uv) {
@@ -23,6 +24,7 @@ float LumaAt(vec2 uv, vec2 offset, vec2 rcp_frame) {
 }
 
 vec4 ResolveColor(vec4 sample_color, float luma) {
+    // The optional pre-tonemap path returns to the renderer's linear HDR representation.
     if (pass.ids.y == 2u) {
         return vec4(SrgbDecode(sample_color.rgb), sample_color.a);
     }
@@ -32,6 +34,7 @@ vec4 ResolveColor(vec4 sample_color, float luma) {
 void main() {
     if (pass.ids.y == 1u) {
         vec4 source = ImgFetch(pass.ids.x, ivec2(gl_FragCoord.xy));
+        // Keep values above one: this ordering experiment must not clip the HDR bloom source.
         out_color = vec4(SrgbEncode(max(source.rgb, vec3(0.0))), source.a);
         return;
     }

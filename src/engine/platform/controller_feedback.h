@@ -20,6 +20,7 @@ struct TriggerRumbleLevels {
     bool Active() const { return left != 0 || right != 0; }
 };
 
+// SDL only defines trigger rumble for pads whose opened gamepad advertises this capability.
 TriggerRumbleLevels BuildTriggerRumble(uint8_t left, uint8_t right, bool rumble_enabled, bool trigger_rumble_enabled,
                                        bool capability_reported);
 

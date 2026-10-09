@@ -7,12 +7,17 @@
 #include "reflection_mix.glsl"
 #include "reflection_depth.glsl"
 
+// Ray traced local reflections (rendering.md 12.21), the PC option over ReflectMapMake (12.16): the original march for the same
+// floor texels, and the same reflected ray traced against the TLAS (mask bit 2: the camera view's G-buffer and forward surfaces);
+// the traced hit replaces the march's hit only (see main). A hit on screen keeps the original's form (an offset to its pixel);
+// a hit off screen is shaded here (albedo, probe ambient, diffuse light with traced shadows) into the second target.
+
 layout(push_constant) uniform PassPush {
-    uvec4 ids;
-    vec4 f0;
-    vec4 f1;
-    vec4 f2;
-    mat4 m;
+    uvec4 ids;   // view, light count, probe count, debug (1: shaded hits red, screen hits green)
+    vec4 f0;     // world up in view space, far limit
+    vec4 f1;     // the march's virtual view size (1080 lines)
+    vec4 f2;     // 1 / map size
+    mat4 m;      // bit i: light i is hidden in the camera view
 } pass;
 
 layout(location = 0) in vec2 in_uv;
@@ -48,6 +53,10 @@ vec3 EvaluateSh(Probe p, vec3 n) {
     return e;
 }
 
+// The hit's colour as the composite would show it, without specular: albedo times (probe ambient as probe.frag blends it,
+// plus each light's diffuse term as lighting.glsl computes it, shadowed lights through a traced ray against the camera
+// view's casters); an emissive forward surface its colour as forward.frag draws it over black; glass and the mirror nothing
+// (w = 0: the floor keeps its own colour there)
 vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit, vec3 ray) {
     RtRecord r = rt_records[record];
     RtIndexData ib = RtIndexData(r.indices);
@@ -166,6 +175,9 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
     return vec4(albedo * (ambient + direct), 1.0);
 }
 
+
+// The original march (reflect_make.frag, ReflectMapMake), unchanged: the map texel it writes, (offset to the hit's pixel,
+// confidence, 1) or 0 where it finds nothing. start, stride, scale and inv_z, inv_z_step are the march's screen line.
 vec4 ScreenMarch(vec2 uv, vec3 P, vec3 R, vec2 start, vec2 stride, float scale, float inv_z, float inv_z_step, float far_limit) {
     float offset = 0.0;
     if (pass.f2.z > 0.5) {
@@ -225,6 +237,10 @@ vec4 ScreenMarch(vec2 uv, vec3 P, vec3 R, vec2 start, vec2 stride, float scale, 
     return vec4(clamp(0.5 * (best_uv - uv) + 0.5, 0.0, 1.0), confidence, 1.0);
 }
 
+// The original's confidence (ScreenMarch's fades) for an exact hit at the view space point X on the reflected ray: the march's
+// step s is where X lies on its screen line and its "travel" the line's parameter there (s * scale, 1 at P + R), so a traced
+// hit fades where and as the march's hit at that point would; no depth error term (the hit is exact). A point at or behind
+// the camera plane is out of the march's reach.
 float MarchConfidence(vec3 P, vec3 X, vec2 start, vec2 stride, float scale) {
     if (!(X.z > v.projection_param.z)) {
         return 0.0;
@@ -238,6 +254,17 @@ float MarchConfidence(vec3 P, vec3 X, vec2 start, vec2 stride, float scale) {
     return min(path_fade, min(screen_fade, ray_fade));
 }
 
+// The traced hit only replaces the march's hit. The map keeps the original's form, and everything after it (ReflectMapBlend's
+// tilt, strength, facing and edge terms, the temporal accumulation) is the original's:
+// - no hit within reach, or a surface that reflects nothing traced (glass, the mirror): the march's own texel, as without RT;
+// - a hit on screen (or the first pixel in front of it, by the march's occlusion rule): the offset to its pixel, with the
+//   march's confidence at that point (MarchConfidence);
+// - a hit off screen: shaded here, weighted by that same confidence, the march's texel keeping the rest of the weight, so the
+//   shaded colour reaches only as far as the march's hits do and fades out as they do.
+// The first version replaced the map: on screen hits without the screen length fade, off screen ones at full weight up to
+// 50 m. The floor then mirrored the lobby's lamp and window sharply in hard regions bounded by where the hits left the screen,
+// and below them, where the rays went up to the ceiling behind the camera, the floor was mixed toward that dark ceiling at full
+// strength (black, more of it the further down the view tilted) where the original keeps the floor or its own march's hit.
 void main() {
     v = frame.views[pass.ids.x];
     g_reflection_depth_legacy = pass.f1.z > 0.5;
@@ -246,6 +273,7 @@ void main() {
     vec2 uv = (gl_FragCoord.xy - 0.00390625) * pass.f2.xy;
     out_color = vec4(0.0);
     vec3 N = DecodeNormal(ImgLod(IMG_NORMAL, SMP_POINT_CLAMP, uv, 0.0).xyz);
+    // off the floors the original writes (1, 1, 1, 0); x and y 0 here so the blend's average offset (xy / w) takes the hits only
     if (!(abs(dot(plane, N)) >= 0.9)) {
         out_map = vec4(0.0, 0.0, 1.0, 0.0);
         return;
@@ -294,6 +322,10 @@ void main() {
         vec2 hit_uv = 0.5 * Project(H) + 0.5;
         vec3 X = H;
         bool unresolved = false;
+        // The screen march's occlusion rule: the reflection is the first pixel where the ray passes behind the depth buffer.
+        // When something nearer covers the traced hit on screen (the f010 corridor's hanging lamp in front of the ceiling a ray
+        // reaches beside it), the ray is walked in screen space from the floor to the hit and the first crossing is taken, as the
+        // march would. A covered hit whose walk leaves the frame first is shaded here, as an off screen one.
         if (!Outside(hit_uv) && SceneZ(hit_uv) < H.z * 0.98 - 0.02) {
             const int kSteps = 48;
             float lo = 0.0;
@@ -337,6 +369,8 @@ void main() {
             return;
         }
     }
+    // off screen: shaded here, premultiplied by its weight (the blend's bilinear lookup stays right); debug 2 shades every hit
+    // at full weight, to compare the shading with the screen
     float weight = pass.ids.w == 2u ? 1.0 : MarchConfidence(P, H, start, stride, scale);
     if (!(weight > 0.0)) {
         return;

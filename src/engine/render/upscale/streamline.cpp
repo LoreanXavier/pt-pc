@@ -55,6 +55,7 @@ bool g_vsync_off = false;
 std::string g_frame_gen_reason = "Streamline is not loaded";
 uint32_t g_frame_limit = UINT32_MAX;
 std::wstring g_log_dir;
+// Streamline's info lines (hundreds at start) reach pt.log only with PT_SL_VERBOSE; its own log file has them all
 bool g_verbose = false;
 std::wstring g_plugin_dir;
 const wchar_t* g_plugin_paths[1] = {};
@@ -98,6 +99,8 @@ bool Load(Fn*& out, const char* name) {
 }
 
 sl::float4x4 Matrix(const glm::dmat4& m) {
+    // Streamline's matrices are row major for row vectors (v * M, sl_matrix_helpers.h): the same memory as glm's column major
+    // matrices for column vectors
     sl::float4x4 out;
     for (int r = 0; r < 4; ++r) {
         out.row[r] = sl::float4(static_cast<float>(m[r][0]), static_cast<float>(m[r][1]), static_cast<float>(m[r][2]), static_cast<float>(m[r][3]));
@@ -111,6 +114,8 @@ sl::float3 Vec(const glm::vec3& v) {
 
 }
 
+// the feature helpers of the Streamline headers (slDLSSSetOptions and the others) call this export of the interposer; the
+// port loads the interposer at run time, so the symbol is defined here and forwards to it
 extern "C" sl::Result slGetFeatureFunction(sl::Feature feature, const char* functionName, void*& function) {
     if (!g_api.feature_function) {
         return sl::Result::eErrorInitNotCalled;
@@ -131,6 +136,8 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
         reason = "sl.interposer.dll is missing next to pt.exe";
         return false;
     }
+    // Streamline's guide (ProgrammingGuide.md 2.1.1): the interposer's Windows signature and NVIDIA's own certificate are checked
+    // before it is loaded; the interposer checks every plugin it loads the same way
     /* NVIDIA's signature is checked before LoadLibrary, as the Streamline guide asks; the interposer checks each plugin the same way. */
     if (!sl::security::verifyEmbeddedSignature(interposer.wstring().c_str())) {
         reason = "sl.interposer.dll does not carry NVIDIA's signature";
@@ -166,6 +173,8 @@ bool Start(const std::filesystem::path& data_dir, std::string& reason) {
     pref.numPathsToPlugins = 1;
     pref.pathToLogsAndData = g_log_dir.c_str();
     pref.logMessageCallback = Log;
+    // NGX's own updates (as the direct DLSS path gets), no downloaded Streamline plugins (only the signed ones next to
+    // pt.exe), frame-based tagging (slSetTagForFrame)
     pref.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eAllowOTA | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     pref.featuresToLoad = features;
     pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(features));
@@ -212,6 +221,7 @@ void DeviceCreated(VkInstance, VkPhysicalDevice physical, VkDevice) {
     LogInfo("streamline: DLSS {}, DLSS Frame Generation {}, Reflex {}, PCL {}{}", ResultName(dlss), ResultName(frame_gen), ResultName(reflex),
             ResultName(pcl), g_vsync_off ? ", frame generation needs v-sync off" : "");
     if (reflex == sl::Result::eOk) {
+        // Reflex Low Latency on (NVIDIA's default for the Reflex checklist), no frame limit until SetFrameLimit
         sl::ReflexOptions options{};
         options.mode = sl::ReflexMode::eLowLatency;
         options.frameLimitUs = 0;
@@ -274,6 +284,7 @@ void SetConstants(const FrameConstants& c) {
     if (!g_active || !g_token) {
         return;
     }
+    // camera-centred, in double precision: the translation of the view leaves the clip-to-previous-clip matrix alone
     const glm::dmat4 view_to_clip(c.view_to_clip);
     const glm::dmat4 world_to_clip(c.world_to_clip);
     const glm::dmat4 previous(c.previous_world_to_clip);
@@ -291,6 +302,7 @@ void SetConstants(const FrameConstants& c) {
     k.cameraUp = Vec(c.up);
     k.cameraRight = Vec(c.right);
     k.cameraFwd = Vec(c.forward);
+    // reverse Z to infinity: the far plane is a large finite value (FLT_MAX is Streamline's "not set")
     k.cameraNear = c.near_plane;
     k.cameraFar = 100000.0f;
     k.cameraFOV = c.fov_y;
@@ -359,6 +371,9 @@ bool DisableFrameGenFeature() {
 
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// DLSS Super Resolution through sl.dlss, and DLSS Frame Generation through sl.dlss_g
+
 namespace pt {
 namespace {
 
@@ -411,6 +426,7 @@ public:
         options_.outputWidth = create.display.width;
         options_.outputHeight = create.display.height;
         options_.colorBuffersHDR = sl::Boolean::eTrue;
+        // the same model and exposure handling as the direct NGX path (dlss_backend.cpp)
         const auto preset = static_cast<sl::DLSSPreset>(DlssPresetHint(create.dlss_model));
         options_.dlaaPreset = options_.qualityPreset = options_.balancedPreset = options_.performancePreset = options_.ultraPerformancePreset =
             options_.ultraQualityPreset = preset;
@@ -463,6 +479,9 @@ public:
             sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &render),
             sl::ResourceTag(&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eValidUntilEvaluate, &one),
         };
+        // The reactive mask (R8_UNORM) is not tagged: Streamline 2.14.1's Vulkan format table (sl.chi getFormat) has no
+        // R8_UNORM and logs "Cannot have undefined format" four times a frame for it, and the DLSS 4 models do not read the
+        // bias mask (DLSS guide 3.15): without it the frames are the direct NGX path's, bit for bit (upscaling.md)
         /* No reactive mask tag: Streamline 2.14.1's Vulkan format table lacks R8_UNORM and complains four times a frame; the DLSS 4 models ignore the mask anyway. */
         std::vector<const sl::BaseStructure*> inputs{&viewport};
         for (const sl::ResourceTag& tag : tags) {
@@ -498,6 +517,11 @@ private:
     bool error_logged_ = false;
 };
 
+// DLSS Frame Generation (ProgrammingGuideDLSS_G.md): the swapchain Streamline's proxy creates while sl.dlss_g hooks are enabled
+// presents the rendered frame and the generated one. The depth and motion vectors of the upscaler inputs are tagged when the
+// upscaler has run (copied by Streamline: eOnlyValidNow), the HUD-less copy of the frame (one target per swapchain image,
+// drawn by the renderer as for FSR 3) before present. Off in menus and the paused game (section 6.4) with the resources
+// kept; switching the option off or on disables or enables sl.dlss_g's feature hooks around swapchain recreation (section 18.0).
 class DlssFrameGeneration final : public FrameGeneration {
 public:
     explicit DlssFrameGeneration(vk::Context& ctx) : ctx_(ctx) {}
@@ -523,6 +547,7 @@ public:
     bool Update(bool wanted) override {
         std::string reason;
         wanted = wanted && Available(reason);
+        // the first swapchain of the start that enabled Streamline's sl.dlss_g hooks was created with them active
         if (!initialised_) {
             initialised_ = true;
             if (ctx_.surface != VK_NULL_HANDLE) {
@@ -534,11 +559,15 @@ public:
         const bool vsync_off = wanted && streamline::FrameGenNeedsVsyncOff();
         const bool vsync_changed = vsync_off != ctx_.force_vsync_off;
         ctx_.force_vsync_off = vsync_off;
+        // Called in the middle of a frame (the scene's upscale setup), when the swapchain image is acquired and the command
+        // buffer is recording: only the wish is noted here, FrameStart applies it between frames
         target_ = wanted;
         generating_ = (wanted && attached_) || (preserve_active_mode_ && attached_ && mode_ == sl::DLSSGMode::eOn);
         return vsync_changed;
     }
 
+    // Apply changes at the frame boundary. Streamline's default DLSS-G queue mode blocks the presenting client queue until
+    // its workload completes; this method runs on that same thread, after the previous QueuePresent call has returned.
     FrameStartAction FrameStart(bool swapchain_recreation_pending) override {
         if (!initialised_) {
             return FrameStartAction::Continue;
@@ -558,6 +587,9 @@ public:
         }
         const bool transition_pending = target_ != attached_;
 
+        // A resize is a required transition even when the selected backend remains DLSS. The guide requires mode-off before
+        // changing the swapchain. Setting it here precedes Context::CreateSwapchain, which preserves the old native swapchain
+        // until creation succeeds. The default presenting-queue mode above provides the input-consumption boundary.
         if (attached_ && (transition_pending || swapchain_recreation_pending || (menu_open && mode_ != sl::DLSSGMode::eOff))) {
             if (!SetMode(sl::DLSSGMode::eOff)) {
                 generating_ = attached_ && mode_ == sl::DLSSGMode::eOn;
@@ -569,6 +601,9 @@ public:
             }
         }
 
+        // FSR owns its swapchain through a separate hook. Clear that owner completely before installing or removing the
+        // Streamline swapchain proxy. In particular, FSR's Update(true) can install its hook in the scene frame before this
+        // queued DLSS transition reaches the next frame boundary.
         bool fsr_owner_changed = false;
         if (transition_pending) {
             FrameGeneration* fsr = UpscaleHost::Get().FrameGen();
@@ -593,6 +628,8 @@ public:
             owner_wait_logged_ = false;
         }
 
+        // Menu edits are coalesced. A pending resize still gets the mode-off and owner cleanup safety steps above, but the
+        // feature-hook transition waits until the menu closes.
         if (menu_open && transition_pending) {
             if (swapchain_recreation_pending || fsr_owner_changed) {
                 vkDeviceWaitIdle(ctx_.device);
@@ -639,6 +676,8 @@ public:
                 "Streamline could not confirm the DLSS Frame Generation load state after swapchain teardown. Restart P.T.");
         }
         if (wanted && !attached_) {
+            // The load failed and the query confirmed that DLSS-G stayed unloaded. Recreate the ordinary swapchain so the
+            // renderer remains usable after disabling the failed option.
             return FrameStartAction::RecreateSwapchain;
         }
         if (attached_ != wanted) {
@@ -848,6 +887,7 @@ private:
         return true;
     }
 
+    // Streamline's runtime status (section 14.3): anything but eOk turns frame generation off for the session
     void CheckState() {
         sl::DLSSGState state{};
         if (slDLSSGGetState(sl::ViewportHandle(streamline::kViewport), state, nullptr) != sl::Result::eOk) {
@@ -891,6 +931,8 @@ private:
             return;
         }
         vkDeviceWaitIdle(ctx_.device);
+        // the tag holds the last target until present; clear it before the images go (between frames it is released already,
+        // and the frame token left is the last frame's)
         if (clear_tag) {
             const sl::ResourceTag tag(nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
             streamline::Tag(&tag, 1, VK_NULL_HANDLE);

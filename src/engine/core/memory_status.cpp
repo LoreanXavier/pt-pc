@@ -29,6 +29,7 @@ ThreadCost QueryThreadCost() {
 }
 
 void LogMemoryStatus(const char* what, size_t bytes) {
+    // formatted into a stack buffer first: this runs when an allocation has just failed
     /* Stack buffer on purpose: this runs right after an allocation has failed. */
     char line[320];
 #ifdef _WIN32
@@ -119,6 +120,7 @@ bool MemoryLow(double low_mb, double vram_used_mb, double vram_budget_mb, double
 
 void InstallAllocationFailureLog() {
     std::set_new_handler([] {
+        // once: without a handler the failing operator new throws std::bad_alloc, as it did before this was installed
         /* One shot: after the log the retry throws bad_alloc, as it would have without a handler. */
         std::set_new_handler(nullptr);
         LogMemoryStatus("allocation failed", 0);

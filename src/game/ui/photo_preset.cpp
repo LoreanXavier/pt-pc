@@ -72,4 +72,4 @@ PhotoExtent PhotoCaptureExtent(uint32_t source_width, uint32_t source_height, Ph
     return {static_cast<uint32_t>(std::lround(crop_width * scale)), static_cast<uint32_t>(std::lround(crop_height * scale))};
 }
 
-}
+}  // namespace pt::game

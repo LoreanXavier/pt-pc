@@ -50,14 +50,18 @@ public:
     virtual void Prepare(const FrameGenPrepare& prepare) = 0;
     virtual const vk::Image* Present(uint32_t image_index) = 0;
     virtual void Shutdown() = 0;
+    // The frame boundary, before image acquisition and command recording. KeepCurrentSwapchain leaves a dirty swapchain
+    // pending while continuing to render against the existing handle.
     virtual FrameStartAction FrameStart(bool swapchain_recreation_pending) {
         (void)swapchain_recreation_pending;
         return FrameStartAction::Continue;
     }
+    // the swapchain could not be created: true when this turned itself off and creating it again can work
     virtual bool SwapchainFailed() { return false; }
 };
 
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues& queues);
+// NVIDIA DLSS Frame Generation through Streamline (streamline.cpp); null while Streamline is not loaded
 std::unique_ptr<FrameGeneration> CreateDlssFrameGeneration(vk::Context& ctx);
 
 }

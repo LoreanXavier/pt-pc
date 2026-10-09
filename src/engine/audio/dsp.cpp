@@ -52,6 +52,7 @@ struct ErTap {
     float gain;
 };
 
+// 0x13B4FE0
 constexpr ErTap kErShortDarkHallLeft[] = {{0.0208333004f, -0.238924295f}, {1.52083325f, -0.222542495f}, {3.02083325f, 0.0940056965f},
     {4.52083349f, -0.0336034f}, {5.54166651f, 0.325573891f}, {6.02083349f, 0.00675110007f}, {7.04166651f, 0.367163688f},
     {7.52083349f, 0.00326190004f}, {8.54166698f, -0.2010452f}, {9.02083302f, -0.00588939991f}, {10.041667f, 0.105965398f},
@@ -68,6 +69,7 @@ constexpr ErTap kErShortDarkHallLeft[] = {{0.0208333004f, -0.238924295f}, {1.520
     {46.9583321f, 0.00704429997f}, {48.4583321f, -0.0052176998f}, {49.9583321f, 0.00357639999f}, {50.3125f, 0.0162103996f},
     {51.8125f, 0.0182323009f}, {53.3125f, -0.00995959993f}, {54.8125f, 0.00523489993f}, {56.3125f, -0.00269520003f}, {66.0833359f, 0.00340329995f},
     {67.5833359f, 0.00373280002f}};
+// 0x13B51E0
 constexpr ErTap kErShortDarkHallRight[] = {{0.0208333004f, 0.256066412f}, {1.52083325f, 0.337683409f}, {3.02083325f, -0.212503493f},
     {4.52083349f, 0.129680201f}, {6.02083349f, -0.0769196004f}, {7.04166651f, -0.0681473985f}, {7.52083349f, 0.0437025987f},
     {8.54166698f, 0.077070199f}, {9.02083302f, -0.0242954995f}, {10.041667f, -0.0640463009f}, {10.166667f, 0.335205406f},
@@ -83,6 +85,7 @@ constexpr ErTap kErShortDarkHallRight[] = {{0.0208333004f, 0.256066412f}, {1.520
     {42.4583321f, 0.0409747995f}, {43.125f, 0.00406190008f}, {43.9583321f, 0.0461238995f}, {45.4583321f, -0.0251691006f},
     {46.9583321f, 0.0133121004f}, {48.4583321f, -0.00666770013f}, {49.9583321f, 0.00320770009f}, {51.8125f, -0.0033609001f},
     {53.3125f, 0.00378499995f}, {54.8125f, -0.00320859998f}, {55.6875f, -0.00982309971f}, {57.1875f, -0.0110612996f}, {58.6875f, 0.00603569997f}};
+// 0x13B58B0
 constexpr ErTap kErSmallHallLeft[] = {{0.0208333004f, -0.254223108f}, {1.52083325f, -0.237390593f}, {3.02083325f, 0.100649104f},
     {4.10416651f, 0.346620709f}, {4.52083349f, -0.0360032991f}, {5.60416651f, 0.392357498f}, {6.02083349f, 0.00735339988f},
     {7.10416651f, -0.214935005f}, {7.52083349f, 0.00349660008f}, {8.60416698f, 0.114200003f}, {9.02083302f, 0.0597019009f},
@@ -95,6 +98,7 @@ constexpr ErTap kErSmallHallLeft[] = {{0.0208333004f, -0.254223108f}, {1.5208332
     {25.979166f, -0.0314260013f}, {27.479166f, 0.0135653f}, {28.979166f, -0.00512349978f}, {32.8541679f, 0.00244539999f},
     {34.3541679f, -0.00278460002f}, {35.8541679f, 0.00231990009f}, {37.1458321f, 0.00484779989f}, {38.6458321f, 0.00539579988f},
     {40.1458321f, -0.00302190008f}};
+// 0x13B5A10
 constexpr ErTap kErSmallHallRight[] = {{0.0208333004f, 0.274282992f}, {1.52083325f, 0.362415105f}, {3.02083325f, -0.231593296f},
     {4.52083349f, 0.141639307f}, {5.60416651f, -0.0736631975f}, {6.02083349f, -0.082871899f}, {7.10416651f, 0.0826603025f},
     {7.52083349f, 0.405862808f}, {8.60416698f, -0.0700064003f}, {9.02083302f, 0.380172998f}, {10.104167f, 0.0512023009f},
@@ -108,6 +112,7 @@ constexpr ErTap kErSmallHallRight[] = {{0.0208333004f, 0.274282992f}, {1.5208332
     {30.479166f, -0.0103438003f}, {31.354166f, 0.0134036001f}, {31.979166f, 0.00600960013f}, {32.8541679f, 0.0151645001f},
     {33.4791679f, -0.00343960011f}, {34.3541679f, -0.00831940025f}, {35.8541679f, 0.00434560003f}, {41.1041679f, -0.00280470005f},
     {42.6041679f, -0.00322189997f}};
+// 0x13B7DF0
 constexpr ErTap kErBathroomLeft[] = {{0.0208333004f, -0.249885097f}, {1.52083325f, -0.234171107f}, {3.02083325f, 0.0992496982f},
     {3.91666675f, 0.344433486f}, {4.52083349f, -0.0351604f}, {5.41666651f, 0.388508111f}, {6.02083349f, 0.0070921001f},
     {6.91666651f, -0.213705093f}, {8.41666698f, 0.112272598f}, {9.02083302f, -0.00615199981f}, {9.91666698f, -0.0570220016f},
@@ -123,6 +128,7 @@ constexpr ErTap kErBathroomLeft[] = {{0.0208333004f, -0.249885097f}, {1.52083325
     {42.9583321f, 0.00797449984f}, {44.4583321f, -0.00585879991f}, {45.9583321f, 0.00399400014f}, {48.3958321f, 0.0130877001f},
     {49.8958321f, 0.0147676999f}, {51.3958321f, -0.00804340001f}, {52.8958321f, 0.00417830003f}, {59.0833321f, 0.00419529993f},
     {60.5833321f, 0.00473190006f}};
+// 0x13B7FD0
 constexpr ErTap kErBathroomRight[] = {{0.0208333004f, 0.256831706f}, {1.52083325f, 0.341239303f}, {3.02083325f, -0.216059998f},
     {4.52083349f, 0.131151497f}, {5.41666651f, -0.0696600974f}, {6.02083349f, -0.0777421966f}, {6.91666651f, 0.0782596022f},
     {7.52083349f, 0.0444042012f}, {8.41666698f, -0.0659670979f}, {9.02083302f, -0.0247783009f}, {9.91666698f, 0.0486163013f},
@@ -672,6 +678,9 @@ private:
     float tail_seconds_ = 1.0f;
 };
 
+// Wwise Matrix Reverb as the eboot's plug-in (0x73: FX 0x5B8550, parameters 0x5C4C40, SetParamsBlock 0x5C4DD0). It runs on the bus's
+// 7.1 channels: the lines take the sum of the channels (without the LFE unless processLFE), each channel gets its own signed sum of
+// the lines (0x13B98A0), and the port folds those outputs to stereo the way it folds voices.
 class MatrixReverb : public Effect {
 public:
     explicit MatrixReverb(const std::vector<uint8_t>& params) {
@@ -684,6 +693,7 @@ public:
         const float pre_delay = r.F32();
         r.U8();
         const uint32_t mode = r.U32();
+        // 0x5B8770: 4, 8, 12 or 16 lines; any other count leaves the plug-in without a process function
         /* Wwise Matrix Reverb has process functions for 4, 8, 12 or 16 lines only; any other count leaves the plug-in silent (0x5B8770). */
         if (count_ != 4 && count_ != 8 && count_ != 12 && count_ != 16) {
             count_ = 0;
@@ -696,6 +706,7 @@ public:
             const float custom = r.F32();
             delay_ms[i] = mode == 1 ? custom : kDefaultDelayMs[i];
         }
+        // each length is the first odd number from rate x time on without a divisor from 3 up to its root (0x5B8770), then sorted
         for (uint32_t i = 0; i < count_; ++i) {
             uint32_t n = static_cast<uint32_t>(static_cast<int64_t>(delay_ms[i] * 0.001f * static_cast<float>(kOutputRate)));
             n += (n & 1u) ^ 1u;
@@ -714,6 +725,8 @@ public:
         for (uint32_t i = 0; i < count_; ++i) {
             lines_[i].assign(lengths_[i], 0.0f);
         }
+        // 0x11AB840: line gain g = 0.001 ^ (length / rate / reverb time) and a one-pole low pass b per line (Jot), with
+        // b = (1 - hfRatio^2) log10(g) ln(10) / 4, the factor clamped so that the longest line's b is at most 1
         const double inv_rate = 1.0 / static_cast<double>(kOutputRate);
         const double ln10_4 = std::log(10.0) / 4.0;
         double k = 1.0 / static_cast<double>(hf_ratio);
@@ -728,12 +741,15 @@ public:
             feed_[i] = static_cast<float>(g * (1.0 - b));
             pole_[i] = static_cast<float>(b);
         }
+        // 0x5B8EE0: tone correction (1 - beta z^-1) / (1 - beta), beta = (1 - 1 / hfRatio) / (1 + 1 / hfRatio)
         const float inv_hf = 1.0f / hf_ratio;
         const float beta = (1.0f - inv_hf) / (inv_hf + 1.0f);
         tone_gain_ = 1.0f / (1.0f - beta);
         tone_prev_gain_ = -beta / (1.0f - beta);
+        // 0x5B86C0: a DC blocker at 10 Hz and the pre-delay in whole samples
         dc_pole_ = -62.831856f / static_cast<float>(kOutputRate) + 1.0f;
         pre_delay_line_.assign(static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(static_cast<float>(kOutputRate) * pre_delay))), 0.0f);
+        // rows 0 to 6: FL, FR, FC and the four surrounds of the bus (a Wwise buffer keeps the LFE last), folded like the voices
         const float fold = 0.70710678f;
         for (uint32_t j = 0; j < count_; ++j) {
             fold_l_[j] = kOutputSigns[0][j] + fold * kOutputSigns[2][j] + fold * kOutputSigns[3][j] + fold * kOutputSigns[5][j];
@@ -748,6 +764,7 @@ public:
         }
         std::array<float, 16> f{};
         for (uint32_t i = 0; i < frames; ++i) {
+            // the lines' outputs through their low passes
             float out_l = 0.0f;
             float out_r = 0.0f;
             float sum = 0.0f;
@@ -758,6 +775,7 @@ public:
                 out_r += f[j] * fold_r_[j];
                 sum += f[j];
             }
+            // the lines take the sum of the bus channels (SumInput: a send carries the sum of the voice's 7.1 gains)
             const float in = left[i] + right[i];
             left[i] = dry_gain_ * left[i] + wet_gain_ * out_l;
             right[i] = dry_gain_ * right[i] + wet_gain_ * out_r;
@@ -774,6 +792,7 @@ public:
             }
             const float v = tone_prev_gain_ * tone_prev_ + tone_gain_ * delayed;
             tone_prev_ = delayed;
+            // Householder feedback, each line fed from the next one (the lane shuffle of the process functions)
             const float c = feedback_ * sum;
             for (uint32_t j = 0; j < count_; ++j) {
                 lines_[j][pos_[j]] = f[j + 1 == count_ ? 0 : j + 1] + c + v;
@@ -784,6 +803,7 @@ public:
         }
     }
 
+    // 0x11AA480 keeps the effect running for rate x reverb time samples after its input
     float TailSeconds() const override { return reverb_time_ + pre_delay_; }
 
     void MuteDry() override { dry_gain_ = 0.0f; }
@@ -803,8 +823,10 @@ public:
     }
 
 private:
+    // 0x13B9AA0, milliseconds
     static constexpr float kDefaultDelayMs[16] = {13.62f, 15.66f, 17.52f, 19.02f, 20.83f, 22.6f, 24.05f, 24.78f,
                                                   25.6f,  26.09f, 26.55f, 26.91f, 28.04f, 29.09f, 29.9f,  30.86f};
+    // 0x13B98A0: the sign of each line in the output of each channel
     static constexpr float kOutputSigns[7][16] = {
         {1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1},
         {1, 1, -1, -1, 1, 1, -1, -1, 1, 1, -1, -1, 1, 1, -1, -1},
@@ -866,6 +888,7 @@ public:
         if (!enable_cross) {
             left_cross_ = right_cross_ = 0.0f;
         }
+        // 0x5D9780, 0x5DA540
         auto length = [](float seconds) {
             const float t = std::max(seconds, 1024.0f / static_cast<float>(kOutputRate));
             return (static_cast<uint32_t>(std::floor(t * static_cast<float>(kOutputRate))) + 3u) & ~3u;
@@ -880,6 +903,7 @@ public:
         const float d = std::clamp((balance + 100.0f) * 0.005f, 0.0f, 1.0f);
         front_ = std::sqrt(1.0f - d);
         rear_ = std::sqrt(d) * 0.70710678f;
+        // 0x5D99D0
         auto decay = [](float gain) { return std::min(20.0f * std::log10(std::max(gain, 1e-9f)), -0.1f); };
         float tail = std::max(enable_feedback ? -60.0f / decay(left_feedback_) * left_time : left_time,
                               enable_feedback ? -60.0f / decay(right_feedback_) * right_time : right_time);
@@ -891,6 +915,7 @@ public:
 
     bool FrontInput() const override { return left_input_ == 0 && right_input_ == 0; }
 
+    // 0x62A990, delay lines 0x5DA7D0
     void Process(float* left, float* right, uint32_t frames) override {
         for (uint32_t i = 0; i < frames; ++i) {
             const float in_l = Input(left_input_, left[i], right[i], left[i]);
@@ -959,6 +984,8 @@ private:
     float tail_ = 1.0f;
 };
 
+// Peak Limiter (0x5AD9C0 setup, 0x5ADC60 execute, 0x5AE4B0 linked channels): the channel peak held for the lookahead, a dB envelope with
+// attack over half the lookahead and the release time, gain 10^((1 / ratio - 1) * env / 20) on the input delayed by the lookahead
 class PeakLimiter : public Effect {
 public:
     explicit PeakLimiter(const std::vector<uint8_t>& params) {
@@ -982,6 +1009,8 @@ public:
     void SetDetector(const float* peak) override { detector_ = peak; }
 
     void Process(float* left, float* right, uint32_t frames) override {
+        // 0x5AE4B0 links the channels of the bus: the peak of a frame is the largest of its channels, which the engine hands over
+        // for the master's 7.1 channels (SetDetector); without it the limiter detects its stereo input
         const float* detector = std::exchange(detector_, nullptr);
         auto peak_at = [&](uint32_t i) { return detector ? detector[i] : std::max(std::fabs(left[i]), std::fabs(right[i])); };
         if (first_ && frames > 0) {
@@ -1116,6 +1145,7 @@ float DbToGain(float db) {
     return db <= -144.0f ? 0.0f : std::pow(10.0f, db / 20.0f);
 }
 
+// 0x5F2450, 0x5AE4B0: 10^x with the exponent from the scaled integer and a cubic for the mantissa
 float FastPow10(float x) {
     if (x < -37.0f) {
         return 0.0f;
@@ -1130,6 +1160,7 @@ float FastPow10(float x) {
     return e * (m * (m * 0.32518977f + 0.020805772f) + 0.65304345f);
 }
 
+// 0x5AE4B0, 0x603230, 0x11A8BB0: 20 * log10(x) from the float's exponent and a series in its mantissa
 float FastGainToDb(float x) {
     uint32_t bits;
     std::memcpy(&bits, &x, sizeof(bits));

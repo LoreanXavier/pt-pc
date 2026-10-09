@@ -1,8 +1,6 @@
 # SELF (eboot.bin, sce_module/*.prx)
 
-All three executables in CUSA01127 are fake-signed SELF files. `tools/self2elf.py <self> <elf>` turns one into a plain
-ELF; `tools/dynlib.py <elf>` then dumps its SCE dynamic linking data (imports and exports, named through a NID database
-when one is given). Field names follow shadPS4.
+All three executables in CUSA01127 are fake-signed SELF files. `tools/self2elf.py` turns them into plain ELF files in `dump/elf/`. Field names follow shadPS4 (`src/core/loader/elf.h`).
 
 ## Header (0x20 bytes, little-endian)
 
@@ -15,26 +13,19 @@ when one is given). Field names follow shadPS4.
 | 0x0E | meta_size | 0x3D0 |
 | 0x10 | file_size | 0x1961BD0 |
 | 0x18 | segment_count | 8 |
-| 0x1A | unknown, always 0x22 | 0x22 |
+| 0x1A | unknown, always 0x22 in shadPS4 | 0x22 |
 
 ## Segment table
 
-Right after the header, 0x20 bytes per entry: flags, file offset, file size, memory size (u64 each). Flag bits: 0x1
-ordered, 0x2 encrypted, 0x4 signed, 0x8 compressed, 0x800 blocked. Bits 20..31 hold an id. For blocked entries the id
-is the index of the ELF program header whose data the entry carries. The non-blocked entries precede a blocked one and
-carry its block digests.
+Right after the header, 0x20 bytes per entry: flags, file offset, file size, memory size (u64 each). Flag bits as named by shadPS4: 0x1 ordered, 0x2 encrypted, 0x4 signed, 0x8 compressed, 0x800 blocked. Bits 20..31 hold an id. For blocked entries the id is the index of the ELF program header whose data the entry carries. The non-blocked entries precede a blocked one and carry its block digests.
 
-Every entry in all three files has flags `0x..0004` (signed) or `0x..2804` (signed, blocked). None is encrypted or
-compressed, so the segment data is plaintext.
+Every entry in all three files has flags `0x..0004` (signed) or `0x..2804` (signed, blocked). None is encrypted or compressed, so the segment data is plaintext.
 
 ## Embedded ELF
 
-The ELF header follows the segment table, the program headers follow at `e_phoff` (0x40) relative to it. There are no
-section headers. The extended info block (program authority id, program type, app version, firmware version) sits after
-the program headers, aligned to 16.
+The ELF header follows the segment table, the program headers follow at `e_phoff` (0x40) relative to it. There are no section headers. The extended info block (program authority id `0x3100000000000002`, program type, app version, firmware version) sits after the program headers, aligned to 16.
 
-`PT_SCE_VERSION` has no data in any of the three SELF files, so `self2elf.py` zero-fills it. Every other program header
-either has its own blocked segment or lies inside one.
+`PT_SCE_VERSION` has no data in any of the three SELF files, so `self2elf.py` zero-fills it. Every other program header either has its own blocked segment or lies inside one.
 
 ## eboot.elf layout
 
@@ -53,5 +44,6 @@ either has its own blocked segment or lies inside one.
 | 8 | SCE_COMMENT | not mapped | 0x60 | |
 | 9 | SCE_VERSION | not mapped | 0xA73 (absent) | |
 
-`SCE_PROCPARAM` starts with size 0x40, magic `ORBI`, version 1, SDK version 0x01600051. The bundled `libc.prx` and
-`libSceFios2.prx` are ET_SCE_DYNLIB (0xFE18).
+`SCE_PROCPARAM` starts with size 0x40, magic `ORBI`, version 1, SDK version 0x01600051. `SCE_COMMENT` holds the original link path `C:/develop/pt14_master/git_clone/_intermediate/Sh_game_ps4/Release/Sh_main_ps4.elf`.
+
+The bundled `libc.prx` and `libSceFios2.prx` are ET_SCE_DYNLIB (0xFE18) and come from Sony's own build tree (`W:/Build/J00580091/...`).

@@ -1,3 +1,5 @@
+// The light pass (rendering.md 12.2): light.frag, light_rt.frag with PT_RT_SHADOWS (ray traced shadows, 12.21) and
+// light_contact.frag with PT_RT_CONTACT (the shadow maps and the ray traced contact shadows, 12.21; light_rt.frag has those too)
 #include "common.glsl"
 #if defined(PT_RT_SHADOWS) || defined(PT_RT_CONTACT)
 #include "rt_shadow.glsl"

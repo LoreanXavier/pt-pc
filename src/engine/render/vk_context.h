@@ -24,10 +24,14 @@ public:
     virtual void DeviceCreated(Context& ctx) = 0;
 };
 
+// Who creates the Vulkan instance and device when it is not the context itself: the VR mode's OpenXR runtime
+// (XR_KHR_vulkan_enable2, src/engine/xr/xr_host.h), which adds what it needs to both and names the GPU the headset uses.
+// Without one (the default) Init creates them as before.
 class ContextCreator {
 public:
     virtual ~ContextCreator() = default;
     virtual VkResult CreateInstance(const VkInstanceCreateInfo& info, VkInstance& instance) = 0;
+    // the one physical device to use, or VK_NULL_HANDLE for the context's own choice
     virtual VkPhysicalDevice PhysicalDevice(VkInstance instance) = 0;
     virtual VkResult CreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo& info, VkDevice& device) = 0;
 };
@@ -90,20 +94,34 @@ public:
     ContextHooks* hooks = nullptr;
     SwapchainHooks* swapchain_hooks = nullptr;
     ContextCreator* creator = nullptr;
+    // set before Init to load Vulkan through another vkGetInstanceProcAddr (Streamline's interposer); before_device_destroy
+    // runs after the swapchain is gone and before vkDestroyDevice (slShutdown)
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
+    // DLSS Frame Generation on Vulkan presents without v-sync (Streamline's eVSyncOffRequired): the swapchain ignores the
+    // v-sync setting while it is set
     bool force_vsync_off = false;
+    // the last CreateSwapchain failed in Vulkan (the surface or a swapchain hook refused it), not for want of a window size
     bool swapchain_refused = false;
 
+    // Ray queries (the ray traced shadows PC option): set want_ray_query before Init to create the device with
+    // VK_KHR_acceleration_structure, VK_KHR_ray_query, VK_KHR_deferred_host_operations and buffer device addresses
+    // when the GPU has them. ray_query_supported says whether it has them, requested or not; ray_query whether they are on.
     bool want_ray_query = false;
     bool ray_query_supported = false;
     bool ray_query = false;
     std::string ray_query_missing;
     VkDeviceSize scratch_alignment = 256;
 
+    // Diagnostics, enabled when the device has them: VK_EXT_memory_budget (VMA's heap budgets are the driver's, for the status
+    // line), VK_EXT_device_fault (what the driver knows about a lost device) and VK_NV_device_diagnostic_checkpoints (the
+    // render passes' labels, BeginLabel, as checkpoints: the last ones the GPU reached when the device is lost)
     bool memory_budget = false;
     bool device_fault = false;
     bool checkpoints = false;
+    // A lost device (VK_ERROR_DEVICE_LOST from a wait, submit, acquire or present) ends the game: the log gets where it was seen,
+    // the device fault description and the last checkpoints, then a dump and a message box (crash_report.h). Any other
+    // result returns.
     void CheckDeviceLost(VkResult result, const char* where);
 
 private:

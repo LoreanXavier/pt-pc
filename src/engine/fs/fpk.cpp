@@ -50,6 +50,7 @@ bool FoxPackage::Load(std::string name, std::vector<uint8_t> data) {
         entry.size = ReadLe<uint32_t>(data_, pos + 8);
         entry.path = ReadString(data_, pos + 16);
         if (size_t(entry.offset) + entry.size > data_.size()) {
+            // a damaged package (or a mod's): the entry would read past the data, so it reads as empty instead
             LogError("fpk: {} entry {} at {} + {} bytes exceeds package size {}", name_, entry.path, entry.offset, entry.size,
                      data_.size());
             /* A truncated entry reads as empty rather than failing the package: a bad mod file then costs one asset, not the stage. */
@@ -72,6 +73,7 @@ const FoxPackage::Entry* FoxPackage::Find(std::string_view path) const {
 }
 
 std::vector<uint8_t> FoxPackage::Read(const Entry& entry) const {
+    // the stage scripts and data sets are read entry by entry, not through Vfs::ReadFile: a mod's file stands in here too
     if (auto data = mods::ReadOverride(entry.path)) {
         return std::move(*data);
     }

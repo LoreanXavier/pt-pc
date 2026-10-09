@@ -31,6 +31,12 @@ void SceneRenderer::CopyToHistory(VkCommandBuffer cmd, const RenderTarget& sourc
     vkCmdCopyImage(cmd, source.image.image, src, history_.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 }
 
+// The flashlight reflection's colour (0x9359D0, rendering.md 12.5): the module's 64x64 view draws the scene through the quad
+// whose corners are the screen positions of its four rays and 0x9359D0 reads one pixel of it back (reflect_colour.comp). The
+// corners project as the original's do with the camera view's matrices (main view +0x270 and +0x230): x 0.5 + 0.5 across,
+// y down. The result lands in the slot's luminance buffer and ReadMeasurements takes it when the slot comes round again, so
+// the lights get the colour of the frame kFramesInFlight frames back with no wait (the original's read back of the view's copy
+// lags too). Called after the camera view, while the HDR target holds the lit scene.
 void SceneRenderer::RecordReflectionSample(VkCommandBuffer cmd, const SceneLighting& lighting) {
     const SceneReflectionSample& sample = lighting.reflection_sample;
     if (!sample.active || !reflect_colour_ || !hdr_.Valid()) {
@@ -75,6 +81,8 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     const char* native_order_override = std::getenv("PT_AA_NATIVE_ORDER");
     const bool native_aa_order = toggles.fxaa && !up_.enabled && native_order_override && std::string(native_order_override) == "1";
     if (native_aa_order) {
+        // Native Fxaa precedes POSTFILTER. Encode before filtering so its bilinear taps see gamma colour,
+        // then decode back into the port's HDR target before bloom and tonemap.
         UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&hdr_copy_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
         BeginPass(cmd, output_extent_, {{&hdr_copy_, false, {}}});
         gpu::PassPush aa;
@@ -113,6 +121,10 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
             blur(1, 2, gaussian_, glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), false);
         } else {
             const int passes = std::clamp(static_cast<int>(std::floor(size * 10.0f)), 1, 64);
+            // Each iteration blurs A into B and B back into A, then adds A to the sum. The second blur and the add are one draw
+            // with two targets (kawase_sum.frag): 2 passes an iteration instead of 3, 41 instead of 61 at the default size 2.0.
+            // Each pass is a full barrier on a 480x270 target, so the chain's cost is mostly the pass count, not the pixels.
+            // PT_BLOOM_SEPARATE_ADD=1 keeps the separate add pass, for A/B.
             static const bool separate_add = std::getenv("PT_BLOOM_SEPARATE_ADD") != nullptr;
             const glm::vec4 saved_f1 = push.f1;
             for (int i = 0; i < passes; ++i) {
@@ -139,6 +151,9 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     }
     Stamp(cmd, 11);
 
+    // The lens flares go into a cleared effect buffer (Draw2D_TppLensFlare, additive) that CopyRenderBuffer adds to the encoded
+    // scene before the Tonemap pass, so the flare passes through the tonemap curve and the colour LUT (lantern_trace_f040 ops
+    // 2145 to 2148 after the depth of field, Tonemap at 2161); the tonemap pass below adds the buffer
     UseTargets(cmd, {{&flare_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
     BeginPass(cmd, output_extent_, {{&flare_, true, {}}});
     if (vfx_filter && vr_eye_ < 0) {
@@ -154,6 +169,9 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     push.ids.x = 0;
     const float lut_blend = std::clamp(screen.lut_blend, 0.0f, 1.0f);
     push.f0 = glm::vec4(bloom ? 1.0f : 0.0f, lut_blend, lighting.valid ? 1.0f : renderer_->exposure, 0.0f);
+    // PT_TONEMAP_TEST=1: the tonemap alone, without bloom and without the grading pass that follows it, so the curve's
+    // own shadow end can be measured on its own (the near-black band sits at 0.44 of the capture,
+    // see docs/tester-reports-2026-10-04.md)
     static const bool tonemap_test = std::getenv("PT_TONEMAP_TEST") != nullptr;
     if (tonemap_test) {
         push.f0.x = 0.0f;
@@ -202,6 +220,11 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
         UseTargets(cmd, {{&history_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
         push.ids.x = ldr_index(current);
         push.ids.y = gpu::kImgHistory;
+        // ShFullScreenBlur blends the blurred history into each frame with the game's rate, once per 30 Hz frame of the
+        // original. Applied once per rendered frame at 60 Hz or more, the history's weight compounds twice as fast or faster
+        // and a camera turn leaves a long double image (floor_f110 mazeA_end: two corridors where the capture has one).
+        // Per rendered frame: the rate to the power of the frame's share of a 30 Hz frame, and the band scaled so the blur's
+        // spread per second stays the same.
         const float share = std::clamp(dt * 30.0f, 0.05f, 2.0f);
         const float rate = std::pow(std::clamp(screen.blur_blend_rate, 0.0f, 0.999f), share);
         push.f0 = glm::vec4(screen.blur_fetch_band * std::sqrt(share), rate, 0.0f, 0.0f);
@@ -245,6 +268,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     (void)dt;
 }
 
+// The flare and screen layers do not sample the scene, so both calls bind the same view and the filter set is written once a frame
 SceneFilterContext SceneRenderer::FilterContext(VkCommandBuffer cmd, uint32_t layers) const {
     SceneFilterContext context;
     context.cmd = cmd;
@@ -461,6 +485,8 @@ void SceneRenderer::ApplyEnvironmentOverrides() {
         toggles.local_reflections = !has("reflections");
         toggles.motion_blur = !has("motionblur");
     }
+    // ray traced shadows (12.21): the faces a shadow ray culls, for tests; back (the faces toward the light, as the shadow
+    // passes cull them) by default
     if (const char* last = std::getenv("PT_TIMING_LAST")) {
         timing_ring_.assign(static_cast<size_t>(std::clamp(std::atoi(last), 0, 100000)), FrameTiming{});
     }
@@ -468,6 +494,7 @@ void SceneRenderer::ApplyEnvironmentOverrides() {
         const std::string c = cull;
         rt_cull_ = c == "front" ? 0x20u : c == "none" ? 0u : 0x10u;
     }
+    // ray traced ambient occlusion tuning (tests): rays per pixel, reach in metres, frames accumulated
     if (const char* rays = std::getenv("PT_RT_AO_RAYS")) {
         rt_ao_rays_ = static_cast<uint32_t>(std::clamp(std::atoi(rays), 1, 64));
     }

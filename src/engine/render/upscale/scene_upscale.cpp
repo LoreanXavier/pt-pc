@@ -20,8 +20,12 @@ constexpr VkFormat kPostDepthFormat = VK_FORMAT_R32_SFLOAT;
 constexpr VkFormat kExposureFormat = VK_FORMAT_R32_SFLOAT;
 constexpr VkFormat kHandyFactorFormat = VK_FORMAT_R16_SFLOAT;
 constexpr float kReactiveScale = 3.0f;
+// the beam's change between frames is a fraction of its penumbra; the gain brings a few pixels of edge travel to the cap. The
+// cap stays low: a beam edge marked fully reactive lost the upscaler's history and rippled with the raw jittered pixels around
+// the circle (a white wall in the bathroom); PT_FLASHLIGHT_REACTIVE=<gain>,<cap> overrides both
 constexpr float kFlashlightReactiveGain = 1.5f;
 constexpr float kFlashlightReactiveCap = 0.3f;
+// upscale_demod.frag's floor e, in pre-exposed diffuse light (mid grey is 0.18)
 constexpr float kHandyDemodFloor = 0.02f;
 
 UpscaleImage Wrap(const RenderTarget& t) {
@@ -35,6 +39,8 @@ UpscaleImage Wrap(const RenderTarget& t) {
     return image;
 }
 
+// the HUD-less target of the frame generation that owns the swapchain: FSR 3's interpolation swapchain, else DLSS Frame
+// Generation (Streamline's swapchain); each returns null when it does not generate this frame
 const vk::Image* PresentFrameGeneration(uint32_t image_index) {
     FrameGeneration* fsr = UpscaleHost::Get().FrameGen();
     const vk::Image* hud = fsr ? fsr->Present(image_index) : nullptr;
@@ -197,6 +203,7 @@ void SceneRenderer::WriteUpscaleDescriptors(VkDescriptorImageInfo* images, bool 
 bool SceneRenderer::BeginUpscaleFrame(VkExtent2D output) {
     UpscaleHost::Get().FrameTick();
     const bool active = SetupUpscaler(output);
+    // Streamline loaded: DLSS Frame Generation instead of FSR 3's (one owns the swapchain)
     const bool generate = active && up_.backend != nullptr;
     if (streamline::Active()) {
         UpdateDlssFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Dlss && generate);
@@ -402,6 +409,10 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     if (lighting_) {
         for (const SceneLight& l : lighting_->lights) {
             if (l.id == kHandyLightId && (l.intensity.r + l.intensity.g + l.intensity.b > 0.0f)) {
+                // The cone as the lighting passes light the surface with: the umbra cosine and the falloff towards the
+                // penumbra. The mask texture spans a narrower cone (a light's masked umbra at the same width, the handy
+                // light's is the whole texture), and the reactive value has to follow the light the frame shows, not a
+                // cone wider than it, or it would ride on pixels the beam does not reach.
                 push.f1 = glm::vec4(l.position, l.cos_outer);
                 push.f2 = glm::vec4(glm::normalize(l.direction), l.inv_cone_range);
                 break;
@@ -416,6 +427,9 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     vkCmdEndRendering(cmd);
     UseTargets(cmd, {{&reactive_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 
+    // The handy light demodulated out of the upscaler's colour (upscale_demod.frag): the upscaler reconstructs the surfaces
+    // without the moving beam and upscale_resolve.frag puts the beam back at the output resolution. PT_HANDY_DEMOD=0 feeds
+    // the plain colour; PT_HANDY_DEMOD_FLOOR=<e> sets the floor e (pre-exposed diffuse light)
     static const bool demod_on = [] {
         const char* e = std::getenv("PT_HANDY_DEMOD");
         return !e || std::atoi(e) != 0;
@@ -487,6 +501,7 @@ void SceneRenderer::RecordUpscale(VkCommandBuffer cmd, float dt) {
         d.reset = up_.reset;
         d.frame_index = frame_counter_;
         if (streamline::Active()) {
+            // Streamline's common constants, once for the frame: sl.dlss and DLSS Frame Generation read them
             const float aspect = static_cast<float>(output_extent_.width) / static_cast<float>(std::max(1u, output_extent_.height));
             streamline::FrameConstants k;
             k.view_to_clip = camera_.Projection(aspect);

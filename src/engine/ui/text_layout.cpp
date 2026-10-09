@@ -14,6 +14,7 @@ bool Cjk(uint32_t c) {
     return (c >= 0x2E80 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0x20000 && c <= 0x3FFFF);
 }
 
+// CJK line breaking (kinsoku): no line starts with closing punctuation and none ends with opening punctuation
 bool NoLineStart(uint32_t c) {
     constexpr std::u32string_view kClosing = U"\uFF0C\u3002\u3001\uFF1B\uFF1A\uFF01\uFF1F\uFF09\u300D\u300F\u300B\u3009\u3011\u3015\u2026\u00B7%,.;:!?)]}";
     return kClosing.find(static_cast<char32_t>(c)) != std::u32string_view::npos;
@@ -24,6 +25,7 @@ bool NoLineEnd(uint32_t c) {
     return kOpening.find(static_cast<char32_t>(c)) != std::u32string_view::npos;
 }
 
+// whether a wrapped line may break before codes[i] (0 < i < size): after a space, or between two characters when either is CJK
 bool BreakBefore(const std::vector<uint32_t>& codes, size_t i) {
     const uint32_t before = codes[i - 1], at = codes[i];
     if (before == ' ') return true;
@@ -38,6 +40,9 @@ struct Pending {
     float advance = 0.0f;
 };
 
+// A line ended by a line feed or by the end of the text keeps its trailing spaces in its width, as the original's do (the radio
+// subtitle "...to investigate \r\nthe commotion..." sits 5 pixels further left at 1080p than it would without its space, as in
+// radio_subtitles_rb); a line broken to wrap drops them.
 void Emit(TextLayout& layout, std::vector<Pending>& line, const TextStyle& style, bool keep_trailing_spaces, float max_width = 0.0f) {
     while (!keep_trailing_spaces && !line.empty() && line.back().code == ' ') {
         line.pop_back();
@@ -105,6 +110,7 @@ void Emit(TextLayout& layout, std::vector<Pending>& line, const TextStyle& style
 
 void NormalizeSubtitleStyle(TextStyle& style) {
     if (!style.font || !style.font->Unicode()) return;
+    // Original FFNT negative tracking compensates its padding; Noto has natural advances.
     style.font_width = style.font_height = 22.0f;
     style.text_space = 0.0f;
     style.line_space = 26.0f - style.font_height * style.font->LineFactor();
@@ -194,6 +200,7 @@ TextLayout LayoutTextInBox(std::string_view utf8, TextStyle style, glm::vec2 box
         style.inline_advance *= factor;
     }
     for (auto& line : layout.lines) {
+        // a right-to-left paragraph's lines end at the box's right edge
         const float shift = layout.rtl && mirror_rtl ? std::max(0.0f, room.x - (line.width - lo.x)) : 0.0f;
         for (auto& glyph : line.glyphs) glyph.position += box_min - lo + glm::vec2(shift, 0.0f);
     }

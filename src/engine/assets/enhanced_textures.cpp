@@ -52,6 +52,7 @@ std::vector<std::string> TexturePaths(const std::filesystem::path& game) {
         if (code_at > bytes.size() || bytes.size() - code_at < 8) throw std::runtime_error("Invalid texture code table.");
         uint64_t code;
         std::memcpy(&code, bytes.data() + code_at, 8);
+        // The name table stores stems without extensions; file type is encoded in the high bits of the path code.
         if ((code >> 51) != ExtensionType("ftex")) continue;
         const uint32_t record = u32(records + i * 4), dir = record >> 20, name = record & 0xffff;
         if (dir >= dirs || name >= names) throw std::runtime_error("Invalid texture path index.");
@@ -68,6 +69,7 @@ void WritePng(const std::filesystem::path& path, uint32_t w, uint32_t h, std::sp
     if (!stbi_write_png_to_func(write, &file, static_cast<int>(w), static_cast<int>(h), 4, pixels.data(), w * 4) || !file)
         throw std::runtime_error("Cannot write temporary texture (check disk space).");
 }
+// the upscaler's own release build for this platform (cmake/EnhancedTextures.cmake)
 #ifdef _WIN32
 constexpr const char* kUpscalerExe = "realesrgan-ncnn-vulkan.exe";
 #else
@@ -140,6 +142,7 @@ void EnhancedTextureJob::Run(std::filesystem::path game, std::filesystem::path c
         std::vector<std::string> candidates;
         for (const auto& path : TexturePaths(game)) {
             if (cancel_) break;
+            // The cheap name check avoids decompressing normal/specular maps during inventory.
             if (!path.ends_with("_bsm") && !path.ends_with("_lym") && !path.ends_with("_ils")) continue;
             FtexTexture source;
             if (LoadFtex(qar, path, source) && EnhancedTextureEligible(path, source)) candidates.push_back(path);
@@ -162,7 +165,7 @@ void EnhancedTextureJob::Run(std::filesystem::path game, std::filesystem::path c
                 if (!DecodeFtexLevel(source, 0, pixels)) throw std::runtime_error("A top-level texture could not be decoded.");
                 bool opaque = true;
                 for (size_t i = 3; i < pixels.size(); i += 4) if (pixels[i] != 255) { opaque = false; break; }
-                if (!opaque) { ++done; continue; }
+                if (!opaque) { ++done; continue; } // BC1 can contain cutouts too.
                 if (std::filesystem::space(cache).available < 256 * 1024 * 1024ull) throw std::runtime_error("Not enough free space for enhanced textures.");
                 const auto in = temporary / "input.png", out = temporary / "output.png";
                 WritePng(in, source.width, source.height, pixels);
@@ -181,6 +184,8 @@ void EnhancedTextureJob::Run(std::filesystem::path game, std::filesystem::path c
                 const bool black_output = dimensions && input_rgb > pixels.size() * 4 && output_rgb == 0;
                 std::vector<uint8_t> result(image, image + size_t(w) * h * 4);
                 stbi_image_free(image);
+                // the capped mode (devices with less video memory): the 2x result is reduced back to the cap, a 2x2 box in linear
+                // light, so a 2048 source keeps its size with the upscaler's detail
                 while (dimensions && max_output && (static_cast<uint32_t>(w) > max_output || static_cast<uint32_t>(h) > max_output)) {
                     const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
                     std::vector<uint8_t> half(size_t(nw) * nh * 4);

@@ -38,6 +38,7 @@ public:
     ~VfxScene();
 
     void Update(Game& game, float dt);
+    // `blend`: the effects between their places before the last tick (SnapshotWorlds) and their current ones, as the camera
     void Prepare(Game& game, const Camera& camera, float aspect, SceneLighting& lighting, VfxPass& pass, float blend = 1.0f);
     void SnapshotWorlds() { system_.SnapshotWorlds(); }
     void Clear();
@@ -52,7 +53,7 @@ private:
         const fox2::DataSetFile* file = nullptr;
         std::string path;
         glm::mat4 file_transform{1.0f};
-        uint32_t seed = 1;
+        std::optional<uint32_t> seed;
         bool failed = false;
     };
 
@@ -77,6 +78,7 @@ private:
         uint32_t seed = 0;
         std::vector<PartConnection> connections;
         bool on = false;
+        // the effect's FxSoundCallProgramEffectNode: posted when an instance starts, released when it goes (0xB6E050, 0xB6E0F0)
         std::optional<vfx::SoundNode> sound;
         uint32_t sound_id = 0;
         glm::vec3 sound_at{0.0f};
@@ -109,11 +111,14 @@ private:
     std::array<GimmickEntry, 5> gimmicks_;
     std::set<vfx::InstanceKey> demo_keys_;
     std::map<vfx::InstanceKey, std::string> demo_key_demo_;
+    // effects of newly loaded stages and gimmicks, whose textures the next Prepare loads ahead of their first draw
     std::vector<std::string> preload_;
     bool reader_set_ = false;
     bool test_spawned_ = false;
     uint64_t logged_frame_ = 0;
+    // the vfx list built each frame, swapped with VfxPass's (VfxPass::Submit), so the frames reuse two lists
     vfx::RenderList render_list_;
+    // the last PrepareList's preload and build times, for the slow prepare log
     double preload_ms_ = 0.0;
     double build_ms_ = 0.0;
     uint64_t prepared_ = 0;

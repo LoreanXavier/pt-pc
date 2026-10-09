@@ -8,11 +8,16 @@
 
 namespace pt {
 
+// The change of DominantLightSearch's result over time (ShEffet, 0x8D12A0; set up by 0x8D1E80). Each game frame the new
+// search result is compared with the last one: more than 45 degrees apart (0x1B86834) fades the old direction out and the
+// new one in (w = 1 - 2t, then 2t - 1), more than 22.5 degrees (0x1B86838) turns from the old direction to the new one
+// (w 1); t (0x1B86840) grows by 4 (0x1B8683C) times the frame time and the change ends at 1. Smaller changes are taken at
+// once when no change is running. The result is (direction, w), world space.
 struct DominantLightState {
-    glm::vec3 last{0.0f, -1.0f, 0.0f};
-    glm::vec3 from{0.0f, -1.0f, 0.0f};
+    glm::vec3 last{0.0f, -1.0f, 0.0f};  // 0x1C7D910
+    glm::vec3 from{0.0f, -1.0f, 0.0f};  // 0x1C7D920
     float t = 1.0f;
-    bool turn = false;
+    bool turn = false;                  // 0x1C7D930
     glm::vec4 out{0.0f, -1.0f, 0.0f, 1.0f};
 
     glm::vec4 Step(const glm::vec3& found, float dt) {

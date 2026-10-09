@@ -35,12 +35,28 @@ struct HandyPose {
     glm::vec3 pivot;
 };
 
+// The light is the flash point of the flashlight held in the left hand of the arm pose FC517D57B3A9F1EE. The hand turns as a
+// rigid body about a pivot (the wrist) to aim the light at its look target (Game::UpdateHandyTarget): the flash point stands
+// kHandOffset from the pivot in the frame of the aim d (right of d about the camera's up, up of d, d). The Spot_Mask constants
+// (m_lightParams[3] position and [5] direction in view space) give that offset and the pivots: over flashlight_dynamics
+// 1550-2900 (holds at view pitch +39.45, 0, -10.98, -20.09, -39.75 and -55 with targets from 0.6 to 11.5 m), boot_dof
+// 2900-2978, mirror_f060 4935-5120 and 5325-5337, f050a_walls_2955 and floor_f060 3585-3595 the offset (0.0377 right, 0.0603
+// up, 0.1264 along the aim) makes the pivot one point per view pitch within 2.4 mm rms, and the light lands within 6.4 mm of
+// every hold (the flashlight's own axis offset, 0.1044 m along the aim, left the light 2.2 cm too far forward facing a wall
+// at 0.607 m). Pivots in the port's camera frame (x right; the original's view space x points to the left of the screen:
+// m_view[0] = up x forward, m_projectionParam.x = -1/f): the flashlight_dynamics holds, -2.57 from mirror_f060 4935-5120, -55
+// averaged with the sink (floor_f060 3585-3595) and +50.5 from lisa_balcony_f070 3875-3885 draw 593 (the light 0.208 m left,
+// 0.079 down, 0.165 forward, aimed 2.26 right)
 constexpr glm::vec3 kHandOffset{0.0377f, 0.0603f, 0.1264f};
 constexpr HandyPose kHandyPoses[] = {{-55.0f, {-0.2402f, 0.0431f, 0.2678f}}, {-39.75f, {-0.2466f, -0.0074f, 0.2563f}},
                                     {-20.09f, {-0.2482f, -0.0671f, 0.2221f}}, {-10.98f, {-0.2488f, -0.0905f, 0.2022f}},
                                     {-2.57f, {-0.2503f, -0.1142f, 0.1773f}},  {0.0f, {-0.2495f, -0.1130f, 0.1740f}},
                                     {39.45f, {-0.2554f, -0.1395f, 0.0666f}},
                                     {50.5f, {-0.2507f, -0.1393f, 0.0402f}}};
+// the pivots after the flashlight pickup (Game::HandyPickupHold): floor_f060 3075-3085 at the view pitch -22.17 (the light
+// 0.191 m left, 0.057 down and 0.155 forward aimed 9.15 right and 1.99 up, 0.19 m further back and 6 cm lower than in play
+// there), and the still frames of tub_f060_light 3400-3510 (the medians of 26, 14 and 29 frames within 2 mm, from the
+// Spot_Mask constants as above)
 constexpr HandyPose kPickupHoldPoses[] = {{-55.0f, {-0.2446f, -0.0958f, 0.1462f}}, {-45.8f, {-0.2442f, -0.1141f, 0.1072f}},
                                           {-38.15f, {-0.2459f, -0.1183f, 0.0859f}}, {-22.17f, {-0.2484f, -0.1213f, 0.0380f}}};
 
@@ -60,7 +76,7 @@ HandyPose PoseAt(const HandyPose (&poses)[N], float view_pitch) {
     return poses[N - 1];
 }
 
-}
+}  // namespace
 
 void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pickup_hold, float demo_pose, glm::vec3& position,
                     glm::vec3& direction, glm::vec3* right_out, glm::vec3* up_out) {
@@ -72,6 +88,9 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
     if (pickup_hold > 0.0f) {
         pose.pivot = glm::mix(pose.pivot, PoseAt(kPickupHoldPoses, view_pitch).pivot, std::min(pickup_hold, 1.0f));
     }
+    // the hand turns about the pivot until the flash point aims at the target: d = normalize(target - light(d)), solved by
+    // iteration in the camera frame (the offset moves the light by at most 0.15 m, so it converges at once for targets beyond
+    // 0.4 m)
     const glm::vec3 target_cam(glm::dot(aim_point - camera.position, right), glm::dot(aim_point - camera.position, up),
                                glm::dot(aim_point - camera.position, forward));
     glm::vec3 light_cam = pose.pivot + kHandOffset;
@@ -91,12 +110,15 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
     }
     position = camera.position + right * light_cam.x + up * light_cam.y + forward * light_cam.z;
     direction = glm::normalize(right * d_cam.x + up * d_cam.y + forward * d_cam.z);
+    // the hand's frame (right of the aim about the camera's up, up of the aim), in the world
     if (right_out) {
         *right_out = glm::normalize(right * r_cam.x + up * r_cam.y + forward * r_cam.z);
     }
     if (up_out) {
         *up_out = glm::normalize(right * u_cam.x + up * u_cam.y + forward * u_cam.z);
     }
+    // under a demo camera (0x12810C0's branch for the camera object of 0x970DE0 +0xC0) the light stands at a fixed offset from
+    // that camera, 0.165 m left, 0.13 m down and 0.185 m ahead, aimed at the look target (pickup_release_f060 2639-2720)
     if (demo_pose > 0.0f) {
         const glm::vec3 fixed = camera.position - right * 0.165f - up * 0.13f + forward * 0.185f;
         position = glm::mix(position, fixed, std::min(demo_pose, 1.0f));
@@ -254,6 +276,7 @@ void RenderSceneBuilder::AddLight(const fox2::DataSetFile& f, const fox2::Entity
     SpotAxes(glm::mat3(world), reach, l.direction, l.up);
     const glm::vec3 color = glm::vec3(f.GetVec4(e, "color"));
     float lumen = f.GetFloat(e, "lumen");
+    // 0xE149F0: spot lights whose name ends in these (0xE18230) take lumen 40 over their data
     const std::string_view last = std::string_view(name).substr(name.rfind('|') == std::string::npos ? 0 : name.rfind('|') + 1);
     if (spot && (last == "8SL_stairs_down0000" || last == "8SL_stairs_down0002")) {
         lumen = 40.0f;
@@ -302,6 +325,8 @@ void RenderSceneBuilder::AddLight(const fox2::DataSetFile& f, const fox2::Entity
     out.lights.push_back(l);
 }
 
+// 0xE07C70: isEnable (+0x130), isOneSideMode (+0x131, runtime flag 2), numVertices (+0x138) points of positions (+0x140) in the
+// entity's frame
 std::optional<SceneOccluder> RenderSceneBuilder::BuildOccluder(const fox2::DataSetFile& f, const fox2::Entity& e, const glm::mat4& file_to_world) {
     if (!f.GetBool(e, "isEnable", 0, true)) {
         return std::nullopt;
@@ -334,6 +359,11 @@ std::optional<SceneProbe> RenderSceneBuilder::BuildProbe(Vfs& vfs, const fox2::D
     }
     const ProbeFile* file = LoadProbes(vfs, path);
     auto it = file->probes.find(ShortName(f.EntityName(e)));
+    // localFlags bit 4 (16): a dark probe. Every such probe of the hallway sets (LP_0031, LP_0034, LP_0042, LP_DarkProbe0000 and
+    // 0001) is left out of its .lpsh and every other probe is in it, so the bake skipped them; they take their box weight at their
+    // low priority with no light, which darkens what the later probes would light there (ceillamp_f100 3355: the pillar side
+    // under the lamp, black in the capture)
+    // PT_DARK_PROBES=0 leaves them out as before (comparisons)
     static const bool dark_probes = [] {
         const char* env = std::getenv("PT_DARK_PROBES");
         return !env || std::atoi(env) != 0;
@@ -354,6 +384,10 @@ std::optional<SceneProbe> RenderSceneBuilder::BuildProbe(Vfs& vfs, const fox2::D
     p.priority = f.GetInt(e, "priority");
     p.weight = 1.0f;
     p.name = f.EntityName(e);
+    // The plain real SH expansion (rendering.md 5): SH_LIGHTING (0xC81D60) multiplies each coefficient by its basis constant
+    // (0xC82D50) and a band multiplier of 1, with no lobe weights and no scale. The weights (+0x10..+0x30) and scale (+0xC)
+    // that 0xCED2F0 reads go to 0xC82990 for the per-model REFLECTION_MAP variant, not to the probe ambient.
+    // PT_SH_LEGACY=1 brings back the port's former stand-in, the cosine lobe weights (1, 2/3, 1/4) per band, for A/B shots only.
     static const float kBasis[9] = {0.2820948f, 0.4886025f, 0.4886025f, 0.4886025f, 1.0925484f, 1.0925484f, 0.3153916f, 1.0925484f, 0.5462742f};
     static const bool sh_legacy = [] {
         const char* env = std::getenv("PT_SH_LEGACY");
@@ -442,6 +476,7 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
         handy_color_ = handy_target_ * (1.0f - t) + handy_from_ * t;
     }
     const Player& player = game.GetPlayer();
+    // PT_RENDER_OFF=handy drops the handy light alone, so a shot minus the same shot without it measures its share
     static const bool handy_off = [] {
         const char* off = std::getenv("PT_RENDER_OFF");
         return off && std::strstr(off, "handy") != nullptr;
@@ -456,11 +491,15 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
     l.type = LightType::Spot;
     const glm::vec3 up = glm::normalize(glm::cross(camera.Right(), camera.Forward()));
     HandyLightPose(camera, aim_point, game.HandyPickupHold(), game.HandyDemoPose(), l.position, l.direction);
+    // VR: the flashlight in the tracked controller's hand
     if (const auto& pose = game.HandyPoseOverride()) {
         l.position = pose->first;
         l.direction = pose->second;
     }
+    // the free camera, the photo mode and the third person view show the flashlight in the hand: the beam leaves its lens
+    // (Game::AddMirrorBody)
     if (glm::vec3 lens; game.HandyLens(lens)) {
+        // The housing is drawn between ticks too. Its lens and emitting point must use the same frame.
         if (blend && blend->handy_lens_valid && glm::distance(blend->handy_lens, lens) <= 1.0f) {
             lens = glm::mix(blend->handy_lens, lens, blend->t);
         }
@@ -496,7 +535,17 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
     AddHandyReflection(game, l, out);
 }
 
+// 0x9359D0 drives four GrLights from the handy light (Game::UpdateHandyReflection): reflectLightPoint1 and reflectLight0 at the
+// beam's hit, reflectLightPoint2 and reflectLight02 at the hit they fade out from. Each takes the handy light's intensity (its
+// GrLight value, +0x40 of the module, written by 0x124FE00 and 0x124F980) times its weight, the attenuation of its depth in the
+// view, the colour read back from the module's 64x64 view of the beam (always white, see below) and 2.5: the points times
+// 1 - the spot share,
+// the spots times the share and 1.5. Ranges are 0.4 of the handy light's (0x9359D0 sets them every frame; the constructor
+// 0x933C20 starts them at 0.5), the dimmer 4 (0xCDB160 and 0xCDBD70 with 4.0), no shadow and no specular (the points draw
+// with SSLighting2_Point_NoSpec_NoShadow); the spots have an umbra of 100 degrees (0xCDBDD0 with 1.7453 rad), no penumbra and
+// exponent 1 and turn +Z to the module's eased normal (+0x90). On by default; PT_REFLECT=0 leaves the lights and the sample out.
 void RenderSceneBuilder::AddHandyReflection(Game& game, const SceneLight& handy, SceneLighting& out) const {
+    static const bool trace_log = std::getenv("PT_VFX_TRACE_LOG") != nullptr;
     static const bool on = [] {
         const char* e = std::getenv("PT_REFLECT");
         return !e || std::atoi(e) != 0;
@@ -505,19 +554,32 @@ void RenderSceneBuilder::AddHandyReflection(Game& game, const SceneLight& handy,
     if (!on || !r.active) {
         return;
     }
-    out.reflection_sample.active = !game.FreeView();
+    // The read back pixel (column 0, row 32) is written last by Draw2D_ShSpotLightReflection3 over (0, 0, 64, 64), whose output is
+    // saturate(saturate(0.175 (t1 + t2 + t3 + t5) + 0.3 t4 + 2.0) x inColor): the + 2.0 saturates every channel whatever the
+    // beam sees, so the lights take white x the shape colour. The captures agree: f050a_walls_2955, lisa_balcony_f070 3785-3795
+    // and bath_producer_4280 (reflectLightPoint1 (74.93, 62.94, 47.50) = handy (48.34, 40.60, 30.64) x 2.5 x attenuation 0.6205
+    // x 1.000, beam on the dark bath hole). Sampling the scene instead dimmed the lights over dark surfaces 7-12 times, which kept
+    // the flashlight-lit dust in front of the f060 bath hole from glinting. PT_REFLECT_SAMPLE=1 brings the scene sample back for A/B.
+    static const bool sample_scene = std::getenv("PT_REFLECT_SAMPLE") != nullptr;
+    out.reflection_sample.active = sample_scene && !game.FreeView();
     std::copy(std::begin(r.samples), std::end(r.samples), std::begin(out.reflection_sample.points));
     const HandyLightParameters& p = game.Parameters().handy_light;
     constexpr float kScale = 2.5f;
     constexpr float kSpotScale = 1.5f;
     constexpr uint32_t kStaleUpdates = 8;
-    static const bool white = std::getenv("PT_REFLECT_WHITE") != nullptr;
-    const glm::vec3 colour = !white && r.has_readback && r.readback_age <= kStaleUpdates ? r.readback : glm::vec3(1.0f);
+    const glm::vec3 colour = sample_scene && r.has_readback && r.readback_age <= kStaleUpdates ? r.readback : glm::vec3(1.0f);
     const float weights[2] = {r.first_weight, r.second_weight};
     const float attenuations[2] = {r.first_attenuation, r.second_attenuation};
     const glm::vec3 positions[2] = {r.position, r.second};
     static constexpr const char* kPointNames[2] = {"reflectLightPoint1", "reflectLightPoint2"};
     static constexpr const char* kSpotNames[2] = {"reflectLight0", "reflectLight02"};
+    if (trace_log) {
+        LogInfo("reflect trace: hit ({:.4f} {:.4f} {:.4f}), handy RGB ({:.3f} {:.3f} {:.3f}), readback {} age {} ({:.3f} {:.3f} {:.3f}), "
+                "used colour ({:.3f} {:.3f} {:.3f}), weights ({:.3f} {:.3f}), attenuation ({:.5f} {:.5f}), spot share {:.3f}",
+                r.position.x, r.position.y, r.position.z, handy.intensity.r, handy.intensity.g, handy.intensity.b, r.has_readback,
+                r.readback_age, r.readback.r, r.readback.g, r.readback.b, colour.r, colour.g, colour.b, r.first_weight, r.second_weight,
+                r.first_attenuation, r.second_attenuation, r.spot_share);
+    }
     for (int i = 0; i < 2; ++i) {
         const float base = weights[i] * attenuations[i] * kScale;
         for (int spot = 0; spot < 2; ++spot) {
@@ -545,6 +607,10 @@ void RenderSceneBuilder::AddHandyReflection(Game& game, const SceneLight& handy,
                 l.cone_exponent = 1.0f;
             }
             out.lights.push_back(l);
+            if (trace_log && !spot) {
+                LogInfo("reflect trace: {} position ({:.4f} {:.4f} {:.4f}) RGB ({:.3f} {:.3f} {:.3f}) range {:.3f}", l.name,
+                        l.position.x, l.position.y, l.position.z, l.intensity.r, l.intensity.g, l.intensity.b, l.outer_range + l.dimmer);
+            }
         }
     }
 }
@@ -573,6 +639,15 @@ void RenderSceneBuilder::AddMirrors(Game& game, SceneLighting& out) const {
                         }
                         SceneMirror mirror{draw.mesh, stage.file_to_world * draw.file_transform};
                         if (area) {
+                            // 0x95ADA0 hands 0x538970 a box at the locator's world position (0x531CA0, the stage's placement
+                            // included), `size` times the locator's scale wide (0x531D70), turned by the rotation 0x531530
+                            // gathers from the entity parents, which leaves the stage's placement locator out
+                            // (`ShRelativeStageLocator`, -90 degrees for the hallway): the box keeps the file's axes, so in
+                            // the hallway its 1.759 m side runs along the world x axis. mirror_f060 fixes it: the MirrorLight sits
+                            // at x -5.089 (0.531 m behind the mirror, the box's near face) at 4935 to 5130 and at z 24.445 (the
+                            // box's side) at 5325 to 5337, centre (-5.969, 23.771) with half sides 0.879 (x) and 0.674 (z); with
+                            // the stage's turn the box stood 0.206 m further back and its z face 0.2 m off, which put the
+                            // bounce 0.2 m too far from the door and the light inside the box where the original clamps it.
                             const float size = f.GetFloat(*area, "size", 0, 1.0f);
                             const glm::mat4 local = f.WorldTransform(*area);
                             const glm::mat4 placement = stage.file_to_world * local;
@@ -597,6 +672,8 @@ void RenderSceneBuilder::AddMirrors(Game& game, SceneLighting& out) const {
 
 namespace {
 
+// 0x538970 (slab test 0x538150): where the ray o + t d, t from 0, enters the box [-0.5, 0.5]^3 of `box`; a ray that starts
+// inside enters at its origin
 bool RayEntersBox(const glm::mat4& box, const glm::vec3& o, const glm::vec3& d, glm::vec3& at) {
     const glm::mat4 inverse = glm::inverse(box);
     const glm::vec3 lo(inverse * glm::vec4(o, 1.0f));
@@ -652,6 +729,7 @@ bool MirrorApertureProjection(const SceneMirror& mirror, const glm::vec3& source
         return false;
     }
 
+    // These homogeneous coordinates locate the source-to-receiver segment's mirror-plane intersection in aperture units.
     const float su = glm::dot(tu, source - center);
     const float sv = glm::dot(tv, source - center);
     const float sn = glm::dot(n, source);
@@ -673,6 +751,24 @@ bool MirrorApertureProjection(const SceneMirror& mirror, const glm::vec3& source
 
 }
 
+// The MirrorLight (created by 0x95ABB0 and updated every frame by 0x95ADA0 while a capture runs), the handy light as the
+// mirror returns it. It copies the handy light with the intensity times 4, the outer range plus 2 m and the umbra angle
+// times 0.6 (the mask texture spans the narrower umbra, 0xD4E040); the inner range, dimmer, penumbra, cone exponent, shadow
+// cone, light size, bias and mask are the handy light's, castShadow is on and its priority byte 0x40 (no priority light).
+// With the handy light on and its axis toward the mirror, the light turns with the handy light mirrored at the mirror plane
+// (0x95A5A0) and sits on the returned beam, the line through the mirrored light position P' and the point H where the axis
+// crosses the plane (0x543DF0): at the point where the ray P' -> H enters the mirror's light-area box (MirrorLightAreaLocator,
+// 0.74 to 2.09 m behind the hallway mirror; P' itself when it lies inside), else where the ray H -> P' enters it. It is off
+// when the axis points away from the mirror or both rays miss. The capture serves the Mirror nearest to the camera (0x956D10).
+// The light stands behind the wall, in the hallway: with the camera view's casters the mirror's glass_a (3.8 mm behind the
+// mirror, where the bathroom's tile wall has its opening) and the wall around it would hide the bathroom from it. The capture
+// views render their own shadow maps (0xD3F0C0), in which the mirror model, hidden in those views (0x958530), casts nothing:
+// the light reaches the room through the mirror's opening. The PS4 capture draws it in the camera view too, as the same
+// SSLighting2_Spot_Mask light (mirror_f060 5330: draw 1348 at (-5.342, 1.597, 24.445) as the capture view's draw 614), so the
+// port also evaluates it in the camera view with the mirror view's shadow casters (SceneRenderer::BuildShadowViews). A PS4
+// reference shows a finite patch on the short wall beside the bathroom door. The port bounds this light by the transformed
+// glass mesh; that finite-aperture test is an implementation inference from the glass and wall geometry, not a claim about the
+// original shadow-map contents. Whether the camera draw shares the capture shadow map is also an inference; PT_MIRROR_LIGHT_CAMERA=0 keeps it out of the camera view.
 void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneLighting& out) const {
     const SceneMirror* mirror = nullptr;
     float nearest = 0.0f;
@@ -731,11 +827,17 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
     l.direction = glm::normalize(a - 2.0f * na * n);
     l.up = glm::normalize(handy->up - 2.0f * glm::dot(handy->up, n) * n);
     l.intensity *= 4.0f;
+    // mirror_f060: the MirrorLight's m_lightParams[4].w (the source radius the highlight's roughness uses) is 0.0125 against the handy
+    // light's 0.025 in every frame of 4935 to 5342
     l.source_radius *= 0.5f;
     l.outer_range += 2.0f;
     l.cos_outer = CosHalf(params.umbra_angle * 0.6f);
     l.inv_cone_range = InverseRange(CosHalf(params.penumbra_angle), l.cos_outer);
     l.mask_fov = params.umbra_angle * 0.6f * kPi / 180.0f;
+    // The shadow cone shrinks with the umbra: mirror_f060's MirrorLight draws carry m_lightParams[7] = (0.9178, 20.759) = cos(23.4
+    // degrees) and 1 / (cos 15 degrees - cos 23.4 degrees), the handy light's (0.777, 5.297) with the same full-shadow edge at 15
+    // degrees. So the shadow only reaches full strength within 15 degrees of the axis and fades out by 23.4 degrees; outside that
+    // the light is unshadowed (rendering.md 4.x, shadowCone). PT_MIRROR_SHADOW_CONE=handy keeps the handy light's cone.
     static const bool handy_cone = [] {
         const char* value = std::getenv("PT_MIRROR_SHADOW_CONE");
         return value && std::string_view(value) == "handy";
@@ -745,6 +847,10 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
         l.shadow_cos_outer = CosHalf(params.umbra_angle * 0.6f);
         l.shadow_inv_cone_range = 1.0f / std::max(full - l.shadow_cos_outer, 1.0e-6f);
     }
+    // The original gives the MirrorLight castShadow on (rendering.md 12.20). It stands just behind the mirror with its
+    // shadow cone around it, so a bias that suits the lamp and door lights leaves its own surface in shadow, and the
+    // mirror's dirt then gets no light at all (measured: the MirrorLight alone lights the mirror region by 2.4 levels of
+    // 255 against a peak of 40). PT_MIRROR_LIGHT_SHADOW=0 turns the light's shadow off, the one-variable test for that.
     static const bool light_shadow = [] {
         const char* value = std::getenv("PT_MIRROR_LIGHT_SHADOW");
         return !value || std::atoi(value) != 0;
@@ -756,6 +862,9 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
         return value && std::atoi(value) == 0;
     }();
     l.hidden_views = camera_hidden ? 1u : 0u;
+    // The half-space box keeps the CPU's light-area ranking on the room side; the GPU uses the mirror mesh's finite aperture.
+    // Without that aperture, the skipped paper_a1 caster lets the light spill across the short wall. PT_MIRROR_LIGHT_CLIP=0
+    // disables both clip tests.
     static const bool clip_front = [] {
         const char* value = std::getenv("PT_MIRROR_LIGHT_CLIP");
         return !value || std::atoi(value) != 0;
@@ -786,6 +895,7 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
                 m.x, m.y, m.z, n.x, n.y, n.z, glm::dot(p - m, n), a.x, a.y, a.z, mirrored.x, mirrored.y, mirrored.z, l.direction.x, l.direction.y, l.direction.z,
                 glm::dot(at - m, n), glm::dot(l.direction, n));
     }
+    // PT_MIRROR_LIGHT_OFF=1 drops it alone, so a shot with and one without show the light the capture adds
     static const bool mirror_light_off = [] {
         const char* off = std::getenv("PT_MIRROR_LIGHT_OFF");
         return off && *off == '1';
@@ -797,6 +907,11 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
 }
 
 float RenderSceneBuilder::FocusDistance(Game& game, const Camera& camera, float dt) {
+    // 0x127AB20: the look target ray starts 0.1 m ahead of the camera (camera component +0x26C, which the P.T. camera
+    // plugin's enter 0x982F90 sets to 0.1), so a surface closer than that, such as the bathroom wall behind the
+    // peephole camera, does not take the focus; 0x978450 measures the focus from the camera to the hit (+0x274). The ray
+    // is cast with mask 0x700, which the detailed surfaces answer and the movement hull does not (Game::LineCollision): in
+    // front of the bathroom mirror the hull stands 0.25 m out and the capture's focus is 0.607 m, the mirror (mirror_f060 4950)
     constexpr float kRayStart = 0.1f;
     RayHit hit;
     float target = 1500.0f;
@@ -805,6 +920,7 @@ float RenderSceneBuilder::FocusDistance(Game& game, const Camera& camera, float 
         target = hit.distance + kRayStart;
     }
     target = std::clamp(target, 0.5f, 1500.0f);
+    // after a camera cut (the first frame, a teleport or a scripted camera jump) the focus starts at the target, as the exposure is settled
     const bool cut = !focus_valid_ || glm::distance(camera.position, focus_eye_) > 3.0f || glm::dot(camera.Forward(), focus_forward_) < 0.7071f;
     focus_eye_ = camera.position;
     focus_forward_ = camera.Forward();
@@ -823,6 +939,7 @@ float RenderSceneBuilder::FocusDistance(Game& game, const Camera& camera, float 
 }
 
 void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, SceneLighting& out, const TickBlend* blend) {
+    // PT_BUILD_PROFILE=1: the mean milliseconds of Build's steps over each 120 frames
     static const bool profile = std::getenv("PT_BUILD_PROFILE") != nullptr;
     using clock = std::chrono::steady_clock;
     clock::time_point marks[8];
@@ -834,6 +951,7 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     LoadResidentSettings(game);
     stamp();
     Vfs& vfs = game.GetVfs();
+    // lights and probes of a loaded but inactive stage are not in the scene, as its models (StageManager::CollectDraws)
     game.Stages().ForEachStage(
         [&](Stage& stage) {
             if (!stage.active) {
@@ -851,6 +969,7 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
         },
         false);
     stamp();
+    // the static caches below hold entity pointers: any change of the loaded stages empties them
     {
         std::vector<std::pair<uint32_t, const void*>> loaded;
         game.Stages().ForEachStage([&](Stage& stage) {
@@ -868,6 +987,9 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
             if (!stage.active) {
                 return;
             }
+            // probes and occluders are static once a stage is loaded: the file's entities are scanned for them once and each
+            // is built once per stage placement (rebuilding them every frame, with every entity of every active stage
+            // compared by class name, took 13.6 ms a frame in the red lamp loop when its next hallway copy was active)
             for (const auto& data : stage.files) {
                 const fox2::DataSetFile& f = *data->file;
                 auto [scan, fresh] = static_entities_.try_emplace(&f);
@@ -907,6 +1029,8 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     const float focus = FocusDistance(game, camera, dt);
     stamp();
     const bool blended = blend && blend->t < 1.0f;
+    // with the free camera and the third person view (Extras) the light stays in the player's hand: posed from the player's own
+    // view, not the rendered one. Keep the third-person pose on this camera throughout its blend, even before the body is shown.
     const bool player_view = game.DetachedView() || game.ThirdPersonCameraActive();
     Camera handy_view = player_view ? game.GetPlayer().MakeCamera() : camera;
     if (player_view) {
@@ -930,6 +1054,8 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     }
 
     const ScreenEffects& fx = game.Effects();
+    // 0x959FD0: the capture runs while the floor's MirrorCapture flag is on and a MirrorSwitch trap has set a viewport bit
+    // PT_MIRROR_CAPTURE=0 drops the capture alone, so a shot with and one without measure what the mirror shows
     static const bool mirror_capture_off = [] {
         const char* off = std::getenv("PT_MIRROR_CAPTURE");
         return off && *off == '0';
@@ -975,6 +1101,8 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     screen.start_slope = resident_.start_slope;
     screen.end_slope = resident_.end_slope;
     screen.local_reflections = (resident_.plugin_flags & 0x20u) != 0;
+    // PT_NO_LOCAL_REFLECTIONS=1 drops the level's screen space reflections alone, so a shot with and one without
+    // measures their share (the reflection that goes when the camera looks down, report 2 of the tester notes)
     static const bool no_local_reflections = std::getenv("PT_NO_LOCAL_REFLECTIONS") != nullptr;
     if (no_local_reflections) {
         screen.local_reflections = false;
@@ -1063,6 +1191,10 @@ void RenderSceneBuilder::AddTppAtmosphere(Game& game, SceneLighting& out) const 
                 for (const fox2::Entity& e : f.Entities()) {
                     if (e.class_name == "TppGlobalVolumetricFogParam") {
                         tpp.enabled = true;
+                        // 0x906330: m1 = e (selfColor.rgb selfColor.a selfLuminance + sky), m2 = (mie.rgb mie.a, 1.55 g - 0.55 g^3),
+                        // m3 = rayleigh.rgb rayleigh.a (0 in P.T., whose rayleighScattering has alpha 0), m0.w = e dirLightGain |dir|.
+                        // The sky term (skyAlbedo.rgb skyAlbedo.a skyLightGain times the atmosphere's sky colour) is 0 in P.T.,
+                        // whose skyAlbedo has alpha 0
                         const glm::vec4 self = f.GetVec4(e, "selfColor");
                         self_color = glm::vec3(self);
                         self_alpha = self.a;
@@ -1131,6 +1263,12 @@ void RenderSceneBuilder::AddTppAtmosphere(Game& game, SceneLighting& out) const 
         demo_value(0x10363B1D0048ULL, 0, 2, self_color.b);
     }
     tpp.fog_self = self_color * self_alpha * self_luminance;
+    // The fog's directional light (0x8EEC00: FUN_008dff20 over pi, times the fog object's +0xA0, and the negated direction of
+    // FUN_008df890) is the atmosphere's moon: ending_fog_spot traces it at 3165, 3560 and 4080 as VolFog m0.w = 0.48971 =
+    // e 3.5 |(7.162, 12.732, 20.690)| and, in the area fog colour, as (7.162, 12.732, 20.690) times the area albedo, which is
+    // TppAtmosphere moonColor (0.45, 0.8, 1.3) times moonLux 50 over pi; m_localParam[1] = (0.39491, 0.85361, 0.33969) in
+    // all three frames. The atmosphere's sun and moon positions are not ported; with P.T.'s mieAnisotropy 0 and rayleigh 0 the
+    // direction does not change the fog.
     if (tpp.enabled) {
         game.Stages().ForEachStage(
             [&](Stage& stage) {
@@ -1141,6 +1279,7 @@ void RenderSceneBuilder::AddTppAtmosphere(Game& game, SceneLighting& out) const 
                             tpp.dir_color = glm::vec3(f.GetVec4(e, "moonColor")) * f.GetFloat(e, "moonLux") / kPi;
                             tpp.light_dir = glm::vec3(0.39491f, 0.85361f, 0.33969f);
                         }
+                        // TppSky draws Sky_Draw_TppBaked and its dome every frame it is enabled (sh_sky.fox2: enable true)
                         if (e.class_name == "TppSky" && f.GetBool(e, "enable", 0, true)) {
                             tpp.sky = true;
                         }
@@ -1149,6 +1288,7 @@ void RenderSceneBuilder::AddTppAtmosphere(Game& game, SceneLighting& out) const 
             },
             false);
     }
+    // DR_VolFog_TppTonemap composes every floor, with a 1x1 fog volume where no fog is set (f010_dumps 1490)
     tpp.tonemap = resident_.tpp_tonemap;
     tpp.threshold = resident_.tpp_threshold;
     tpp.range = resident_.tpp_range;
@@ -1200,6 +1340,7 @@ void RenderSceneBuilder::AddDemoLight(const DemoLight& d, const TickBlend* blend
 
 void RenderSceneBuilder::ApplyDemoCamera(Game& game, SceneLighting& out) const {
     const DemoSystem& demos = game.Demos();
+    // the street walk's scenery demo lends its camera's exposure, never its lens (DemoSystem::SceneryCameraParams)
     const DemoCameraParams* camera_params = demos.CameraParams() ? demos.CameraParams() : demos.SceneryCameraParams();
     if (const DemoCameraParams* cam = camera_params) {
         const uint32_t set = cam->set_mask;
@@ -1225,6 +1366,8 @@ void RenderSceneBuilder::ApplyDemoCamera(Game& game, SceneLighting& out) const {
         }
         apply(3, cam->shutter_speed, out.screen.shutter_speed);
     }
+    // the depth of field reads the lens one original frame late (DemoSystem::DofLens): a demo's first frame still blurs with the
+    // game's lens and its last with its own
     if (const DemoCameraParams* lens = demos.DofLens()) {
         ScreenSettings& s = out.screen;
         s.focal_length = lens->focal_length;

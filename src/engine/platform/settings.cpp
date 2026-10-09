@@ -140,6 +140,8 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "graphics.texture_detail", out.graphics.texture_detail);
     Read(v, "graphics.ray_quality", out.graphics.ray_quality);
     if (!v.contains("graphics.lens_ghosts")) {
+        // a pt.ini from before the key: the ghosts were on only in the Original preset, so a Low, High or Ultra user keeps
+        // their preset (and no ghosts) and an Original user keeps the ghosts
         AppSettings probe = out;
         probe.graphics.lens_ghosts = true;
         out.graphics.lens_ghosts = DetectGraphicsPreset(probe, false) == GraphicsPreset::Original ||

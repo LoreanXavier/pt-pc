@@ -43,6 +43,8 @@ int main(int argc,char** argv) {
         pt::AppSettings restored;
         check("load graphics settings",pt::LoadAppSettings(path,restored));
         check("graphics persistence",restored.graphics==s.graphics && restored.ray_tracing==s.ray_tracing);
+        // a pt.ini from before lens_ghosts: the preset the other keys imply decides, so High stays High without ghosts
+        // and Original keeps them
         const auto without_key=[&](pt::GraphicsPreset preset){
             pt::AppSettings written;pt::ApplyGraphicsPreset(written,preset,true);
             if(!pt::SaveAppSettings(path,written)) return false;

@@ -36,6 +36,9 @@ void TppFog(vec3 eye, vec3 point, out vec3 inscatter, out float transmittance) {
     vec3 directional = ray.w * (mie.rgb * mie_phase + ray.rgb * rayleigh_phase) / max(vec3(1.0e-6), sigma);
     float opacity = 1.0 - exp(-depth);
     vec3 color = g1.rgb + directional * (1.0 - exp(-depth * sigma));
+    // No area box term: VolFog_TppVolFog_Area (ps adf9aadf6beb2a36) runs its box code only for the froxels whose ray misses the
+    // box (0x048c to 0x0498: exec = all & ~hit), where the segment in the box is empty, so the volume holds the global fog alone
+    // (ending_fog_spot 3560: every texel within the global fog's own quantization, rgb within 0.0027)
     inscatter = clamp(color * opacity, 0.0, 1.0);
     transmittance = 1.0 - opacity;
 }
@@ -69,6 +72,13 @@ void main() {
         z = ViewZ(v, depth);
     }
     if ((tpp & 1u) != 0u && depth <= 0.0 && (tpp & 4u) != 0u) {
+        // The sky (Sky_Draw_TppBaked, ps f1bec4c4b2912602, drawn after the composite where the depth is still clear; rendering.md
+        // 12.7): with P.T.'s constants (ending_sky_trace: m2.z = 0 no moon, m3.w = 0 no scattering, m7.x = 0 no stars,
+        // m5.w = 1 and m6 = (1000, -986895) for the fog weight 1) it is the fog volume's far slice, averaged over the pixel and
+        // two points 0.3 NDC away along the diagonal (weights 1/2, 1/4, 1/4), plus the alpha mode 4 Bayer value
+        // (2 b + 1) / 255 / 128 of its inMesh texture before the shoulder (the 3560 and 4080 target dumps: 92 % and 89 % of
+        // the sky pixels exact). tpp3dfw_constant_sky_ed's dome on top keeps the target within 1/32768 (cloudCover and the
+        // cylinder density are 0), so it is left out.
         vec2 ndc = PixelNdc(v, gl_FragCoord.xy);
         vec2 taps[3] = vec2[3](ndc, clamp(ndc + vec2(0.3, -0.3), -1.0, 1.0), clamp(ndc - vec2(0.3, -0.3), -1.0, 1.0));
         float weights[3] = float[3](0.5, 0.25, 0.25);
@@ -82,6 +92,8 @@ void main() {
         }
         color += MeshDither(gl_FragCoord.xy, v.temporal).y / 128.0;
     } else if ((tpp & 1u) != 0u) {
+        // DR_VolFog_TppTonemap reads the froxel volume at the clamped slice of the pixel's depth: the fog of view depth
+        // clamp(z, 1, far) (SceneRenderer::SetTppFog)
         float fog_z = clamp(z, 1.0, frame.fog[0].w);
         vec3 view_point = vec3(PixelNdc(v, gl_FragCoord.xy) * v.projection_param.xy * fog_z, fog_z);
         vec3 world_point = (v.inv_view * vec4(view_point, 1.0)).xyz;

@@ -29,6 +29,7 @@ struct RowText {
     const char* section;
 };
 
+// the rows in their order, the section a row opens
 constexpr RowText kRows[] = {
     {"pc_photo_take", "pc_note_photo_take", "pc_photo_section_camera"},
     {"pc_photo_focal_length", "pc_note_photo_focal_length", nullptr},
@@ -191,6 +192,7 @@ void PhotoPanel::Change(GameAudio* audio, int delta) {
     if (n <= 1) {
         return;
     }
+    // switches and lists wrap as the PC settings' rows do; numbers stop at their ends
     const bool wrap = n == 2 || cursor_ == kSpeed || cursor_ == kAspect || cursor_ == kResolution || cursor_ == kFilter;
     int value = Value(cursor_) + delta;
     value = wrap ? (value % n + n) % n : std::clamp(value, 0, n - 1);

@@ -21,6 +21,7 @@ glm::vec3 ClosestOnSegment(const glm::vec3& p, const glm::vec3& a, const glm::ve
     return a + ab * u;
 }
 
+// 0xC151B0: nearest point on the three edges
 glm::vec3 ClosestOnEdges(const glm::vec3& p, const CollisionTriangle& t) {
     const glm::vec3 candidates[3] = {ClosestOnSegment(p, t.a, t.b), ClosestOnSegment(p, t.b, t.c), ClosestOnSegment(p, t.c, t.a)};
     glm::vec3 best = candidates[0];
@@ -79,6 +80,10 @@ void SortHits(std::vector<SphereHit>& hits) {
 
 }
 
+// The decompiled controller (0xAFEB60's cast radius 10 cm inside the nearest contact plane, 0x12AD310's single cast that
+// stops 8 mm before the hit, the move from the center before the depenetration). PT_CONTROLLER_SLIDE=1 selects the sliding
+// variant e3d02e9 had made the default (player radius 0.3, the remaining motion slid along the hit plane), which walks the
+// player 10 cm closer to the walls than the captures show (gameplay.md 10.3) and left f060's baby out of view
 bool OriginalController() {
     static const bool original = [] {
         const char* v = std::getenv("PT_CONTROLLER_SLIDE");
@@ -150,6 +155,7 @@ void CollisionWorld::AppendBlocks(std::span<const Block> blocks) {
         owner_triangles_[blocks[b].owner] += static_cast<uint32_t>(n);
     }
     triangles_.resize(offsets.back());
+    // each block lands at its own offset, so the copy splits over threads without changing the result
     ParallelChunks(blocks.size(), ParallelChunkCount(offsets.back() - offsets.front(), 32768), [&](size_t, size_t begin, size_t end) {
         for (size_t b = begin; b < end; ++b) {
             if (!blocks[b].triangles) {
@@ -181,6 +187,8 @@ void CollisionWorld::Build() {
     if (triangles_.empty()) {
         return;
     }
+    // Each cell lists its triangles in ascending order, as the per cell vectors filled in triangle order did, so queries visit
+    // the same candidates in the same order.
     const auto cells = [](const CollisionTriangle& t, int& x0, int& x1, int& z0, int& z1) {
         x0 = static_cast<int>(std::floor(t.min.x / kCellSize));
         x1 = static_cast<int>(std::floor(t.max.x / kCellSize));
@@ -199,6 +207,8 @@ void CollisionWorld::Build() {
         cell_nx_ = static_cast<int>(nx);
         cell_nz_ = static_cast<int>(nz);
         const size_t table = static_cast<size_t>(nx * nz);
+        // A counting sort split over contiguous runs of triangles: run r's entries of a cell go after those of the runs before
+        // it, which keeps every cell in ascending triangle order whatever the run count.
         const size_t runs = ParallelChunkCount(triangles_.size(), 16384);
         std::vector<std::vector<uint32_t>> counts(runs, std::vector<uint32_t>(table, 0));
         ParallelChunks(triangles_.size(), runs, [&](size_t run, size_t begin, size_t end) {
@@ -239,6 +249,7 @@ void CollisionWorld::Build() {
         });
         return;
     }
+    // too wide for the table: a map from each cell to its run of the array
     std::unordered_map<int64_t, std::vector<uint32_t>> grid;
     int x0, x1, z0, z1;
     for (uint32_t i = 0; i < triangles_.size(); ++i) {
@@ -305,6 +316,7 @@ bool CollisionWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction
     if (triangles_.empty() || !(max_distance > 0.0f)) {
         return false;
     }
+    // Walk only the x/z cells the ray crosses, nearest first, so a long camera probe costs its path rather than its bounding box.
     float t0 = 0.0f;
     float t1 = max_distance;
     const float lo[2] = {bounds_min_.x - 0.01f, bounds_min_.z - 0.01f};
@@ -392,6 +404,7 @@ bool CollisionWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction
         }
         const int axis = next[0] < next[1] ? 0 : 1;
         const float leave = next[axis];
+        // Every triangle a hit before this cell's exit could come from is registered in a cell already visited.
         if (leave > t1 || (found && hit.distance <= leave) || !std::isfinite(leave)) {
             break;
         }
@@ -501,6 +514,7 @@ void CharacterController::Reset() {
     placed_ = true;
 }
 
+// 0xAFDAA0: one plane per contact within radius + 0.1 and within radius of the center height
 void CharacterController::GatherContacts(const CollisionWorld& world, const glm::vec3& center, Contacts& contacts) {
     const float r = shape.radius;
     contacts.count = 0;
@@ -551,6 +565,7 @@ void CharacterController::GatherContacts(const CollisionWorld& world, const glm:
     }
 }
 
+// 0xAFE2B0: push out to radius + 0.01 from every plane, and how far the opposite planes push back
 bool CharacterController::Resolve(const glm::vec3& center, const Contacts& contacts, glm::vec3& direction, float& amount, float& opposite) {
     if (contacts.touching < 1) {
         return false;
@@ -608,6 +623,7 @@ bool CharacterController::Resolve(const glm::vec3& center, const Contacts& conta
     return true;
 }
 
+// 0xAFEB60: depenetrate, halfway between opposite planes, and the sphere radius for the next cast
 float CharacterController::Depenetrate(const CollisionWorld& world, glm::vec3& center) {
     const glm::vec3 before = center;
     Contacts contacts;
@@ -630,13 +646,17 @@ float CharacterController::Depenetrate(const CollisionWorld& world, glm::vec3& c
         for(int i=0;i<contacts.count;++i)
             LogInfo("contact: normal ({:.4f} {:.4f} {:.4f}), plane {:.4f}, before distance {:.4f}", contacts.normals[i].x,contacts.normals[i].y,contacts.normals[i].z,contacts.distances[i],glm::dot(before,contacts.normals[i])-contacts.distances[i]);
     }
+    // Cast the same sphere that Resolve pushes out. Shrinking by 10 cm here let the
+    // next movement penetrate the full-size sphere, then correction snapped it out.
     if (OriginalController()) {
+        // 0xAFEB60: the next cast's radius, 10 cm inside the nearest contact plane, at least 5 cm
         /* The next cast sits 10 cm inside the nearest contact, never under 5 cm (0xAFEB60); that is what fits the player through the 0.796 m stair gap on f010. */
         return std::max(std::min(shape.radius, nearest - 0.1f), 0.05f);
     }
     return shape.radius;
 }
 
+// 0xAFED90: ground under a half-radius sphere, the center raised to center_height above it
 void CharacterController::Ground(const CollisionWorld& world, glm::vec3& center) {
     const float probe = radius_ * shape.ground_probe;
     const glm::vec3 below = center - glm::vec3(0.0f, shape.center_height + radius_, 0.0f);
@@ -661,6 +681,8 @@ void CharacterController::Ground(const CollisionWorld& world, glm::vec3& center)
     }
 }
 
+// Retain the original radius/backoff, but consume the remaining tangent motion at a wall or doorway edge.
+// 0x12AD310: cast with the current radius, 8 mm back along the path from the hit
 /* A hit stops 8 mm back along the path, as 0x12AD310 does; the depenetration next frame pushes out to radius + 0.01 from there. */
 void CharacterController::SweepOriginal(const CollisionWorld& world, const glm::vec3& start, glm::vec3& end, const glm::vec3& requested) {
     const glm::vec3 path = end - start;
@@ -762,9 +784,11 @@ void CharacterController::Move(const CollisionWorld& world, const glm::vec3& dis
         }
     }
     contact_ = false;
+    // the original adds the move to the center before the depenetration (0xB001E0)
     glm::vec3 end = (OriginalController() ? start : center) + move;
     Sweep(world, center, end, displacement);
     position = end - up;
+    // 0xB010B0: rises eased by +0x3C8 with +0x3CC acceleration, drops at once
     previous_normal_ = contact_normal_;
     if (position.y <= body_y_) {
         body_y_ = position.y;

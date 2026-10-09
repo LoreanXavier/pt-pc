@@ -45,6 +45,7 @@ uint32_t ProcessId() { return GetCurrentProcessId(); }
 ProcessResult RunProcess(const std::filesystem::path& program, const std::vector<std::string>& args, const std::filesystem::path& working_dir,
                          const std::filesystem::path& log, const std::atomic<bool>& cancel, std::chrono::milliseconds timeout) {
     ProcessResult result;
+    // Windows file names cannot contain quotes; no shell or command interpreter is involved.
     std::wstring command = L"\"" + program.wstring() + L"\"";
     for (const auto& arg : args) command += L" \"" + std::filesystem::path(reinterpret_cast<const char8_t*>(arg.c_str())).wstring() + L"\"";
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};

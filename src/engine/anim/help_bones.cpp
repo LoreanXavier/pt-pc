@@ -25,6 +25,7 @@ constexpr float kPi = 3.14159265f;
 constexpr float kDegree = 0.017453294f;
 constexpr float kDoubleDegrees = 114.59155f;
 
+// Upper then lower bound, in the evaluator's order (the upper one wins when they cross).
 float Limit(float v, float lo, float hi) {
     if (v - lo < 0.0f) {
         v = lo;
@@ -35,6 +36,8 @@ float Limit(float v, float lo, float hi) {
     return v;
 }
 
+// Slerp from the identity toward q as 0xAE7420 inlines it: the shorter way round, linear weights from |dot| >= 0.999
+// (constant at 0x143F2E0), then normalized.
 glm::quat SlerpFromIdentity(const glm::quat& q, float t) {
     glm::quat from = kIdentity;
     float d = q.w;
@@ -54,6 +57,8 @@ glm::quat SlerpFromIdentity(const glm::quat& q, float t) {
     return glm::normalize(from * w0 + q * w1);
 }
 
+// Shortest arc from unit vector a to unit vector b; a half turn about the axis perpendicular to a and the basis axis
+// of a's smallest component when they are opposite (constants 0x143F110, 0x143F120).
 glm::quat Arc(const glm::vec3& a, const glm::vec3& b) {
     const float d = glm::dot(a, b);
     if (d + 1.0f <= 1e-5f) {
@@ -78,6 +83,7 @@ glm::quat Arc(const glm::vec3& a, const glm::vec3& b) {
     return glm::quat(k * 0.5f, c.x, c.y, c.z);
 }
 
+// Twist of q about the axis: q without the swing that takes the axis where q takes it.
 glm::quat Twist(const glm::quat& q, const glm::vec3& axis) {
     return glm::conjugate(Arc(axis, q * axis)) * q;
 }
@@ -86,6 +92,7 @@ glm::quat ScaledTwist(const glm::quat& twist, float weight) {
     return weight >= 0.0f ? SlerpFromIdentity(twist, weight) : glm::conjugate(SlerpFromIdentity(twist, -weight));
 }
 
+// Swing of axis a under q: polar angle theta and the components of the swung axis toward b (x) and toward -(a x b) (y).
 struct Swing {
     float theta = 0.0f;
     float x = 0.0f;
@@ -98,10 +105,12 @@ Swing SwingOf(const glm::quat& q, const glm::vec3& a, const glm::vec3& b) {
     return {2.0f * std::acos(half), glm::dot(b, v), -glm::dot(glm::cross(a, b), v)};
 }
 
+// 0..1 from sideways (y) to straight toward or away from b (x), linear in the azimuth.
 float Toward(const Swing& s) {
     return 2.0f / kPi * std::atan2(std::abs(s.x), std::abs(s.y) + 1e-10f);
 }
 
+// Angle-to-quaternion table at 0x1BD9750: 0xAF3FC0 (x), 0xAF40E0 (y), 0xAF4200 (z).
 glm::quat AxisRotation(uint32_t axis, float angle) {
     const float s = std::sin(angle * 0.5f);
     const float c = std::cos(angle * 0.5f);
@@ -167,6 +176,7 @@ size_t HelpBones::UnknownEntries() const {
     }));
 }
 
+// 0xAE7420 for the entry types in P.T.'s files; checked against the original run natively (docs/formats/motion.md).
 void HelpBones::Evaluate(std::span<const glm::vec3> bind_local, std::span<glm::quat> rotation, std::span<glm::vec3> position) const {
     const size_t n = std::min({bind_local.size(), rotation.size(), position.size()});
     auto valid = [n](int16_t bone) { return bone >= 0 && static_cast<size_t>(bone) < n; };
@@ -183,6 +193,7 @@ void HelpBones::Evaluate(std::span<const glm::vec3> bind_local, std::span<glm::q
         glm::vec3 offset = bind_local[driven];
         glm::quat result = parent;
         auto slide = [&]() {
+            // one component of the bind offset becomes 0.1 x the limited slide of the swung axis toward b
             const float t = Limit(e.slide * glm::dot(e.b, q * e.a), e.slide_min, e.slide_max);
             if ((e.slide_axis & 3) < 3) {
                 offset[e.slide_axis & 3] = t * 0.1f;

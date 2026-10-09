@@ -11,19 +11,24 @@ namespace pt::game {
 
 namespace {
 
+// the HUD (subtitles, prompts, the menus): 1.4 m wide at 1.6 m (about 47 degrees), a little below the eyes, following the head's
+// yaw lazily (it stays put within 20 degrees of the view and eases back beyond)
 constexpr float kHudDistance = 1.6f;
 constexpr float kHudWidth = 1.4f;
 constexpr float kHudDrop = 0.08f;
 constexpr float kHudDeadZone = 0.349f;
+// the virtual screen: 2.8 m wide at 2.5 m (about 59 degrees), placed in front of the head when it appears
 constexpr float kScreenDistance = 2.5f;
 constexpr float kScreenWidth = 2.8f;
+// how far the tracked head may move away from the player's eye anchor (the player's body does not follow it), and how close
+// to a wall the eyes may come
 constexpr float kHeadReach = 0.5f;
 constexpr float kHeadRise = 0.4f;
 constexpr float kHeadDrop = 0.8f;
 constexpr float kWallMargin = 0.12f;
 constexpr float kNearPlane = 0.05f;
 
-}
+}  // namespace
 
 void VrPlay::BeginLoop(bool& running) {
     if (host_.FrameOpen()) {
@@ -65,6 +70,7 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
     const xr::ControllerState& c = host_.Controllers();
     const xr::ViewPose& head = host_.Head();
     if (waited_ && host_.ViewsValid() && !centered_) {
+        // the view starts along the game camera's yaw
         rig_.Recenter(head.position, head.orientation, game.GetCamera().yaw);
         centered_ = true;
         LogInfo("vr: centred on the head at ({:.3f} {:.3f} {:.3f}), world yaw {:.1f}", head.position.x, head.position.y, head.position.z,
@@ -75,6 +81,7 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         glm::vec2 move = c.move;
         if (glm::length(move) > 1.0f) move = glm::normalize(move);
         if (menu_open) {
+            // the menus: the left stick is the D-pad
             if (move.y > 0.6f) raw |= kRawUp;
             if (move.y < -0.6f) raw |= kRawDown;
             if (move.x > 0.6f) raw |= kRawRight;
@@ -90,6 +97,7 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         if (c.gouge) raw |= kRawSquare;
         if (c.triangle) raw |= kRawTriangle;
         if (!menu_open && screen) {
+            // the virtual screen keeps the game's own look (the peephole): the right stick as the pad's (y down)
             const glm::vec2 look(c.turn.x, -c.turn.y);
             if (glm::length(look) > glm::length(state.right_stick)) state.right_stick = look;
         } else if (!menu_open && centered_) {
@@ -106,6 +114,8 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         if (raw != 0 || glm::length(c.move) > 0.2f || glm::length(c.turn) > 0.2f) {
             state.from_gamepad = true;
         }
+        // the prompts name the controllers' buttons while they are there: Touch, Index and the others carry A, B, X and Y as an
+        // Xbox pad does
         state.prompts = PromptStyle{PromptDevice::Xbox, {'A', 'B', 'X', 'Y'}};
     }
     const uint32_t pressed = raw & ~raw_previous_;
@@ -119,12 +129,18 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         state.pressed |= kPadGouge;
     }
     if (pressed & kRawStart) state.pause = true;
+    // the PC settings page: an edge of its own, as the pad's View button (InputDevice::Poll)
     if (c.settings && !settings_previous_) state.pc_settings = true;
     settings_previous_ = c.settings;
     if (pressed) state.any_button = true;
+    // the head looks (Player::UpdateLook), in the stereo view while the look is the player's. When something else turned the
+    // player since the last look (a demo's hand-back, a scripted turn, an input script's facing), the world turns to match once,
+    // so the game's own turns keep their meaning; while the game holds the look the head looks around without it.
     Player& player = game.GetPlayer();
     const bool look_free = !(player.locks.Mask('B') & 2) && !game.Demos().ControlsPlayer();
     if (!screen && centered_ && host_.ViewsValid() && look_free) {
+        // the turns the game gave the player since the last frame (Player::UpdateLook keeps them on top of the head's yaw)
+        // become the world's: the view turns with them once
         if (const float turn = player.TakeVrTurn(); std::abs(turn) > 1.0e-5f) {
             rig_.Turn(turn, head.position);
             if (std::abs(turn) > 0.0175f && ++game_turns_ <= 20) {
@@ -135,6 +151,7 @@ void VrPlay::ApplyControls(Game& game, InputState& state, bool menu_open, bool s
         state.vr_look = true;
         state.vr_look_angles = glm::vec2(a.yaw, a.pitch);
     }
+    // the flashlight in the tracked hand (pt.ini [vr] flashlight 1), from the last frame's anchor
     std::optional<std::pair<glm::vec3, glm::vec3>> light;
     const int hand = std::clamp(settings_.flashlight_hand, 0, 1);
     if (settings_.flashlight == 1 && !screen && centered_ && eye_height_ >= 0.0f && c.aim[hand].valid) {
@@ -160,6 +177,8 @@ bool VrPlay::PrepareStereo(Game& game, const Camera& logic, float dt, bool menu_
     for (int i = 0; i < 2; ++i) {
         frusta_[i] = xr::FrustumFor(tangents[i], render_size_, tangents);
     }
+    // the eye anchor: the drawn camera's place above the feet at the eye's height, eased (no walking bob, no lean of the head
+    // bone; the tracked head moves the eyes instead)
     const Player& player = game.GetPlayer();
     const glm::vec3 feet = player.Feet();
     const glm::vec3 eye = player.Eye();

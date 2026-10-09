@@ -25,6 +25,7 @@ public:
     void PostDemoMessage(std::string_view demo_id, std::string_view message);
     void Dispatch();
     void Clear() { queue_.clear(); }
+    // posts not yet delivered (each waits for the next game frame's dispatch)
     bool Pending() const { return !queue_.empty(); }
 
     void RegisterStage(Stage& stage);

@@ -9,6 +9,7 @@
 namespace pt {
 namespace {
 
+// std430 record of a TLAS instance (instanceCustomIndex), read by rt_shadow.glsl for the alpha test of non-opaque hits
 struct RtRecord {
     uint64_t vertices = 0;
     uint64_t indices = 0;
@@ -52,6 +53,8 @@ void MemoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 src_stage, VkAcces
 bool RayTracing::Init(vk::Context& ctx, VkDescriptorSetLayout textures_layout, VkDescriptorSetLayout frame_layout) {
     ctx_ = &ctx;
     device_ = ctx.device;
+    // binding 2: the traced reflections' colour target (SetReflectionImage), read by reflect_blend_rt.frag; bindings 3 to 7: the
+    // ambient occlusion's storage images (SetAoImages)
     constexpr VkShaderStageFlags kStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutBinding bindings[3 + kAoImages]{};
     bindings[0] = {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, kStages, nullptr};
@@ -86,6 +89,8 @@ bool RayTracing::Init(vk::Context& ctx, VkDescriptorSetLayout textures_layout, V
             return false;
         }
     }
+    // sets 0 and 1 and the push constant range as the scene layout's, so the scene's bound sets stay valid (layouts compatible
+    // for set 1) when a pipeline of this layout is bound
     const VkDescriptorSetLayout sets[3] = {textures_layout, frame_layout, set_layout_};
     const VkPushConstantRange push{kPushStages, 0, 128};
     VkPipelineLayoutCreateInfo pipeline_layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -171,6 +176,7 @@ bool RayTracing::EnsureBuffer(Slot& slot, vk::Buffer& buffer, VkDeviceSize size,
         slot.retired.push_back(buffer);
         buffer = vk::Buffer{};
     }
+    // grow by half again, so a slowly growing need does not replace the buffer every frame
     return ctx_->CreateBuffer(buffer, std::max<VkDeviceSize>(size + size / 2, 4096), usage, host_visible);
 }
 
@@ -184,6 +190,7 @@ VkAccelerationStructureGeometryKHR RayTracing::Triangles(VkDeviceAddress vertice
                                                          VkDeviceAddress indices) const {
     VkAccelerationStructureGeometryKHR geometry{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
     geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    // opaque here; the instance flags make the alpha tested ones non-opaque
     geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
     VkAccelerationStructureGeometryTrianglesDataKHR& t = geometry.geometry.triangles;
     t.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
@@ -284,6 +291,7 @@ void RayTracing::RunJobs(VkCommandBuffer cmd, Slot& slot, std::vector<BuildJob>&
             ranges.push_back(&job.range);
         }
         vkCmdBuildAccelerationStructuresKHR(cmd, static_cast<uint32_t>(infos.size()), infos.data(), ranges.data());
+        // scratch reuse by the next batch, and the TLAS build reading these BLAS
         MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                       VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
@@ -347,6 +355,7 @@ void RayTracing::WriteSet(Slot& slot) {
 
 void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const RtCaster> casters) {
     Slot& slot = slots_[slot_index];
+    // the slot's previous frame has completed (its fence), so its skinned BLAS can go
     for (VkAccelerationStructureKHR as : slot.dynamic) {
         vkDestroyAccelerationStructureKHR(device_, as, nullptr);
     }
@@ -358,6 +367,7 @@ void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const
     stats_.built_this_frame = 0;
     BeginLabel(cmd, "ray tracing structures");
 
+    // BLAS of the static submeshes seen for the first time (built once, kept until the mesh goes)
     std::vector<BuildJob> jobs;
     std::vector<VkDeviceAddress> blas(casters.size(), 0);
     for (size_t i = 0; i < casters.size(); ++i) {
@@ -370,6 +380,8 @@ void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const
     }
     RunJobs(cmd, slot, jobs);
 
+    // skinned casters: their draw's vertices through the frame's skin matrices (as mesh.vert), once per draw, into
+    // slot.positions, then one BLAS per submesh built from them
     struct SkinGroup {
         const GpuMesh* mesh = nullptr;
         uint32_t skin_base = 0;
@@ -418,6 +430,7 @@ void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const
         }
         MemoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        // sizes first, then the BLAS in one storage buffer (256 byte offsets)
         struct Pending {
             size_t caster = 0;
             BuildJob job;
@@ -478,6 +491,7 @@ void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const
         }
     }
 
+    // TLAS of every caster with a BLAS; instanceCustomIndex = its record
     const uint32_t count = static_cast<uint32_t>(casters.size());
     if (count > slot.capacity || !slot.instances.buffer) {
         uint32_t capacity = 1024;
@@ -519,6 +533,7 @@ void RayTracing::Build(VkCommandBuffer cmd, uint32_t slot_index, std::span<const
         if (c.double_sided) {
             flags |= VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         }
+        // facing is decided in object space; a mirroring transform turns the winding the rasterizer sees
         if (glm::determinant(glm::mat3(c.transform)) < 0.0f) {
             flags |= VK_GEOMETRY_INSTANCE_TRIANGLE_FLIP_FACING_BIT_KHR;
         }

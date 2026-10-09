@@ -1,4 +1,8 @@
 #pragma once
+// The setup checks its own file against a corrupt or truncated download: tools/ci/stamp_integrity.py writes the SHA-256
+// of the file (with this digest's 32 bytes zeroed) after the marker below once the build is done; at run time the file is
+// read back, the digest taken out, the same hash recomputed and compared. A damaged setup (or one never stamped) refuses
+// to install.
 #ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
@@ -11,6 +15,7 @@
 #include <vector>
 
 namespace pt::integrity {
+// 16 marker bytes, then the 32 byte digest (zero until stamped)
 inline volatile unsigned char kIntegrity[48] = {0x7E, 0x50, 0x54, 0x2D, 0x49, 0x4E, 0x54, 0x45, 0x47, 0x52, 0x49, 0x54, 0x59, 0x2D, 0x76, 0x31};
 
 #ifdef _WIN32
@@ -25,6 +30,7 @@ inline bool Sha256(const unsigned char* data, size_t size, unsigned char out[32]
     return ok;
 }
 #else
+// SHA-256 (FIPS 180-4) for the platforms without BCrypt
 inline bool Sha256(const unsigned char* data, size_t size, unsigned char out[32]) {
     static const uint32_t k[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be,

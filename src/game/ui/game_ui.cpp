@@ -181,6 +181,7 @@ void GameUi::ShowSubtitle(std::string_view subtitle_id, float start_offset_secon
     queued_subtitles_.emplace_back(std::string(subtitle_id), start_offset_seconds);
 }
 
+// a loop transition drops the previous loop's speech: nothing of its subtitles or caption carries into the next loop
 void GameUi::ClearSubtitles() {
     subtitles_.Clear();
     queued_subtitles_.clear();
@@ -268,6 +269,7 @@ void GameUi::UpdateSubliminal(Game& game, float dt, bool paused) {
         std::uniform_real_distribution<float> unit(0.0f, 1.0f);
         const glm::vec2 position(unit(rng_), unit(rng_));
         subliminal_.Trigger(fx.subliminal_image, fx.subliminal_flag, fx.subliminal_no_string, position);
+        // the Archive's pictures (archive.h): the flash's noise, and its string unless the trigger has none
         game.NoteArchive("noise");
         if (!fx.subliminal_no_string) game.NoteArchive(std::format("sub:{}", fx.subliminal_image + 1));
         LogInfo("ui: subliminal image {} flag {} no string {} at ({:.2f} {:.2f})", fx.subliminal_image, fx.subliminal_flag, fx.subliminal_no_string,
@@ -320,6 +322,7 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
     }
     QueueMenuInput(menu_input);
     menu_input = std::exchange(queued_menu_input_, MenuInput{});
+    // the save request's dialog (0x9476D0 states 0xD to 0x14) takes the pad as the PS4's system dialog does; its button closes it
     save_dialog_text_.clear();
     if (const auto& dialog = game.PendingSaveDialog()) {
         if (dialog->key.starts_with("pc_")) {
@@ -336,6 +339,8 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
         }
         menu_input = MenuInput{};
     }
+    // the port's credits page (Game::StartPortCredits): a confirm or back press ends it, and no menu opens over it; the first half
+    // second leaves out a press that was meant for the ending
     port_credits_time_ = game.PortCreditsActive() && game.Controller().Step() == 33 ? game.PortCreditsTime() : -1.0f;
     if (port_credits_time_ >= 0.0f && !menu_.IsOpen()) {
         if (port_credits_time_ > 0.5f && (menu_input.accept || menu_input.back || menu_input.close || menu_input.click)) {
@@ -346,11 +351,14 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
     }
     const bool pc_request = std::exchange(pc_request_, false);
     if (menu_suspended_) {
+        // the theater runs: the menu waits under it (main.cpp)
     } else if (!menu_.IsOpen()) {
         if (game.Controller().OptionMenuOpen()) {
             OpenMenu(game, true);
         } else if (port_credits_time_ >= 0.0f) {
+            // the credits page runs out (or is skipped) before the street question opens
         } else if (game.StreetOfferPending()) {
+            // the end of the credits asks on the PC page (PcSettings street page)
             OpenMenu(game, false, OptionsMenu::Page::Pc);
         } else if ((menu_input.close || pc_request) && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
             OpenMenu(game, false, pc_request ? OptionsMenu::Page::Pc : OptionsMenu::Page::Original);
@@ -364,6 +372,7 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
         }
         menu_.Update(game, menu_input, dt);
         if (menu_.TakeResume()) {
+            // 0x9208C0: the close press unpauses the world at once (0x52ADF0), the setout plays over the running game
             if (menu_.FirstBoot() || game.Controller().OptionMenuOpen()) {
                 game.Controller().CloseOptionMenu();
             }
@@ -376,13 +385,18 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
             }
         }
         if (menu_.TakeClosed()) {
+            // 0x1285F80 state 3: Resume_All once the setout is done
             if (game.Audio()) {
                 game.Audio()->PostEvent("Resume_All", nullptr);
             }
             game.RequestOptionsSave();
         }
     }
+    // the save job's SaveUiDisp and LoadUiDisp start the icon (0x1284F40) three 30 Hz frames after the request: the job collects in
+    // the frame after it, writes (and posts SaveUiDisp) in the next, and the icon takes the message in the third; menu_detail_rb's
+    // icon follows the menu's close by that much more than the port's did. The UI runs while the world is paused.
     if (menu_suspended_) {
+        // the theater's own session loads no save of the player's: no save icon for it
         save_io_seen_ = game.SaveIoCount();
     }
     if (game.SaveIoCount() != save_io_seen_) {
@@ -478,6 +492,8 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
     ui::TextLayout layout = ui::LayoutText(view.text, text_style, generator.auto_line_feed ? hi.x - lo.x : 0.0f);
     const ui::TextAlign block = generator.b_align == 3 ? Align(generator.h_align) : Align(generator.b_align);
     ui::PlaceText(layout, lo, hi, block, Align(generator.h_align), Align(generator.v_align), true);
+    // under the PC letterbox the lines move up into the picture: their bottom (the glyph boxes, in the canvas' 1280x720) at least
+    // the subtitle box's own distance from the frame's bottom above the lower bar
     const glm::vec2 full = canvas.extent;
     if (const float bar = LetterboxBar(full, letterbox_); bar > 0.0f && canvas.scale > 0.0f) {
         float bottom = -1e30f;
@@ -493,8 +509,10 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
             }
         }
     }
+    // the subtitle nodes (0x854A30, EvSubtitlesNode and EvControlSubtitlesNode) draw their text with Draw2D_Border
     glm::vec4 subtitle_color = color * generator.color;
     ui::UiShade shade = ui::UiShade::Border;
+    // Strong subtitles draw above the ending's flat pale fade; white fill disappears into that background.
     const float backdrop_luminance = glm::dot(glm::vec3(fade_), glm::vec3(0.2126f, 0.7152f, 0.0722f));
     if (strong_subtitles_ && fade_.a > 0.95f && backdrop_luminance > 0.65f) {
         subtitle_color = glm::vec4(glm::vec3(0.08f), subtitle_color.a);
@@ -505,6 +523,8 @@ void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
 
 void GameUi::DrawSubliminal(ui::UiBatch& batch, bool string_pass) {
     const glm::vec2 extent(static_cast<float>(batch.Extent().width), static_cast<float>(batch.Extent().height));
+    // the original's full-screen passes span 0 to 1 across its 16:9 frame; a wider (or narrower) window shows more (or less) of the
+    // same texels beside it instead of stretching them
     const float across = extent.y > 0.0f ? (extent.x / extent.y) / (UiCanvas::kWidth / UiCanvas::kHeight) : 1.0f;
     const glm::vec2 uv0(0.5f - 0.5f * across, 0.0f);
     const glm::vec2 uv1(0.5f + 0.5f * across, 1.0f);
@@ -527,6 +547,7 @@ void GameUi::DrawSubliminal(ui::UiBatch& batch, bool string_pass) {
     const VkFormat scene_format = renderer_ ? renderer_->SceneColorFormat() : Renderer::kSceneColorFormat;
     const bool hdr_scene = scene_format == VK_FORMAT_R16G16B16A16_SFLOAT || scene_format == VK_FORMAT_R32G32B32A32_SFLOAT;
     params.extra2 = hdr_scene ? glm::vec4(renderer_ ? renderer_->exposure : 1.0f, 2.2f, 0.0f, 0.0f) : glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    // the noise's own textures widen as the string's; the scene under it is read at the pixel (ShadeNoise, extra2.z)
     params.extra2.z = across;
     batch.Quad(glm::vec2(0.0f), extent, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f), params, ui::UiShade::Noise, ui::UiBlend::Alpha);
 }
@@ -552,6 +573,7 @@ void GameUi::DrawLetterbox(ui::UiBatch& batch, glm::vec2 full, float aspect) {
 void GameUi::DrawSaveDialog(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full) {
     batch.Quad(glm::vec2(0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.75f),
                ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid, ui::UiBlend::Alpha);
+    // the subtitles' font and style: the system dialog of the PS4 has a font of its own that the game data does not hold
     UiFont* font = assets_.Font(UiFontType::Movie, language_);
     if (!font) {
         return;
@@ -564,6 +586,7 @@ void GameUi::DrawSaveDialog(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec
         style.text_space = s->text_space;
         style.line_space = s->line_space;
     }
+    // the subtitle font's style with the generator's spacing (DrawSubtitle)
     style.text_space += assets_.Generator().font_space;
     style.line_space += assets_.Generator().line_space;
     ui::NormalizeSubtitleStyle(style);
@@ -603,9 +626,11 @@ void GameUi::LeaveTheater(Game& game) {
     subtitles_.Clear();
     demo_ui_.Clear();
     SwapTracked();
+    // what the player's game did meanwhile is none of its own: it did not run
     save_io_seen_ = game.SaveIoCount();
 }
 
+// the theater's line: what plays at the top left, how to leave at the bottom, small and muted as the page's credit line
 void GameUi::DrawTheaterHint(ui::UiBatch& batch, const UiCanvas& canvas) {
     UiFont* font = assets_.Font(UiFontType::PcSystem, language_);
     if (!font) return;
@@ -622,6 +647,8 @@ void GameUi::DrawTheaterHint(ui::UiBatch& batch, const UiCanvas& canvas) {
     line(theater_hint_, {30.0f, UiCanvas::kHeight - 40.0f}, {UiCanvas::kWidth - 30.0f, UiCanvas::kHeight - 14.0f}, ui::TextAlign::Center);
 }
 
+// The port's credits page (port_credits.h): the ending's off-white fade over the whole screen and the current card in the
+// subtitle font, dark as the original's staff names, centred, faded and grown by the card's setin
 void GameUi::DrawPortCredits(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full) {
     const glm::vec4 paper(0.93f, 0.94f, 0.93f, 1.0f);
     batch.Quad(glm::vec2(0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), paper, ui::UiDrawParams::Plain(TextureManager::kWhite),
@@ -648,6 +675,7 @@ void GameUi::DrawPortCredits(ui::UiBatch& batch, const UiCanvas& canvas, glm::ve
     style.text_space += assets_.Generator().font_space;
     style.line_space += assets_.Generator().line_space;
     ui::NormalizeSubtitleStyle(style);
+    // the notices at about the teaser note's size at the card's start; the wrap width grows with the text, so the lines stay
     const float scale = 0.8f * card.size * view.scale;
     style.font_width *= scale;
     style.font_height *= scale;
@@ -660,6 +688,8 @@ void GameUi::DrawPortCredits(ui::UiBatch& batch, const UiCanvas& canvas, glm::ve
     DrawText(batch, canvas, *font, layout, glm::vec4(glm::vec3(0.08f), view.alpha), ui::UiBlend::Alpha, ui::UiShade::Text);
 }
 
+// The speedrun overlay (docs/gameplay.md, speedrun mode): the run's time in the picked clock, the current loop and its time,
+// and for 5 s after a split (and at the finish) the run against the record at that split
 void GameUi::UpdateSpeedrun(const Game& game) {
     const SpeedrunTimer& run = game.Speedrun();
     speedrun_view_ = SpeedrunView{};
@@ -707,6 +737,8 @@ void GameUi::DrawSpeedrun(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
         style.text_space *= k;
         return style;
     };
+    // tabular digits: each digit takes the width of a 0, so the time does not jitter as it counts (times only: ASCII, one glyph
+    // per character)
     auto tabular = [](std::string_view text, const ui::TextStyle& style) {
         ui::TextLayout layout = ui::LayoutText(text, style, 0.0f);
         const float pitch = ui::LayoutText("0", style, 0.0f).width;
@@ -728,11 +760,14 @@ void GameUi::DrawSpeedrun(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
         }
         return layout;
     };
+    // the picture's top left corner: inside the 16:9 canvas (on an ultrawide screen it stays with the rest of the UI) and
+    // below the PC letterbox's top bar
     const float bar = LetterboxBar(full, letterbox_);
     const float top = std::max(22.0f, (bar - canvas.origin.y) / canvas.scale + 12.0f);
     const float left = 34.0f;
     const glm::vec4 white(1.0f, 1.0f, 1.0f, speedrun_view_.alpha);
     float y = top;
+    // one line: an optional name, then a time; returns nothing, moves y down
     auto line = [&](const std::string& name, const std::string& time, float k, glm::vec4 color) {
         if (name.empty() && time.empty()) return;
         const ui::TextStyle style = scaled(k);
@@ -764,6 +799,10 @@ void GameUi::ShowUpdateNotice(std::string note) {
     update_notice_time_ = -1.0f;
 }
 
+// The notice's clock runs only in the game proper (controller step 15: not the boot, the first start's option screen and preface,
+// the game over, the ending and its credits), with no demo in charge of the camera (the kill, the openings), outside the Archive's
+// theater, under no full fade, and not while held (the photo mode draws in the UI's place, VR has no place for it); the pause
+// menu and the PC settings page over the game count as the game. Elsewhere it waits, and it is never lost.
 void GameUi::UpdateUpdateNotice(Game& game, float dt) {
     if (update_notice_.empty() || update_notice_time_ >= kUpdateNoticeLength) return;
     const bool allowed = game.Controller().Step() == 15 && !game.Demos().HasActiveCamera() && !menu_suspended_ && !update_notice_held_ &&
@@ -777,6 +816,9 @@ void GameUi::UpdateUpdateNotice(Game& game, float dt) {
     }
 }
 
+// one line in the PC system font, small and muted as the theater's line and the settings page's corner line, centred at the top
+// of the picture (the subtitles and the prompts are at the bottom, the speedrun timer at the top left), below the PC letterbox's
+// top bar; a quiet fade in and out, nothing else moves
 void GameUi::DrawUpdateNotice(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 full) {
     const float t = update_notice_time_;
     if (t < 0.0f || t >= kUpdateNoticeLength || canvas.scale <= 0.0f) return;
@@ -818,6 +860,8 @@ void GameUi::Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent) 
     };
     std::vector<Layer> layers;
     if (overlay_) {
+        // the peephole's hole (holl_002_alp, opaque black at its edges) covers the original's 16:9 frame: drawn over the canvas'
+        // 16:9 area, its round hole stays round in a wider or narrower window, and the frame around that area is black
         layers.push_back({kOverlayPriority, [&] {
                               const glm::vec2 lo = canvas.origin;
                               const glm::vec2 hi = canvas.origin + glm::vec2(UiCanvas::kWidth, UiCanvas::kHeight) * canvas.scale;
@@ -879,6 +923,8 @@ void GameUi::Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent) 
 
 namespace {
 
+// The photo mode's panel, in the PC settings page's units and nodes (pc_settings_page.cpp): its texts take the option screen's
+// font styles and colours, its header lines and selection bar are the screen's own meshes, all at kPhotoScale
 constexpr uint16_t kOptionContent = 39;
 constexpr uint16_t kOptionHeaderText = 41;
 constexpr uint16_t kOptionTipText = 48;
@@ -903,6 +949,7 @@ glm::vec2 VirtualPx(glm::vec2 units) {
     return {UiCanvas::kWidth * 0.5f + units.x * UiCanvas::kUnit, UiCanvas::kHeight * 0.5f - units.y * UiCanvas::kUnit};
 }
 
+// a node's own scale (a root's is 1)
 glm::vec2 OwnScale(const ui::UifNode& node) {
     return node.type == ui::UifNodeType::Root ? glm::vec2(1.0f) : glm::abs(node.scale);
 }
@@ -951,6 +998,7 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
     const glm::vec4 root_color = content->color;
     const float bottom = static_cast<float>(batch.Extent().height);
 
+    // the panel's ground: black from the screen's left edge, fading out to its right
     {
         const float solid = canvas.FromUnits({kPhotoPanelRight - kPhotoFade, 0.0f}).x;
         const float clear = canvas.FromUnits({kPhotoPanelRight, 0.0f}).x;
@@ -966,6 +1014,8 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
     }
 
     UiFont* font = assets_.Font(UiFontType::PcSystem, language);
+    // a line of a node's font style at the node's scale under the page root (times parent), placed in [x0, x1] at height y as the
+    // node's text box places it; shrunk to the width when it is wider
     auto text = [&](uint16_t id, glm::vec2 parent, std::string_view value, float x0, float x1, float y, ui::TextAlign h, glm::vec4 color,
                     bool mirror = false) {
         const ui::UifNode* node = model->FindById(id);
@@ -989,6 +1039,7 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
         ui::PlaceText(layout, a, b, h, h, NodeVerticalAlign(*node), mirror);
         DrawText(batch, canvas, *font, layout, color, node->Additive() ? ui::UiBlend::Additive : ui::UiBlend::Alpha);
     };
+    // a wrapped text in a box (units), shrunk until it fits, as the PC page's description
     auto box_text = [&](uint16_t id, std::string_view value, glm::vec2 lo, glm::vec2 hi, glm::vec4 color) {
         const ui::UifNode* node = model->FindById(id);
         if (!node || !font || value.empty()) return;
@@ -997,6 +1048,7 @@ void GameUi::DrawPhotoPanel(ui::UiBatch& batch, const UiCanvas& canvas, const Ph
         const ui::TextLayout layout = ui::LayoutTextInBox(value, text_style, VirtualPx({lo.x, hi.y}), VirtualPx({hi.x, lo.y}), true);
         DrawText(batch, canvas, *font, layout, color, ui::UiBlend::Alpha);
     };
+    // one of the screen's meshes at a point of the page (units), at its scale under the page root (times parent)
     auto mesh = [&](uint16_t id, glm::vec2 parent, glm::vec2 at, glm::vec4 color) {
         const ui::UifNode* node = model->FindById(id);
         if (!node || node->type != ui::UifNodeType::Mesh) return;
@@ -1079,6 +1131,7 @@ void GameUi::RecordPhotoMode(VkCommandBuffer cmd, VkExtent2D extent, const Photo
     canvas_ready_ = true;
     batch.SetScreenArea(canvas.origin, UiCanvas::kHeight * canvas.scale);
     const glm::vec2 full(static_cast<float>(extent.width), static_cast<float>(extent.height));
+    // the letterbox: black bars over and under the frame (they are part of the photo)
     const glm::vec2 lo(view.crop.x*full.x,view.crop.y*full.y);
     const glm::vec2 hi((view.crop.x+view.crop.width)*full.x,(view.crop.y+view.crop.height)*full.y);
     const auto black=ui::UiDrawParams::Plain(TextureManager::kWhite);

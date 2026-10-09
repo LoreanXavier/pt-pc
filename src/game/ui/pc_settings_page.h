@@ -39,15 +39,20 @@ public:
     bool QuitAt(glm::vec2 units) const;
     bool IsLoopBrowser() const { return source_ && source_->IsLoopBrowser(); }
     bool Browser() const;
+    // the Museum's pages (museum_layout.h): the cursor moves over the grid or the strip, the pointer hits their frames
     PcGallery Gallery() const;
+    // the screen's width in canvas pixels, for the wall's strip (OptionsMenu::Draw)
     void SetWallWidth(float canvas_px) { wall_width_ = canvas_px; }
     int WallVisible() const;
+    // the rows (the exhibits) in page order: the first shown, one by index, its panel; the first rows that are links are the
+    // gallery's cells, the rest (an action row) text under them
     int First() const { return first_; }
     int CellCount() const;
     const PcSettingRow* RowAtIndex(int index) const;
     PcPanel PanelOf(int index) const;
     bool Confirming() const { return confirming_; }
     std::string PreviewFile() const { const auto* row = CurrentRow(); return row && source_ ? source_->PreviewFile(row->id) : std::string(); }
+    // the panel right of a browser page's rows, for the current row
     PcPanel Panel() const { const auto* row = CurrentRow(); return row && source_ ? source_->Panel(row->id) : PcPanel{}; }
     bool FullScreen() const { return source_ && source_->FullScreen(); }
     std::string_view FullScreenHint() const { return source_ ? source_->FullScreenHint() : std::string_view(); }
@@ -60,6 +65,7 @@ public:
     int RowCount() const { return static_cast<int>(rows_.size()); }
     const PcSettingRow* CurrentRow() const;
     const PcSettingRow* FindRow(std::string_view label) const;
+    // the value the row shows: a greyed value the cursor stepped onto (PcSettingRow::value_notes), else the row's value
     int ShownValue(const PcSettingRow& row) const { return row.id == preview_id_ ? preview_value_ : row.value; }
     std::string_view ShownNote(const PcSettingRow& row) const;
     bool ValueLess(const PcSettingRow& row) const;
@@ -102,6 +108,7 @@ private:
     std::vector<glm::vec2> headers_;
     float row_step_ = 3.0f;
     int cursor_ = 0;
+    // the first row a browser page shows (Scroll)
     int first_ = 0;
     bool confirming_ = false;
     int preview_id_ = -1;

@@ -89,6 +89,7 @@ bool ParseUpscaler(const std::string& text, UpscalerKind& out) {
         out = UpscalerKind::Dlss;
         return true;
     }
+    // pt.ini of the builds before the FSR 3 / FSR 4 split
     if (key == "fsr" || key == "fsr31") {
         out = UpscalerKind::Fsr;
         return true;
@@ -328,6 +329,10 @@ void UpscaleHost::DeviceSetup(VkInstance instance, VkPhysicalDevice physical, st
             LogInfo("upscale: device extension {} (XeSS) unavailable", name);
         }
     }
+    // Streamline's device proxy adds VK_NV_low_latency2 (sl.reflex) without VK_KHR_present_id, which the extension requires,
+    // and creates private data slots without the privateData feature (both flagged by the validation layer): the port adds them
+    // (with a window: VK_KHR_present_id needs VK_KHR_swapchain, and a headless instance has no surface extension for it; the
+    // headless test starts with PT_STREAMLINE=1 keep the one validation message about VK_NV_low_latency2)
     /* Streamline's device proxy enables VK_NV_low_latency2 without the VK_KHR_present_id it depends on; adding it here keeps the validation layer quiet. */
     const bool windowed = std::any_of(extensions.begin(), extensions.end(),
                                       [](const char* e) { return std::strcmp(e, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0; });
@@ -529,6 +534,11 @@ bool FsrFrameGenHardware(VkPhysicalDevice physical, const VkPhysicalDeviceProper
 void UpscaleHost::CheckDlssFrameGen() {
     dlss_fg_ = {};
     dlss_fg_.checked = true;
+    // the hardware first, so a GPU that could never run it says so whatever the build. NGX's requirement query answers for
+    // the FrameGeneration feature on D3D; on Vulkan (driver 617.14) it returns NotImplemented (0xBAD00012), and then the PCI
+    // device ID decides: NVIDIA numbers its chips by generation, and every Turing and Ampere part (TU1xx 0x1E00 to 0x21FF,
+    // GA10x 0x2200 to 0x25FF; GA100 and GH100 too) is below Ada's 0x2600 (AD10x from 0x2680, GB20x from 0x2B80). DLSS
+    // Frame Generation needs Ada or later. Streamline's own support check runs at the start that loads it (streamline.cpp).
     uint32_t unsupported = 0;
     std::string detail;
     const bool queried = ctx_->properties.vendorID == 0x10DE && DlssFrameGenRequirements(ctx_->instance, ctx_->physical, unsupported, detail);
@@ -538,6 +548,8 @@ void UpscaleHost::CheckDlssFrameGen() {
         detail = std::format("{}; PCI device {:#06x}, {} Ada (0x2600)", detail, ctx_->properties.deviceID,
                              ctx_->properties.deviceID < kFirstAda ? "before" : "from");
     }
+    // developer test override (never set by the game): the GPU and driver checks are skipped, for test runs with a third-party
+    // DLSS Frame Generation unlock on RTX 20/30 GPUs in a test folder (upscaling.md); Streamline's own check still decides
     if (std::getenv("PT_DLSSG_ALLOW_UNSUPPORTED") && ctx_->properties.vendorID == 0x10DE && (unsupported & 6u)) {
         LogWarn("frame generation: PT_DLSSG_ALLOW_UNSUPPORTED set, skipping DLSS-G GPU and driver checks");
         unsupported &= ~6u;
@@ -558,13 +570,13 @@ void UpscaleHost::CheckDlssFrameGen() {
     if (ctx_->properties.vendorID != 0x10DE) {
         dlss_fg_.reason = "needs an NVIDIA GeForce RTX 40 series or newer GPU";
         dlss_fg_.note = "pc_note_dlssg_gpu";
-    } else if (unsupported & 4u) {
+    } else if (unsupported & 4u) {  // NVSDK_NGX_FeatureSupportResult_AdapterUnsupported
         dlss_fg_.reason = std::format("needs an NVIDIA GeForce RTX 40 series or newer GPU ({})", detail);
         dlss_fg_.note = "pc_note_dlssg_gpu";
-    } else if (unsupported & 2u) {
+    } else if (unsupported & 2u) {  // DriverVersionUnsupported
         dlss_fg_.reason = std::format("needs a newer NVIDIA driver ({})", detail);
         dlss_fg_.note = "pc_note_dlssg_driver";
-    } else if (unsupported != 0) {
+    } else if (unsupported != 0) {  // OS version, check not present, not implemented
         dlss_fg_.reason = std::format("not supported on this system ({})", detail);
         dlss_fg_.note = "pc_note_dlssg_driver";
     } else {
@@ -585,6 +597,7 @@ void UpscaleHost::CheckDlssFrameGen() {
             dlss_fg_.reason = "could not start and was turned off";
             dlss_fg_.note = "pc_note_dlssg_failed";
         } else if (streamline::Active() && !streamline::FrameGenSupported(&streamline_reason)) {
+            // Streamline's own check (slIsFeatureSupported) has the last word in the start that loaded it
             dlss_fg_.reason = std::format("Streamline: {}", streamline_reason);
             dlss_fg_.note = streamline_reason.find("scheduling") != std::string::npos ? "pc_note_dlssg_hags"
                             : streamline_reason.find("driver") != std::string::npos   ? "pc_note_dlssg_driver"
@@ -711,7 +724,13 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
         }
         if (!backends_[i]) {
             probed_[i] = true;
+#ifdef _WIN32
             reasons_[i] = "not built into this executable";
+#else
+            // the SDKs ship Windows DLLs, so the Linux and macOS builds leave DLSS, FSR and XeSS out (docs/linux.md); players read the
+            // bare "not built into this executable" as a broken install
+            reasons_[i] = "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
+#endif
             LogInfo("upscale: {} unavailable: {}", UpscalerName(kind), reasons_[i]);
         }
     }

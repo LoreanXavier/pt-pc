@@ -13,7 +13,11 @@ struct FxObject;
 constexpr uint32_t kOutputRate = 48000;
 
 float DbToGain(float db);
+// the eboot's dB to gain where it is confirmed (voice volume, output bus volume, bus volume, the limiter's gain): 10^x from a scaled
+// integer and a cubic, 0.999039 at 0 and within 0.02 dB of the exact value elsewhere
 float FastPow10(float x);
+// the eboot's gain to dB (limiter, volume transitions, dB curves): 20 log10 from the exponent and a short series in the mantissa,
+// up to 0.024 dB low
 float FastGainToDb(float gain);
 float GainToDb(float gain);
 float LpfToCutoffHz(float lpf);
@@ -78,6 +82,7 @@ public:
     virtual bool MonoInput() const { return false; }
     virtual bool FrontInput() const { return false; }
     virtual bool SumInput() const { return false; }
+    // per-sample peaks the next Process detects instead of its own input (the master limiter's 7.1 side chain)
     virtual void SetDetector(const float*) {}
 };
 

@@ -34,6 +34,7 @@ int main() {
     for (int i = 0; i < 240; ++i) player.Update(1.0f / 60, input, world, context);
     check("held keyboard look stays inside aperture", bounded());
     {
+        // the render's turn between ticks (Game::PeepholeTurn) takes the same aperture as the tick
         float turned_yaw = center + 1.0f;
         float turned_pitch = -1.0f;
         player.ClampPeepholeLook(turned_yaw, turned_pitch);

@@ -49,6 +49,7 @@ struct GaniMotion {
     std::vector<GaniEvent> events;
 
     bool RigDriven() const { return (rig_word & 1) != 0; }
+    // 0xAAB220 (loop mode 0): the loop bit of the first unit decides whether the clip wraps or holds its last frame (0xAA7580)
     bool Loops() const { return !units.empty() && units.front().Loop(); }
     double Seconds() const { return frames / kMotionFramesPerSecond; }
     const GaniUnit* FindUnit(uint32_t hash) const;

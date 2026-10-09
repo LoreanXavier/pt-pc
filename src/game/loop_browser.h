@@ -2,6 +2,9 @@
 #include <array>
 #include <string_view>
 namespace pt::game {
+// One entry of the loop browser (gameplay.md, loop browser). `floor` and `pass` are what the entry starts: a hallway loop is entered
+// from the start room on `previous` (the floor a save made at the loop's start holds), "ending" plays the ending demo and its credits,
+// "street" starts the street walk after the ending. `label` is the menu text key (pc_settings.cpp and the language tables).
 struct BrowseLoop {
     std::string_view floor, previous, label;
     int pass = 1;
@@ -28,6 +31,7 @@ inline constexpr std::array<BrowseLoop, 18> kBrowseLoops{{
 }};
 inline constexpr int kBrowseEnding = 16;
 inline constexpr int kBrowseStreet = 17;
+// the entry of a floor and pass reached in play (-1: none)
 inline constexpr int BrowseIndexOf(std::string_view floor, int pass) {
     if (floor == "f050") return pass >= 2 ? 8 : 7;
     for (int i = 0; i < static_cast<int>(kBrowseLoops.size()); ++i) {

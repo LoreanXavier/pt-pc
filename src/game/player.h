@@ -52,11 +52,17 @@ public:
     static constexpr float kFilmHeightMm = 13.5f;
     /* 0x98726E: the walk ends on the second frame after the stick drops under 0.1, which the stop timing in the captures confirms. */
     static constexpr float kStandDebounce = 0.06673333f;
+    // 0x97B010 clamps the look pitch to the camera component's +0x1F8/+0x1FC, which 0x981130 (vfunc +0xD8) takes from +0x28/+0x2C
+    // of the parameter block 0x127D580 builds at 0x1C97840 (0x127D1A0 writes -1.2217305 and 0.9599311 there): the original's pitch
+    // is positive down, so the view goes 70 degrees up and 55 degrees down (ceillamp_f100 holds -55.00 from 3380 to 3500 while
+    // its look target lies 56.7 degrees down). The port's pitch is positive up.
     static constexpr float kPitchUp = 1.2217305f;
     static constexpr float kPitchDown = 0.9599311f;
     static float ClampPitch(float value) { return value < -kPitchDown ? -kPitchDown : value > kPitchUp ? kPitchUp : value; }
+    // the peephole theater's look aperture (UpdateLook), for a view the render turns between ticks; no change outside the theater
     void ClampPeepholeLook(float& yaw_value, float& pitch_value) const;
 
+    // 0x963570: radius 0.4 (CharacterShape); only the sliding variant (PT_CONTROLLER_SLIDE=1) keeps its 0.3
     Player() {
         if (!OriginalController()) {
             controller.shape.radius = 0.3f;
@@ -68,31 +74,52 @@ public:
     Camera MakeCamera() const;
 
     glm::vec3 Feet() const { return controller.position; }
+    // 0xB010B0: the trap object sits at the controller sphere center
     glm::vec3 TrapPoint() const { return controller.position + glm::vec3(0.0f, controller.shape.center_height, 0.0f); }
+    // the tick that completes a 29.97 fps frame (0xB010B0 tests traps once per frame, after the move)
     bool FrameEnds() const { return frame_time_ + frame_step_ >= 1.0 - 1e-4; }
     glm::vec3 Eye() const { return eye_; }
+    // plr0_main0_def in the world: the body position (feet) turned by the body yaw, the frame of Head() and of BodySkin()
     glm::mat4 BodyTransform() const;
+    // the drawn pose of the third person view when it is on (SetDrawPose), else the logic's
     bool BodySkin(const anim::HelpBones* help, std::vector<glm::mat4>& skin, bool light_arm = false, const anim::SimRig* sim = nullptr,
                   const PlayerBody::HandReach* reach = nullptr) {
         if (draw_pose_) {
+            // the drawn transform, half a step behind the logic on a frame's last tick: the jacket's simulation followed the
+            // logic's 30 Hz steps and its hem shook while walking
             const glm::mat4 world = PoseTransform();
             return drawn_body_.Skin(help, skin, light_arm, sim, &world, reach);
         }
         const glm::mat4 world = BodyTransform();
         return body_.Skin(help, skin, light_arm, sim, &world, reach);
     }
+    // a bone of the last BodySkin in model space (PoseTransform places it in the world)
     bool BoneModel(const char* name, glm::mat4& out) const { return draw_pose_ ? drawn_body_.BoneModel(name, out) : body_.BoneModel(name, out); }
+    // The third person view's own drawn body (Game::SetThirdPerson; not in the original, gameplay.md 10.6). It plays the logic's
+    // clips as they change, but a stop clip to its end (the logic plays one frame of it) and walks out that clip's travel, which it
+    // gives back while the player walks again, and while the player stands it keeps its feet planted on the floor as the body turns
+    // over them and steps when they are turned too far (PlayerBody::FootPlant). The logic's body (the eye, the published state,
+    // the footsteps) is not touched; with the view off nothing of it runs
     void SetDrawPose(bool on) {
         draw_sync_ = draw_sync_ || (on && !draw_pose_);
         draw_pose_ = on;
     }
     bool DrawPose() const { return draw_pose_; }
+    // where the body is drawn: DrawnBodyTransform, moved by the drawn body's offset while SetDrawPose is on
     glm::mat4 PoseTransform() const {
         return draw_pose_ ? glm::translate(glm::mat4(1.0f), draw_offset_) * DrawnBodyTransform() : DrawnBodyTransform();
     }
+    // the drawn pose's state for the logs (PT_THIRD_TRACE)
     std::string DescribeDrawPose() const;
+    // 0x1282C50: the offset of the handy light's look target ray (x right, y down; RenderSceneBuilder::HandyTarget): the right
+    // stick with the invert options (zero while the look is locked), half the left stick's x (zero while the left stick is
+    // locked) and 0.25 per held digital look button, each axis clamped to [-1, 1]
     glm::vec2 LightStick() const { return light_stick_; }
+    // input script `slightstick x y` (compare_ref's replays feed the capture's pad log; the look does not turn)
+    // VR (docs/vr.md): the turns the game gave the player since the VR view last took them; the view turns its world by them
     float TakeVrTurn() { return std::exchange(vr_turn_, 0.0f); }
+    // an input script's look pitch (its facings): in VR it stands in for the head's pitch in the logic camera from then on, as
+    // the script stands in for the player's head (tests only; the eyes keep the headset's view)
     void SetScriptPitch(float value) {
         pitch = target_pitch = ClampPitch(value);
         vr_script_pitch_ = pitch;
@@ -105,21 +132,33 @@ public:
     }
     glm::vec3 LookDirection() const;
     glm::vec3 CameraForward() const;
+    // 0x9406C0 publishes the camera yaw
     glm::vec3 BodyForward() const { return CameraForward(); }
     float FoxYaw() const { return CameraFoxYaw(); }
     float CameraFoxYaw() const;
+    // the character's yaw, which follows the camera yaw (UpdateBody); 0x9406C0 builds the published rotation (+0x40) from it
     float BodyFoxYaw() const { return body_yaw_; }
+    // the body yaw as the player service's double buffer (0x91E900) hands it to readers such as the trap check PlayerInputDir
+    // (0x915850, vfunc +0x28 = 0x91F810, rotation +0x40): the value published at the end of the previous original frame
     float PublishedBodyFoxYaw() const { return published_read_.body_yaw; }
+    // the position (feet) in the same read buffer: ShPlayer_PublishState (0x9406C0) writes position and rotation once per
+    // original frame into the player service's write buffer, and the readers (traps, Lisa's sense step 0x1287F80) get the
+    // read buffer, which the swap (0x91EB10) turns over at the next frame: the previous frame's values in either order
     glm::vec3 PublishedFeet() const { return published_read_.feet; }
+    // the camera pitch (+0x50; the port's pitch, positive up) in the same read buffer: the Freezer's look-up test reads it
     float PublishedPitch() const { return published_read_.pitch; }
 
+    // the zoom-out branch of 0x983B20 ran this tick (the zoom was released or the player walks), where the original
+    // calls the nazo service's AbortPeephole (0x984A62)
     bool ZoomFalling() const { return zoom_falling_; }
+    // flags 4 (STAND) and 5 (WALK) as 0x9406C0 publishes them: the read buffer, the previous frame's state
     bool Standing() const { return published_read_.standing; }
     bool Walking() const { return !published_read_.standing; }
     float StickMagnitude() const { return stick_magnitude_; }
     float StickHeading() const { return stick_heading_; }
     uint32_t HeldButtons() const { return held_ & ~locks.Mask('A'); }
     uint32_t PressedButtons() const { return pressed_ & ~locks.Mask('A'); }
+    // pad+0x50 is read once per 29.97 fps frame: the presses of both ticks
     uint32_t FramePressedButtons() const { return frame_pressed_ & ~locks.Mask('A'); }
     bool LeftStickLocked() const { return (locks.Mask('B') & 1) != 0; }
 
@@ -137,6 +176,7 @@ public:
     float target_yaw = 0.0f;
     float target_pitch = 0.0f;
     float zoom = 1.0f;
+    // pt.ini [camera] roll: 1 takes the original's share of the head roll, 0 keeps the camera level
     float camera_roll = 1.0f;
     bool zooming = false;
     bool visible = true;
@@ -156,6 +196,7 @@ private:
     float SpeedRate(float heading_delta, float magnitude, bool blur) const;
     glm::vec3 BodyToWorld(const glm::vec3& local) const;
 public:
+    // the drawn camera and body: the logic's, moved by the half step the drawing trails on a frame's last tick
     glm::vec3 DrawnOffset() const { return drawn_offset_; }
     glm::mat4 DrawnBodyTransform() const;
 private:
@@ -170,7 +211,10 @@ private:
     PlayerBody::Kind follow_kind_ = PlayerBody::Kind::Node;
     int follow_clip_ = 0;
     int stop_clip_ = 0;
+    // in the world, x and z
     glm::vec3 draw_offset_{0.0f};
+    // each foot (left, right): free (the clip's), locked on the floor where it was put down (world position and the body yaw
+    // then) or stepping from where it was to the clip's place
     enum class Foot : uint8_t { Free, Locked, Stepping };
     struct FootState {
         Foot state = Foot::Free;
@@ -206,6 +250,7 @@ private:
     bool peephole_look_active_ = false;
     float peephole_yaw_ = 0.0f;
     glm::vec2 light_stick_{0.0f};
+    // the view's turns by mouse and keyboard look in the last four ticks (to the right, up, the tick's dt; UpdateLook)
     std::array<glm::vec4, 4> pc_turns_{};
     size_t pc_turn_next_ = 0;
     std::optional<glm::vec2> light_stick_override_;
@@ -221,6 +266,8 @@ private:
     double frame_time_ = 1.0;
     double frame_step_ = 0.5;
     bool frame_start_ = false;
+    // the frame's displacement, moved once at its end (0xB001E0 runs once per 29.97 fps frame), and the drawn body position,
+    // half a step behind on the frame's last tick so the 60 Hz image moves every tick (render only)
     glm::vec3 frame_offset_{0.0f};
     float frame_dt_ = 0.0f;
     bool frame_gravity_ = false;

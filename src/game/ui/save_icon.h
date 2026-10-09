@@ -12,12 +12,17 @@ namespace pt::game {
 
 class UiAssets;
 
+// The save and load icon (UI_sys_loading.uilb: UI_sys_loadicon.uif, three circles low on the right), the component 0x1284B50 the
+// UI common data keeps at +0x80. The save job posts SaveUiDisp or LoadUiDisp when it starts writing or reading (Start, 0x1284F40):
+// setin and the loop play; once the job reports the write or read done and the icon has shown for 2 s, setout plays (0x1285030), and
+// the icon hides when it ends. Its layout is drawn at STRONG_PAUSE_ICON, priority 209.
 class SaveIcon {
 public:
     static constexpr int kPriority = 209;
 
     bool Init(UiAssets& assets);
     void Start(bool loading);
+    // one 30 Hz game frame of the icon; the port's saves and loads are done when they start
     void Update(float dt);
     void Draw(ui::UiBatch& batch, const UiCanvas& canvas);
     bool Visible() const { return state_ != State::Hidden; }

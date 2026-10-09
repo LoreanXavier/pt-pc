@@ -1,13 +1,19 @@
 #version 460
 #include "common.glsl"
 
+// The local reflections' temporal accumulation (rendering.md 12.16, a PC addition, only with a temporal upscaler): the
+// reflection layer of reflect_layer.frag (premultiplied colour, amount; amount -1 off the floors) accumulated over the frames
+// along the reflected image's own motion, then mixed into the scene as the original's blend mixes it. The upscaler reprojects
+// the floor with the floor's motion, which the reflected image does not share, so it would show the raw jittered reflection.
+
 #define IMG_REFLECT_LAYER 50
 #define IMG_REFLECT_OFFSET 51
 
 layout(push_constant) uniform PassPush {
-    uvec4 ids;
+    uvec4 ids;   // view, history valid, history image slot
     vec4 f0;
-    vec4 f1;
+    vec4 f1;     // exposure now / exposure of the history, history weight, neighbourhood clip width (standard deviations),
+                 // 1 when upscale_resolve.frag mixes the accumulated reflection in after the upscaler (the scene stays without it)
     vec4 f2;
     mat4 m;
 } pass;
@@ -20,6 +26,7 @@ void main() {
     View v = frame.views[pass.ids.x];
     ivec2 size = ivec2(v.viewport.xy);
     ivec2 pixel = ivec2(gl_FragCoord.xy);
+    // the scene as reflect_blend.frag reads it
     vec4 base = ImgLod(IMG_HDR_COPY, SMP_LINEAR_WRAP, (gl_FragCoord.xy - 0.00390625) * v.viewport.zw, 0.0);
     vec4 current = ImgFetch(IMG_REFLECT_LAYER, pixel);
     if (current.a < 0.0) {
@@ -28,6 +35,8 @@ void main() {
         return;
     }
 
+    // the floor neighbourhood of this frame's layer, and the offset of its strongest reflection (a floor pixel the march missed
+    // this frame takes its history where its neighbours' reflection came from)
     vec4 lo = current;
     vec4 hi = current;
     vec4 sum = vec4(0.0);
@@ -71,6 +80,7 @@ void main() {
                 continue;
             }
             vec4 h = ImgFetch(pass.ids.z, p);
+            // history off the floors (amount -1) is not this reflection's
             if (h.a < 0.0) {
                 continue;
             }
@@ -89,5 +99,6 @@ void main() {
     }
     result = max(result, vec4(0.0));
     out_history = result;
+    // the original's mix (reflect_blend.frag) with the accumulated reflection: mix(min(base, 1), min(hit, 1), amount)
     out_color = result.a > 0.0 && pass.f1.w < 0.5 ? vec4(min(base.rgb, vec3(1.0)) * (1.0 - result.a) + result.rgb, base.a) : base;
 }

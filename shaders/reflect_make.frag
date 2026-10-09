@@ -56,6 +56,15 @@ void main() {
     float inv_z = 1.0 / P.z;
     float inv_z_step = (1.0 / P2.z - inv_z) * scale;
 
+    // PC addition (12.16), only with the reflection accumulation of a temporal upscaler (f2.z): the coarse march starts at a
+    // per pixel, per frame fraction of its 25 step stride (interleaved gradient noise, frame offset in f2.w), so a thin edge
+    // (a frame, a door jamb) that the fixed samples catch on some pixels and step over on their neighbours is found at its
+    // average over the frames instead of a length that snaps by a stride as the view moves; without it the march is the original's.
+    // The first sample stays at s = 1 (1.25 pixels) as in the original: shifting it too stepped over the baseboard right above the
+    // floor's edge, whose hit the original finds in the first interval, and ended those marches as "behind at the first sample";
+    // the holes, a per pixel noise pattern along every floor-baseboard crease, put hit and no hit texels next to each other, and
+    // the blend's bilinear map lookup between them took colours from far up the screen (thin bright dashes along the crease under
+    // an upscaler, the user's white lines near the first hallway sconce)
     float offset = 0.0;
     if (pass.f2.z > 0.5) {
         vec2 noise_pixel = gl_FragCoord.xy + 5.588238 * pass.f2.w;

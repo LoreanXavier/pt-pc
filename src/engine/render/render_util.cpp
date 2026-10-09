@@ -42,6 +42,7 @@ void UseTargets(VkCommandBuffer cmd, std::initializer_list<TargetUse> uses) {
 }
 
 void BeginLabel(VkCommandBuffer cmd, const char* name) {
+    // the labels are string literals, so the pointer lasts: a lost device reports the last ones the GPU reached
     if (g_checkpoints && vkCmdSetCheckpointNV) {
         vkCmdSetCheckpointNV(cmd, name);
     }
@@ -193,6 +194,7 @@ VkPipeline CreateGraphicsPipeline(VkDevice device, const PipelineDesc& desc) {
             b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             break;
         case BlendMode::ProbeAccumulate:
+            // SSLighting2_SH_MultiBlend's state: colour src + dst src.a, alpha dst.a src.a (the remaining transmittance)
             b.blendEnable = VK_TRUE;
             b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
             b.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;

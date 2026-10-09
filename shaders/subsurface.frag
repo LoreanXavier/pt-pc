@@ -1,6 +1,15 @@
 #version 460
 #include "common.glsl"
 
+// The SUBSURFACE_SCATTER plugin (GrPluginSubSurfaceScatter, execute 0xDDBEA0) and its pixel shader SubSurfaceScattering
+// (GrSystemShaders, hash f7436336fcf5793e). The plugin copies the diffuse light buffer (CopyBuffer), blurs the copy
+// horizontally into a temporary target (m_localParam[0].x = 0), then blurs that vertically back into the light buffer
+// and mixes it with the copy by the view angle (m_localParam[0].x = 1). Only pixels whose material index (G-buffer target 2.z,
+// the shader's inSkinMaskBuffer) is 10 change. m_localParam[1] = (1 / tan(aspect fovy / 2), 1 / tan(fovy / 2), width, height)
+// (0xDDBEA0, register 0xA5). pass.ids: x view, y mode (1 horizontal, 2 vertical and mix). The copy is a transfer
+// (SubsurfacePass::Record); set 2 binding 0 is inLightBufferOriginal (the copy), binding 1 inLightBuffer (the copy in the
+// first pass, the temporary target in the second).
+
 layout(push_constant) uniform PassPush {
     uvec4 ids;
     vec4 f0;
@@ -42,6 +51,8 @@ void main() {
     vec3 p = ViewPosition(v, PixelNdc(v, gl_FragCoord.xy), depth);
     float z = p.z;
     vec3 eye = -normalize(p);
+    // kernel width: sqrt(0.000121 / (|V.z|^3 (|P|^2 + 1))) times the cosine between the normal and the view vector projected on the
+    // blur's plane (xz for the horizontal pass, yz for the vertical one) times m_localParam[1].x or .y
     float base = sqrt(max(0.0, 0.000121 / (abs(eye.z) * eye.z * eye.z * (dot(p, p) + 1.0))));
     float cosine;
     float focal;
@@ -74,6 +85,7 @@ void main() {
         out_color = vec4(blurred, 1.0);
         return;
     }
+    // the second pass mixes with the light before the blur by 1 - k (2 + 1 / N.V), k = 0.15, 0.18, 0.2
     vec3 original = texture(sss_original, uv).rgb;
     float t = 2.0 + 1.0 / dot(n, eye);
     vec3 mixw = clamp(1.0 - t * vec3(0.15, 0.18, 0.2), 0.0, 1.0);

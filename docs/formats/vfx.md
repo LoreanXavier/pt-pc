@@ -1,33 +1,33 @@
 # VFX (.vfx effect graphs, .vfxlf lens flares)
 
-A Fox `.vfx` file is a compiled node graph: shapes (particles, lights, screen sprites) fed by emitter, life, vector and
-material nodes, plus program effects (lens flare, sound). P.T. ships 87 unique effect files (111 copies across packages)
-under `/Assets/sh/effect/vfx_data/` and lens flare descriptions under `/Assets/sh/effect/vfx_data/lensflare/*.vfxlf`.
+A Fox `.vfx` file is a compiled node graph: shapes (particles, lights, screen sprites) fed by emitter, life, vector and material nodes, plus program effects (lens flare, sound). P.T. ships 87 unique effect files (111 copies across packages) under `/Assets/sh/effect/vfx_data/` and lens flare descriptions under `/Assets/sh/effect/vfx_data/lensflare/*.vfxlf`.
 
-`tools/vfx.py dump <files or folders> [--text] [--out dir] [--pathids pathid_list_ps4.bin]` prints a file as JSON or
-as an indented graph, `summary` lists node classes and the files that use them, `schema` prints the class table.
+Tools and code:
 
-Marks: confirmed (read in the game's code or shader code), likely (fits code and data), guess.
+- `tools/vfx.py dump <files or dirs> [--text] [--out dir]` prints a file as JSON or as an indented graph, `summary` lists node classes and the files that use them, `schema` prints the class table. PathCode values are resolved through `pathid_list_ps4.bin`.
+- `src/engine/vfx/vfx_file.*` parser, `vfx_schema.*` class table, `vfx_effect.*` compiler, `vfx_system.*` runtime, `vfx_lensflare.*` `.vfxlf` loader; `src/engine/render/vfx_pass.*` and `shaders/vfx_particle.*` draw; `src/game/vfx_scene.*` places the effects (rendering.md section 13).
+
+Confidence marks: confirmed (read in the eboot or shader code), likely (fits code and data), guess.
 
 ## 1. Files in P.T.
 
 | folder | files | used by |
 | --- | --- | --- |
-| `dust` | `fx_sh_dstcomviw01`, `dstgls01_s1`, `dstgls01b_s1`, `dstptlviw01_s0`, `fx_tpp_dstbug01_s1` | window break glass, dust around the camera, ending |
+| `dust` | `fx_sh_dstcomviw01`, `dstgls01_s1`, `dstgls01b_s1`, `dstptlviw01_s0`, `fx_tpp_dstbug01_s1` | window break glass (gc_p04_120 and level), dust around the camera (start room, hallway), ending |
 | `filter` | `fx_sh_filfadaddviw01`, `filfadblnviw01` | ending screen sprites |
-| `flare` | `flrbrm01_m1`, `flrcom01..03_m1`, `flrcom04_s5`, `flrlgt01_s3`, `flrlgt01red_s3`, `flrlgt02_s3`, `flrlgt03_s3`, `flrsct01_m1` | lamp flares and lights, ending street lights |
-| `glass` | `glscom01a_s0`, `glscom01b_s0`, `glsrin01_s1` | wall lamp glass, ceiling lamp glass, rain on the window |
-| `light` | `lgthal01_m1`, `lgthnd01_s5`, `lgtoch01_s3`, `lgtrdo01_s0` | red halo lights (mazes), hand light (ending), Lisa's face light (never created), radio light |
-| `smoke` | `smkair01_m1`, `smkgnd02_m3`, `smkgnd03_s5`, `smkviw02_s5`, `fx_tpp_smkchrbrt01d_s0` | haze, ending |
-| `sound` | 38 `fxsd_*` | sound only (one `FxSoundCallProgramEffectNode`), `audio.md` |
-| `view` | `viwbld01_s0`, `viwdis01..03_s1`, `viwpic01..11_s1` | blood on the view, view distortion (the fake crash), picture ghosts in the mazes |
-| `water` | `wtrbld01_s2`, `wtrbld01b_s2`, `wtrbld02_s1`, `wtrbld02b_s1`, `wtrbld03_s1` | blood pools and drips |
+| `flare` | `flrbrm01_m1`, `flrcom01..03_m1`, `flrcom04_s5`, `flrlgt01_s3`, `flrlgt01red_s3`, `flrlgt02_s3`, `flrlgt03_s3`, `flrsct01_m1` | lamp flares and lights (hallway, CeilLamp), ending street lights |
+| `glass` | `glscom01a_s0`, `glscom01b_s0`, `glsrin01_s1` | wall lamp glass, CeilLamp glass, rain on the window glass |
+| `light` | `lgthal01_m1`, `lgthnd01_s5`, `lgtoch01_s3`, `lgtrdo01_s0` | red halo lights (maze A and B), hand light (ending, gc_p07_030), Lisa's face light (never created), radio light |
+| `smoke` | `smkair01_m1`, `smkgnd02_m3`, `smkgnd03_s5`, `smkviw02_s5`, `fx_tpp_smkchrbrt01d_s0` | haze (start room, hallway, mazes), ending |
+| `sound` | 38 `fxsd_*` | sound only (one `FxSoundCallProgramEffectNode`), played by the game's sound code (audio.md) |
+| `view` | `viwbld01_s0`, `viwdis01..03_s1`, `viwpic01..11_s1` | blood on the view (Freezer), view distortion (gc_p02_060/070/080), picture ghosts in the mazes |
+| `water` | `wtrbld01_s2`, `wtrbld01b_s2`, `wtrbld02_s1`, `wtrbld02b_s1`, `wtrbld03_s1` | blood pools and drips (hallway, Freezer, mazes) |
 
 The `_sN` / `_mN` suffix is not used by the loader (guess: size class).
 
-## 2. Binary layout (confirmed)
+## 2. Binary layout (loader 0xB60640, confirmed)
 
-Little-endian, no padding, no offsets. The loader rejects a file whose parsed size differs from the file size.
+Little-endian, no padding, no offsets. The loader rejects a file whose parsed size differs from the file size; the port does the same.
 
 | offset | size | field |
 | --- | --- | --- |
@@ -38,8 +38,7 @@ Little-endian, no padding, no offsets. The loader rejects a file whose parsed si
 | 0x09 | 6 | unused (zero) |
 | 0x0F | | nodes, then edges |
 
-Node: u64 class code (StrCode64 of the class name; the low 32 bits select the class), then every property of the class
-in schema order, each as u8 element count followed by the elements. Element encodings:
+Node: u64 class code (StrCode64 of the class name; the low 32 bits select the class), then every property of the class in schema order, each as u8 element count followed by the elements. Element encodings:
 
 | type | name | element |
 | --- | --- | --- |
@@ -51,32 +50,19 @@ in schema order, each as u8 element count followed by the elements. Element enco
 | 5 | StrCode64 | u64 |
 | 6 | PathCode64 | u64 (file dependency, resolved through `pathid_list_ps4.bin`) |
 
-Edge: u8 from node, u8 to node, u8 from type, u8 from port, u8 to type, u8 to port (6 bytes); with 255 or more nodes
-the node indices are u16 (8 bytes). The type bytes are 2 for every P.T. edge. A node's inputs are the edges whose `to`
-is the node, keyed by `to_port`.
+Edge: u8 from node, u8 to node, u8 from type, u8 from port, u8 to type, u8 to port (6 bytes); with 255 or more nodes the node indices are u16 (8 bytes). The type bytes are 2 for every P.T. edge. A node's inputs are the edges whose `to` is the node, keyed by `to_port`.
 
 ## 3. Class schema
 
-The property order is not stored in the file; it comes from the class descriptors registered in the game: for each
-property the u32 name hash (the low 32 bits of StrCode64 of the name) and the type. The game registers 93 node
-classes; P.T. files use 47. `vfx.py schema` prints the table.
+The property order is not stored in the file. It comes from the class descriptors that the registrars pass to 0xB5EC50 (one per class, e.g. `TppLiquidMaterial2Node` registrar 0x8E5050, descriptor 0x1BC8DE0): for each property the u32 name hash and the type. The hash is the low 32 bits of StrCode64 of the name (`vfx::NameHash`). The eboot registers 93 node classes; P.T. files use 47.
 
-Names: 227 distinct names cover 569 of the 839 property slots, every one verified by hash: names from the VfxTool
-definitions (github.com/youarebritish/VfxTool, `Definitions/PT`) and 36 brute-forced names (`animationFrame`,
-`blendMode`, `correctionType`, `flipU`, `flipV`, `keyframeMethod`, `lightAreaScale`, `lightAreaTranslation`, `lodType`,
-`numFlare`, `shadowPenumbraAngleScale`, `shadowUmbraAngleScale`, `spreadRot`, `vectorName` and others). Several of
-VfxTool's names are positional guesses that fail the hash check (`FxScrollAnimationMaterialNode` 0x972FD939 is
-`cameraZOffset`, not `cameraFadeInFar`; `FxSpotLightShapeNode` 0x40ECFE36 is `hasSpecular`). Unnamed properties print as
-`hXXXXXXXX`; section 9 lists the ones whose meaning is known.
+Names: 227 distinct names cover 569 of the 839 property slots, every one verified by hash: names from the VfxTool definitions (github.com/youarebritish/VfxTool, `Definitions/PT`) and a dictionary of 36 brute-forced names (`animationFrame`, `blendMode`, `correctionType`, `flipU`, `flipV`, `keyframeMethod`, `lightAreaScale`, `lightAreaTranslation`, `lodType`, `numFlare`, `shadowPenumbraAngleScale`, `shadowUmbraAngleScale`, `spreadRot`, `vectorName` and others). The light names were found with the 48-bit StrCode64 values that the spot light reader 0xB84260 passes to its property getters (`shadowUmbraAngleScale` 0x1255DFBA45D5, `shadowPenumbraAngleScale` 0xAA89BDB0BF99, `lightAreaScale` 0x653646D0D39E, `lightAreaTranslation` 0x1DE5C92B9E01). VfxTool's PT definitions have the same property count as the eboot for every class P.T. uses; several of its names are positional guesses that fail the hash check (`FxScrollAnimationMaterialNode` 0x972FD939 is `cameraZOffset`, not `cameraFadeInFar`; `FxSpotLightShapeNode` 0x40ECFE36 is `hasSpecular`). Unnamed properties print as `hXXXXXXXX`; the ones the port uses are in section 9.
 
 ## 4. Graph and time base
 
-`FxModuleGraph` is the root: `allFrame` (effect length in frames), `playMode` (0 once: the effect stops emitting at
-`allFrame`; 1 loop; 2 hold: the clock advances while it stays at or below `fadeOutStartFrame`, past it sets back to
-`fadeInEndFrame`), `fadeInEndFrame`, `fadeOutStartFrame`, `updateType`, bounding box fields. Its inputs, in port order,
-are shapes and program effects.
+`FxModuleGraph` is the root: `allFrame` (effect length in frames), `playMode` (0 once: the effect stops emitting at `allFrame`; 1 loop; 2 hold: 0xBA7D80 advances the clock while it stays at or below `fadeOutStartFrame`, past it sets it back to `fadeInEndFrame` and counts a loop, so with equal boundaries the clock holds there and the loop count rises every tick. P.T.'s two mode 2 effects, the f070 floor glass `fx_sh_dstgls01b_s1` (30/30 of 50) and the nazo blood `fx_sh_wtrbld03_s1` (250/250 of 260), have FirstLoopOnly emitters and effect time or ratio curves that settle by then: their particles stay as they settled. The port looped them whole every `allFrame` until 2026-10-06, which replayed the glass shards' settling turn every 50 frames and the blood's fade in every 260), `fadeInEndFrame`, `fadeOutStartFrame`, `updateType`, bounding box fields. Its inputs, in port order, are shapes and program effects.
 
-Frame values are 60 Hz frames (`lifeFrame`, `delayFrame` and similar fields are multiplied by 1/60 when compiled).
+Frame values are 60 Hz frames: the compile functions multiply `lifeFrame`, `delayFrame` and similar fields by 0.016666668 (confirmed in the emitter and material factories, e.g. `textureAnimeBlendFrame` in 0x8E50C0). The port runs the simulation in seconds (`dframes = dt * 60`), so it is independent of the 60 Hz game tick; the original game logic runs at 30 Hz.
 
 Shape inputs (ports of the `to` node):
 
@@ -92,26 +78,19 @@ Shape inputs (ports of the `to` node):
 
 | node | semantics | confidence |
 | --- | --- | --- |
-| FxIntervalProbabilityEmitNode | per loop a window `[start, end]` in frames: `start = delayFrame + rand % (2 * delayFrameRandomRange)`, `end = start + lifeFrame + rand % (2 * lifeRandomRangeFrame) - lifeRandomRangeFrame`. Inside it, every `intervalFrame` frames: skip with probability from `probability` (percent, compared with `r * 99 / 2^32`), else emit `numMin + r % (numMax - numMin)` (`numMax` when equal). `fadeOutPosition` in [0, 1] of the window starts a linear fade of the count to 0 (`fadeOutReverse` fades in instead) | confirmed |
-| FxDelayNumEmitNode | `num` particles once at `delayFrame` (+ random up to `delayFrameRandomRange`) when `lifeFrame` is 1, else `num` every frame during `lifeFrame` | confirmed |
+| FxIntervalProbabilityEmitNode (0xBA1760) | per loop a window `[start, end]` in frames: `start = delayFrame + rand % (2 * delayFrameRandomRange)`, `end = start + lifeFrame + rand % (2 * lifeRandomRangeFrame) - lifeRandomRangeFrame`. Inside it, every `intervalFrame` frames: skip with probability from `probability` (percent, compared with `r * 99 / 2^32`), else emit `numMin + r % (numMax - numMin)` (`numMax` when equal). `fadeOutPosition` in [0, 1] of the window starts a linear fade of the count to 0 (`fadeOutReverse` fades in instead) | confirmed |
+| FxDelayNumEmitNode (0xBA33A0, 0xBA3480) | `num` particles once at `delayFrame` (+ random up to `delayFrameRandomRange`) when `lifeFrame` is 1, else `num` every frame during `lifeFrame` | confirmed |
 | FxFirstLoopOnlyEmitNode | passes its input only in the first loop of a looping effect | confirmed |
 | FxNumLodEmitNode | reduces its input count by `floor(n * percent) * t`, `t = min(1, d^2 / lodDistance^2)` of the camera distance (`inverse` flips `t`); percent is 0xFB5568AF | likely |
 | FxConstLifeNode | `lifeFrame` | confirmed |
-| FxRandomLifeNode | 0x9B076750 the base and 0x8F88FA93 a range (frames): uniform in [base - range, base + range] | confirmed |
+| FxRandomLifeNode | 0x9B076750 the base and 0x8F88FA93 a range (frames, read x 1/60 by 0xB6D480); 0xB6D5F0 draws base + (2 range r - range) with r = xorshift (13, 7, 5) / 2^32: uniform in [base - range, base + range], own seed | confirmed |
 | FxInfinityLifeNode | the particle never dies; the wrapped life is the period of its age for the time-based nodes | likely |
 
-Randomness (confirmed): one xorshift generator (shifts 13, 7, 5) for every state. An instance is created with a seed
-(the effect system's creation counter unless the creator passes one: demo effects pass their event's section start,
-parts `effectRandomSeed` + the connection; a zero seed becomes 0xFFFFFF). The nodes of each emitter are numbered from
-the seed, and a random node's state is `randomGatherSeedValue` with `randomGatherType` 2, `randomGatherSeedValue` + R
-with 1, and node id + R with 0; the values are drawn once per particle at spawn. Every emitter also keeps a 16-bit
-random value per particle for the UV animation's random start and flips. So a demo effect repeats the same particles
-every time its event plays.
+Randomness (confirmed): one xorshift generator (shifts 13, 7, 5) for every state. An instance is created with a seed: the effect system's creation counter (0xB5AFB0, +0x2F8) unless the creator passes one (description +0x68 and +0x6C: demo effects pass their event's section start, 0x7760E0; parts `effectRandomSeed` + the connection), and a zero seed becomes 0xFFFFFF. 0xB61AB0 keeps the seed's xorshift (+0x2A8, 1 for 0) as the instance's random value R. When the instance starts, 0xBB0E70 numbers the nodes of each emitter (one per shape, 0xBB5880): id = R + 0xFFFF x the emitter + the node's place, counting the emit nodes first, then the life nodes, the vector nodes and the rest (the kinds of 0xB5E650). 0x12BDEB0 lists an emitter's nodes in a walk from its shape, each node before its inputs and the inputs in port order (0xB645E0, edges sorted by target port in 0x12C26C0); a node reached twice is listed twice. A random node's state is `randomGatherSeedValue` (1 for 0) with `randomGatherType` 2, `randomGatherSeedValue` + R with 1, and id + R with 0 (the node inits 0xBA1A40, 0xB6D5B0, 0xB6D910, 0xB92370, 0xB94190, 0xB94AF0, 0xB96EC0, 0xB9DAB0, 0xB9F6A0, 0xBA3590); the values are drawn once per particle at spawn. Every emitter also has a state of its own for a 16-bit value per particle (+0xBC, R at the start, 0xBB00A0), stored at +0x98 of its particle buffer and read by the nodes through context +0x40 (0xBAC710). A node that needs it sets 0x80 on the emitter (the material factories 0xB70F50, 0xB71F40 and 0xB72C70) or 0x180 (a UV animation with a random start, random flips or fixed flips, 0xBA0670). At each spawn 0xBA7F20 gives every new particle, with 0x100, the low 16 bits of the state's next xorshift and steps the state once more after the batch; without 0x100 each particle gets the half float of `x / 2^32` for successive xorshifts of a copy, and the state steps once. So a demo effect repeats the same particles every time its event plays: the three glitches of the f120 bug screen (`fx_sh_viwdis01_s1`, gc_p02_060's event at frame 0, seed 0xFFFFFF) emit at effect frames 0 and 11 and skip 22 (draws 26.4, 2.1 and 62.8 against the probability 50), with flips U and V for the first particle and V for the second. The port numbers the nodes the same way (the kinds by class name, the emitters in the graph's input order); an expression that two shapes share keeps the first shape's number, and only the UV animation's 16-bit value is made (the materials' use of the half float is not ported).
 
 ## 6. Vector nodes
 
-Evaluated per particle from its age, life, life ratio, the effect time and the camera. `vectorType` 1 marks angles in
-degrees.
+Evaluated per particle from its age, life, life ratio, the effect time and the camera. `vectorType` 1 marks angles in degrees.
 
 | node | output |
 | --- | --- |
@@ -128,206 +107,155 @@ degrees.
 | FxKeyframeVectorNode | four piecewise linear curves (`xTimes`/`xValues`...), time from `timeRatio` (age, life ratio, effect time, effect ratio), combined with the input by `operatorMethod` (add, subtract, multiply, lookup) |
 | FxOscillateVector2Node | `sin(2 pi a b)` |
 | FxUVMapVectorNode | UV rectangle 0x4296121B with flips 0xAEADF7F1 (`flipU`), 0x902AA0EB (`flipV`) |
-| FxUVMapRandomVectorNode | random cell of a `randomDivisionWidthGrid` x `randomDivisionHeightGrid` grid, random flips: per particle one xorshift of the node's state for the column (when the width is not 0) and one for the row; with `randomFlipU` or `randomFlipV` set, two more, bit 0 of each flipping U and V; a flip moves the rectangle's start to its far edge and negates its size |
-| FxUVAnimeIntervalVectorNode | sprite sheet animation: grid 0x1D121378 x 0x9EC5A541, one cell every `animationFrame` frames, `clamp`; `randomStart` starts at the particle's 16-bit random value modulo the cells, `randomFlipU` and `randomFlipV` flip by its bits 0 and 1, each xor the fixed flips |
+| FxUVMapRandomVectorNode | random cell of a `randomDivisionWidthGrid` x `randomDivisionHeightGrid` grid, random flips (0xB941D0, confirmed against ending_halo_trace 3570: all 17 ground smoke particles of `fx_sh_smkgnd03_s5` the port matches by position show the original's cell and flips): per particle one xorshift of the node's state for the column (`x % width`, only when the width is not 0) and one for the row (`x % height`, only when the height is not 0); with `randomFlipU` or `randomFlipV` set, two more, bit 0 of the first flips U and bit 0 of the second flips V (both drawn whichever flips are on); a flip moves the rectangle's start to its far edge and negates its size |
+| FxUVAnimeIntervalVectorNode | sprite sheet animation (0xBA09A0): grid 0x1D121378 x 0x9EC5A541, one cell every `animationFrame` frames, `clamp`; `randomStart` starts at the particle's 16-bit random value (section 5) modulo the cells, `randomFlipU` and `randomFlipV` flip by its bits 0 and 1, each xor the fixed flips 0xAEADF7F1 (`flipU`) and 0x902AA0EB (`flipV`); the node has no seed of its own |
 | FxCameraCorrectionVectorNode | input moved toward the camera by 0xBA7C713E metres (`correctionType` 1 from the particle, 0 from the effect origin) |
 | FxCameraFollowVectorNode | position in camera space (offset 0x73D22AD2; 0x849D3E0C keeps only the yaw) |
 | FxCenterScrollVectorNode, FxPoolVectorNode | wraps positions into a `range` box around the followed camera point (dust and smoke around the viewer) |
 | FxCenterDistRateVectorNode | input scaled from `nearScale` to `farScale` by the distance to that point |
-| FxCameraAngleVectorNode | angle between an axis of the effect (0x506F061C) and the camera's axis; its only user is the ending's hand light |
+| FxCameraAngleVectorNode | angle in radians between an axis (0x506F061C: 0 to 2 one axis of the effect, local or world) and row 2 of the camera matrix in the evaluation context (0xB9FBE0), not the direction from the effect to the camera; the port measures it against the camera's back axis (section 11) |
 | FxInterpolateLineVectorNode | `beginPosition` to `endPosition` by particle index / count |
-| FxSpreadVectorNode | a latitude uniform in [pi/2 (1 - `elevation` / 180), pi/2] (180: the upper hemisphere, 360: the sphere), an angle around y uniform in [0, `rangeAngle`] and a length, drawn in that order; with 0xE6B68466 the angle from +y is fixed at `elevation` / 180 x 1.57 (180: a flat disc); with 0xD8F07EBD as well, one length for the batch and evenly spaced angles. The length is `force`, or with `forceType` != 0 uniform in `force` -/+ 0xEF65426D. Rotated by the quaternion 0x05B462F3 |
-| FxReceiveVectorNode | named parameter set by the owner (demo parameter events, section 8.2), else `defaultVector`, times `force` |
-| WindFxVectorNode | `airResistanceRate` x the global wind rotated into the particle's space |
+| FxSpreadVectorNode | 0xB96F10: a latitude uniform in [pi/2 (1 - `elevation` / 180), pi/2] (180: the upper hemisphere, 360: the sphere), an angle around y uniform in [0, `rangeAngle`] (x its sine, z its cosine) and a length, drawn in that order; with 0xE6B68466 the angle from +y is fixed at `elevation` / 180 x 1.57 and only the length and the angle around y are drawn (180: a flat disc); with 0xD8F07EBD as well, one length for the batch and evenly spaced angles. The length is `force`, or with `forceType` != 0 uniform in `force` -/+ 0xEF65426D (the range cut to `force`). Rotated by the quaternion 0x05B462F3. The glass shards of f070 (`dstgls01b_s1`, `dstgls01_s1` node 40) lie on a disc of radius 0 to 1 m and 0 to 0.9 m; the port's former uniform sphere of radius `force` drew them as a dome of glass (lisa_balcony_f070 3590 to 3615) |
+| FxReceiveVectorNode | named parameter set by the owner (demo parameter functors, section 8.2), else `defaultVector`, times `force` |
+| WindFxVectorNode | `airResistanceRate` x the global wind rotated into the particle's space (0x826680, 0x826770; Wind in section 7) |
 
-Confidence: likely for all rows (formulas fitted to the data and checked on screen); the constant, random, UV, spread
-and receive nodes are confirmed.
+Confidence: likely for all rows (factories read, formulas fitted to the data and checked on screen); the constant, random, UV and receive nodes are confirmed.
 
 ## 7. Shapes and materials
 
-- FxSpriteShapeNode, FxSpriteRotShapeNode: camera-facing quads (rotation roll from the rotation input), `centerU`/`centerV`
-  pivot, `baseSizeScale`. FxPlaneRotShapeNode: quads in the effect's space, turned by the rotation input X first, then Y,
-  then Z (`Rx * Ry * Rz` in row vector form). `axisFix` then turns the plane about one effect axis toward the camera: 1
-  about X, 2 about Y, 3 about Z (the hand light's beam planes use 3; the street lamp lens planes and two blood effects
-  use 2). 0x94390DB1 marks shapes whose particles are drawn and sorted one by one (likely); `sortMode`/`sortOffset`
-  sort per draw. `localSpace` false keeps particles at their spawn transform.
-- FxModelPrimitiveShapeNode (confirmed): `modelFile` is the StrCode64 of the model's path. Every particle is a draw of
-  LOD 0 of all meshes of the model (positions, texcoord 0, normal, tangent; the model's materials and vertex colours are
-  not used), drawn with the node's material. Flags: bit 0 `enable`, bit 1 0x0E49C84B (sort the triangles by depth),
-  bit 2 `cullFace`, bit 3 `invertFace`, bit 4 0x7241DEDA (texcoord `uv.xy + uv.zw * t` from the uv input). The world
-  matrix is `S * Rx * Ry * Rz * M` in row vector form. The colour input is written to every vertex as RGBA8, each
-  channel the low 8 bits of `int(c * 255)`, so a channel above 1 wraps. Used by the ending's street lamp lenses
-  (`flrcom01_m1`, `flrcom02_m1`) and the bathroom bulb (`flrbrm01_m1`).
-- FxSprite2DShapeNode (confirmed): screen sprites in a 0x32FF2253 x 0x91365199 pixel space (1280 x 720), origin top
-  left, y down; the quad's top left is `origin + position - (centerU, centerV) * size`; `origin` is (0, 0), or the
-  projected effect position when 0x55389195 is set; 0xDE02160D is the blend mode (1 alpha, 2 add). Drawn after the
-  post chain on the final image.
-- FxSpotLightShapeNode, FxPointLightShapeNode: lights. Spot direction is local -Y after the rotation input. cone input =
-  umbra, penumbra; color.w = lumen; `innerRange`, `outerRange`, `attenuationExponent`, `castShadow`, `hasSpecular`,
-  `viewBias`, `shadowBias` (x 0.001), and 0xA07B1E26, a projected mask texture (set only by the hand light). Point extra
-  = temperature, -, lumen scale. `shadowUmbraAngleScale` and `shadowPenumbraAngleScale` scale the cone angles for the
-  shadow map, whose field of view is the scaled umbra. Light area: `lightAreaTranslation`, rotation 0x733D3780 (a
-  quaternion), `lightAreaScale` and `enableLightArea` (0xFFE7D17F) clip the light to a box like a level light; the
-  ceiling lamp flare lights, the maze halo lights, the radio light and one spot of the bathroom bulb set one.
+- FxSpriteShapeNode, FxSpriteRotShapeNode: camera-facing quads (rotation roll from the rotation input), `centerU`/`centerV` pivot, `baseSizeScale`. FxPlaneRotShapeNode: quads in the effect's space, turned by the rotation input X first, then Y, then Z (`Rx * Ry * Rz` in row vector form, as the model shape's 0xB8DF70; measured: the ending's hand light beam planes, rotation (0, 90, 90) with `centerU` 1, then reach 3 m along the spot's axis, local +Z, and the CeilLamp glass's (90, 90, 0) plane is a horizontal cap under its three vertical planes at 0, 60 and 120 degrees; the port had turned Z, X, Y, which laid the beam planes across the beam along local -Y). `axisFix` (0xB75D30, node +0x54) then turns the plane about one effect axis toward the camera, from the camera direction in the effect's space: 1 about X (+Z faces the camera; angle from z and -y), 2 about Y (+Z; from x and z), 3 about Z (-Y; from x and -y); 4 takes the direction from a particle direction pool (likely, from the factory 0xB7AF40; unused in P.T.). The hand light's three beam planes use 3, so they stay along the beam and face the camera around it; the street lamp lens planes (`flrcom01`, `flrcom02`, `flrcom03`) and the blood `wtrbld01b` and `wtrbld02` use 2. The port had parsed `axisFix` without applying it. ending_street replay (synchronized to gc_p06_010_final, 25 timeline frames 2780 to 3260): the beam's light shaft now rises from the road where the capture shows it at 3160 to 3260 (it was missing), mean absolute difference 12.51 -> 8.31 at 3020, 29.37 -> 22.63 at 3060, 24.57 -> 21.36 at 3180, 16.56 -> 14.32 at 3260, total 328.8 -> 301.7, no frame worse; ceillamp_f100 1925 to 2680 unchanged. 0x94390DB1 marks shapes whose particles are drawn and sorted one by one (read in 0x12C65D0; likely), `sortMode`/`sortOffset` sort per draw. `localSpace` false keeps particles at their spawn transform.
+- FxModelPrimitiveShapeNode (creator 0xB8BED0, init 0xB8C700, per frame 0xB8DF70, draw setup 0xB8F080, confirmed): `modelFile` is the StrCode64 of the model's path. Every particle is a draw object with its own copy of LOD 0 of all meshes of the model (positions, texcoord 0, normal, tangent; the model's materials and vertex colours are not used), drawn with the node's material. Flags: bit 0 `enable`, bit 1 0x0E49C84B (keeps the indices and sorts the triangles by depth each frame, 0xB8F1B0), bit 2 `cullFace` (without it the draw object gets flag 4, no culling), bit 3 `invertFace` (swaps the second and third index of every triangle; without it the model's winding is kept), bit 4 0x7241DEDA (texcoord `uv.xy + uv.zw * t` from the uv input), bit 5 set when 0xB8C5A0 finds the four vertex streams in every mesh. The world matrix is `S * Rx * Ry * Rz * M` in row vector form: scale input, rotation input in radians, M the effect matrix (`localSpace`) or the particle's spawn matrix with its translation replaced by position times M. The colour input is written to every vertex as RGBA8, each channel the low 8 bits of `int(c * 255)` (truncated, not clamped), so a channel above 1 or below 0 wraps. Files: `flrcom01_m1` (the ending's street lamp lenses, `shsb_stlg001_emit001.fmdl` 0x725651421337, add, luminance 2; gc_p06_010_final spawns it at the 9 lamp heads, and its flicker alpha `sin(...) * Color1.a + Color2.a` wraps to dark above 1), `flrcom02_m1` (same model, constant colour; its 8 locators in gc_p06_010_eff have `flags` 6; nothing was found that shows them, and the port's ending never does) and `flrbrm01_m1` (hallway bathroom bulb, `shsb_bath001_lamp001.fmdl` 0x2C13DBEB0D12 at 1.05 x scale, alpha, luminance 5, its own texture; the locator has `flags` 6 and is in no NazoManageData list, so the port never shows it; floor_f060 frame 5560 shows the vanity bulbs unlit). The port draws the triangles in the world layer (rendering.md 13.2) and does not port the triangle sort, which no P.T. file sets.
+- FxSprite2DShapeNode (draw 0xB7E8B0, confirmed): screen sprites in a 0x32FF2253 x 0x91365199 pixel space (1280 x 720), origin top left, y down; the quad's top left is `origin + position - (centerU, centerV) * size`; `origin` is (0, 0), or the projected effect position when 0x55389195 is set; 0xDE02160D is the blend mode (1 alpha, 2 add). Drawn after the post chain on the final image.
+- FxSpotLightShapeNode, FxPointLightShapeNode: lights. Spot direction is local -Y after the rotation input, and the light's own +Y is the frame's +Z (a 90 degree turn about X takes +Z to -Y): 0xB848E0 turns the GrLight with the particle's frame, so the spot's shadow map turns with it. shadow_f010's `m_shadowProjection` of the f010 CeilLamp light (frames 1704 to 1708) has its map axes along the lamp's -X and -Z (the u axis (-0.864, -0.010, -0.503) at 1706, where the port's lamp frame has +X (0.864, 0, 0.503)), so the map follows the lamp's slow spin; the port had built effect spot maps from a fixed side vector. cone input = umbra, penumbra; color.w = lumen; `innerRange`, `outerRange`, `attenuationExponent`, `castShadow`, `hasSpecular`, `viewBias`, `shadowBias` (x 0.001), and 0xA07B1E26, a projected mask texture (0xB84260 loads it, 0xB85E40 hands it to the GrLight through 0xCDBF70; rendering.md 4.3), set only by `fx_sh_lgthnd01_s5` (`flare/fx_flr23_iy_alp_clp`, the handy light's mask). Point extra = temperature, -, lumen scale. Spot shadow cone: the reader 0xB84260 stores `shadowUmbraAngleScale` and `shadowPenumbraAngleScale` at node +0x48 and +0x4C, and the per frame update 0xB848E0 sets the GrLight shadow umbra to +0x48 x umbra (0xCDBE60) and the shadow penumbra to +0x4C x penumbra (0xCDBE90). The shadow umbra is also the shadow map field of view (rendering.md 12.5). Shadow casting effect lights: the CeilLamp flare lights `flrlgt01_s3` and `flrlgt01red_s3` (cone 180 and 1, scales 0.78 and 120: shadow umbra 140.4, shadow penumbra 120), the two spots of `lgthal01_m1` (cone 170 and 10, scales 160 and 150) and one of `flrbrm01_m1` (cone 180 and 10, scales 1.8 and 8). The eboot takes the cosine and tangent of the scaled half angles with range reduction, so the half angle 13600 of `lgthal01` acts as 80 degrees (and its penumbra half angle 750 as 30), and the half angle 162 of `flrbrm01` gives a map field of view of 36 degrees; the port uses cos(half) for the cone and 2 atan(abs(tan(half))) for the field of view. `shadowAttenuationExponent` goes to `m_materials[6].z` (0xD4EC00), which the spot shaders do not read. Light area: the reader 0xB84260 stores `lightAreaTranslation` (0x1DE5C92B9E01) at node +0x00, the rotation 0x733D3780 (a quaternion, x y z w) at +0x10, `lightAreaScale` (0x653646D0D39E) at +0x20 and `enableLightArea` (0xFFE7D17F) in bit 0 of +0x6D; 0xB85E40 sets the GrLight's area flag from that bit (0xCD9F10), and the per frame update 0xB848E0 hands 0xCDA020 the box: centre frame x (position + translation), rotation the frame's x the node's, size the node's scale x the frame's axis lengths (the full size, as a `lightArea` locator's scale). The light is then clipped to the box like a level light (rendering.md 4.1). lightsel_f010 (1485 to 1495) holds the CeilLamp light's box at light data +0x10: centre (-8.2638, 2.6378, 26.0769), size (15, 10, 15) and rotation (-0.0061, 0.9307, 0.0091, -0.3655) at 1490, the port's (-8.2674, 2.6379, 26.0705), (15, 10, 15) and (-0.0060, 0.9264, 0.0101, -0.3764), the lamp's swing 3 to 4 frames behind. Areas are set by `flrlgt01_s3` and `flrlgt01red_s3` (15 x 10 x 15, wider than their 8 m range), `lgthal01_m1` (two 8 m cubes), `lgtrdo01_s0` (5 m) and one spot of `flrbrm01_m1` (2.5 x 3 x 3.2 at (-0.73, -0.85, -1.38)); no point light sets one. Maze A's hall lights stop lighting the panes behind the barred window: floor_f110 3970 2.37 -> 1.51 mean difference against the capture (the f110 set 8.74 -> 8.68).
 
 Materials:
 
-| node | P.T. shader | meaning |
+| node | P.T. shader | port |
 | --- | --- | --- |
-| FxLightInfluenceMaterialNode | `*_LitDP` | color x (`ambientRate` x sky + `directionalLightRate` x directional + `pointLightRate` x the sum over three lights of colour x max(0, 1/d^2 - d^2/R^4)); `softBlend` with the fade distance `softBlendFactor`; `opaque`; camera fade `cameraFadeInNear`/`Far`; `cameraZOffset` |
-| FxDynamicLuminanceMaterialNode | `*_DL` | `blendType` (0 alpha, 1 add, 2 subtract, 3 multiply, 4 min, 5 opaque), `shaderType` 0 `FastDraw_DL`, 1 `Softblend_DL`, 2 `TexAnmSoftBlend_DL`; luminance factor interpolated from 0xAB96FA51 at `minExposure` to 0xFC08FF2F at `maxExposure` by the exposure |
+| FxLightInfluenceMaterialNode | `*_LitDP` | color x (`ambientRate` x sky + `directionalLightRate` x directional + `pointLightRate` x the sum over the draw's three lights of colour x max(0, 1/d^2 - d^2/R^4), d = max(0.01 m, distance)), linear, pre-exposed (`Prim_Poly_LitDP3_NS_VF`: sky = `m_lightParams[0]` + `[1]`, the lights `m_lightParams[2..7]`, directional `m_localParam[1]`); the light block is built per draw object as for forward models (0xD6BB90: lights scored at the centre of the draw's world box, a spot's colour scaled by its cone there; probes holding that centre); `softBlend` with the fade distance `softBlendFactor`; `opaque`; camera fade `cameraFadeInNear`/`Far`; `cameraZOffset` |
+| FxDynamicLuminanceMaterialNode | `*_DL` | `blendType` (0 alpha, 1 add, 2 subtract, 3 multiply, 4 min, 5 opaque), `shaderType` 0 `FastDraw_DL`, 1 `Softblend_DL`, 2 `TexAnmSoftBlend_DL` (factory 0xB72C70, shader table 0x1BDC980 entries 16 to 18); luminance factor interpolated from 0xAB96FA51 at `minExposure` to 0xFC08FF2F at `maxExposure` by `ev = -log2(m_exposure.z)` (`m_materials[0]`, vertex shader); not pre-exposed (the vertex shader multiplies and divides by `m_exposure.z`, confirmed) |
 | TppLiquidMaterial2Node, TppLiquidMaterial2HNMNode | `Primitive_Liquid2Final`, `_hnm`, `LiqSprt2Final` (sprite shapes) | see below |
-| FxScrollAnimationMaterialNode | `Prim_Poly_RainScroll` | two screen-space rain layers with animated rotation, `luminance`, soft depth fade |
+| FxScrollAnimationMaterialNode | | Two screen-space rain layers with animated rotation, `luminance`, soft depth fade |
 
-Liquid (confirmed from the shader): the texture is a normal map (RGB, or for HNM x in alpha, y in green, z derived);
-the normal is rotated into the quad's frame (planes: the quad's own axes; sprites: screen right, up and toward the
-camera, turned by the texture rotation). Material constants: `m[0]` = (`transparency` T, `roughness`, 0, refraction
-0xF6B16443 in pixels), `m[2]` = (`ambientRate`, `pointLightRate`, `directionalLightRate`), `m[3]` = (Fresnel base
-0xBD8530BE, Fresnel power 0x3B831F9F, reflection scale 0x62133294). Textures: `textureFile`, the scene colour, the
-reflection cube 0x23E90E5F (default `gr_cub01_ks_cbm_nmp`). Result:
+Scroll material constants (factories 0xB71F40 and 0xB72510, update 0xB72840, `Prim_Poly_RainScroll_VF`): `m[0].xy` are the screen texture scale (0x99EA2F62, 0x1F7E7CF7), `m[0].z` is luminance. Both `m[1].xy` offsets start at zero and subtract `dt * 0x27F25FE0`, wrapped into [0,1). The two rotation angles `m[1].zw` are their initial angles (0x1364CE7E, 0x6B880E78) plus the sine of independently advancing phases times their swing (0xACB0CDBB, 0xF1A308EB), all angles in radians after loading degrees. Each phase advances by `dt * 0xFBFFDA19 * (xorshift32 * 1.1641532e-10 + 0.5)`. `m[2]` holds base UV width, height and rotation (0x332DD0CB, 0xEDA9BBFB, 0x495EBA72). Texture slot 1 is 0xF77D9DEA. The two screen-space samples contribute their summed alpha to the base texture colour before the half-colour sRGB decode; soft fade uses 0x0E3C1540 even with shaderType 0. `pt_vfx_test <original fx_sh_lgthnd01_s5.vfx>` checks the three rain planes, two-tick offsets, both texture slots, soft fade and render-time state stability.
+
+Liquid (factory 0x8E50C0, shader `ShShaders_ps4/Primitive_Liquid2Final/ps.expr.txt`, confirmed): the texture is a normal map (RGB, or for HNM x in alpha, y in green, z derived, alpha 1); the normal is rotated by the particle rotation: `Primitive_Liquid2Final` turns the texel by the conjugate of the particle quaternion in `inAttribute1` (N = q* n q in the pixel shader), and in liquid_trace_f010 frame 1490 that frame is the quad's own for all 345 quads within 0.999: x along v1 - v0, y along v0 - v3, z their cross product, the plane's local axes whatever the UV flips, with z facing away from the camera on 341 of them (the window glass and its rain, most sconce panes, and the blood water, whose z points down). The shader comes from the TppShaderPool, which 0x8CA520 fills in the order of the name table 0x1BC8330 (entries 0 to 4: `Primitive_Liquid`, `Primitive_Liquid2Final`, `Primitive_Liquid2Final_hnm`, `Primitive_LiquidSprite`, `Primitive_LiqSprt2Final`), by the shape type the shape factories store at +0x2C (1 for `FxSpriteShapeNode` 0xB7F4C0 and `FxSpriteRotShapeNode` 0xB7F040, 2 for `FxPlaneRotShapeNode` 0xB7AF40): 0x8E50C0 takes entry 4, `Primitive_LiqSprt2Final`, for type 1 and entry 1, `Primitive_Liquid2Final`, for types 2, 4 and 5. `Primitive_LiqSprt2Final` (VS 2a34bac848bef311, PS e935370191e94ac8) has no particle quaternion: its vertex shader passes the view matrix rows as the tangent frame, (-m_view[0], m_view[1], -m_view[2]), and the pixel shader first turns the texel by the angle -z with z = `inAttribute2.z` (passed on as `inNormalUVR`, the texture's rotation in radians): x' = x cos z + y sin z, y' = y cos z - x sin z. The view x axis points to the left of the screen (in f010_dumps frame 1490 the projection's x scale is -1.083 and m_view[0] = up x forward), so the texel's x maps to screen right, its y to screen up and its z toward the camera. The sprite liquids are `fx_sh_viwdis01_s1`, `fx_sh_viwdis02_s1`, `fx_sh_viwdis03_s1`, `fx_sh_viwbld01_s0` and the three sprites of `fx_sh_wtrbld02_s1`; the others are planes. Material constants: `m[0]` = (`transparency` T, `roughness`, 0, refraction 0xF6B16443 in pixels), `m[1]` = frame blend, `m[2]` = (`ambientRate`, `pointLightRate`, `directionalLightRate`), `m[3]` = (Fresnel base 0xBD8530BE, Fresnel power 0x3B831F9F, reflection scale 0x62133294). Textures: `textureFile`, the scene color, the reflection cube 0x23E90E5F (default `gr_cub01_ks_cbm_nmp`, 0x8E3E50; bound without the FTEX sRGB flag, as a BC1 UNORM cube in liquid_trace_f010, so the square below is the shader's own decode). Result:
 
 ```text
 color = inColor.rgb * ((1-T) * sat((1-T) * dot(N, V) + T) * scene + hemisphere ambient * ambientRate + (1-T) * diffuse lights)
-      + T^2 * scene + specular (exponent 257 at roughness 0)
-      + reflection scale * (F0 + (1 - F0) * (1 - dot(-V, N))^power) * cube(reflect(V, N))^2
+      + T^2 * scene + specular (exponent 257 at roughness 0, and T^2 * dot(L, V)^257 for lights behind the surface)
+      + reflection scale * (F0 + (1 - F0) * (1 - dot(-V, N))^power) * cube(reflect(V, N))^2     (not scaled by exposure)
 scene = scene color at the pixel offset by N.xy * refraction
 ```
 
-`opaque` enables the alpha test at 0.5. Glass (T = 1) shows the refracted scene plus highlights; the blood pools
-(T = 0) are lit red surfaces. The refraction samples a copy of the scene buffer taken before the liquid draws; the
-offset is in pixels of the target the draw renders to (full resolution for opaque liquids, half resolution for the
-others), folded back at the edges. The view distortion effects are such sprites: `fx_sh_viwdis01_s1` (refraction 500,
-a sprite 0.2 m in front of the camera) moves blocks of the image by up to 500 half-resolution pixels; `fx_sh_viwdis02_s1`
-stretches the texture's last column so horizontal bands shift left, right, up or down for the 30 s of the number chant,
-the tearing of the fake crash screen.
+`opaque` enables the alpha test at 0.5. Glass (T = 1) shows the refracted scene plus highlights; the blood pools (T = 0) are lit red surfaces.
 
-Soft particles (confirmed): `softBlendFactor` is the fade distance in metres against the scene depth (the radio glow
-0.2 m, the blood drops 0.015 m, the ending's ground smoke 10 m). Fog: the `Prim_*` pixel shaders read the fog volume at
-the particle's view depth; with the alpha blend the colour becomes `colour T + inscatter`, with every other blend the
-alpha is multiplied by the transmittance T.
+Refraction (confirmed from the shader and the f010_dumps frame trace): `inScreenTexture` is a copy of the 1920x1080 scene buffer that a compute copy (`8c7e2adaa817965c`, 240 x 135 groups of 8 x 8) makes before liquid draws that follow other drawing, and consecutive liquid draws sample the same copy (frame 1490: one copy, then 64 `Primitive_Liquid2Final` draws; the next copy comes after them). The sample point is the pixel (FragCoord - 0.5 + 0.49609375) moved by `-N.x * refraction` and `-N.y * refraction`, with N the normal after the particle rotation in world space (the same N as the lighting's N.V), so the offset of a camera-facing sprite depends on the world direction of the view; `refraction` is in pixels of the target the draw renders to (m_localParam[2].zw = 1 / its size): the full 1920 x 1080 one for opaque liquids and the half resolution effect pass (960 x 540) for the others, because every material's draw setup sets bit 3 of the draw flags when the material is not opaque (liquid 0x8E57F0, DL 0xB73370, Lit 0xB71620) and those draws go to that pass (liquid_trace_f010 frame 1490: the glass, opaque, at 1920 x 1080 in draws 578 to 641, the blood water `fx_sh_wtrbld01b_s2`, not opaque, at 960 x 540 in draws 652 and 653, followed by the smoke and dust), so a blended liquid moves the view twice as far per 1080p pixel. Each coordinate is folded into the used area: from 0.995 of it the coordinate mirrors back (`0.995 - fract(u / 0.995) * 0.995`), below 0 it mirrors by `abs`, then the linear wrap sampler reads the copy (decoded from sRGB, as the copy holds the 8-bit scene buffer). The view distortion effects are such sprites: `fx_sh_viwdis01_s1` (gc_p02_060, 26 frames: every 10 frames with probability 50 % one 32-frame particle of the 8 x 8 anime cells of `fx_viwbug01_ks_clp`, refraction 500, 0.48 x 0.27 m at 0.2 m in front of the camera, which covers the view) moves blocks of the image by up to 500 half resolution pixels (1000 at 1080p) with mirrored folds; `fx_sh_viwdis02_s1` (gc_p02_070 for 56 frames, gc_p02_080 from 3600 to 5400) stretches the texture's last 1/16 column (UV map 0.9375..1) over 0.88 x 0.495 m, so horizontal bands of the view shift by 20 half resolution pixels (40 at 1080p) left or right (magenta texels) or up and down (cyan) for the 30 s of the number chant: the tearing of the f120 bug screen. The port copies the HDR target the same way (`SceneRenderer::RecordSceneCopy` into `hdr_copy_`, which the reflection pass fills again after the forward pass), draws every liquid at full resolution and scales the refraction by the target height / 1080, twice that for a liquid that is not opaque. An opaque liquid draws on the scene; one that is not goes to the port's effect buffer in its place among the other effects (rendering.md 13.2), over a copy of the scene taken before its first such draw, so it covers by its alpha the effects drawn before it as in the original's effect pass (the f120 view distortion over the CeilLamp's glow sprites; `PT_VFX_LIQUID_SCENE=1` draws every liquid on the scene before the effect buffer, as before); the port takes the normal frame from a quad's corners as both shaders have it: x along the edge from the first corner to the +u one, y from the +v corner to the first, z their cross product whichever side the camera is on (the plane's local axes; for a sprite screen right, up and toward the camera, which fakecrash_f120 confirms: its tearing bands shift the same way as the port's).
 
-Wind: the global wind object's velocity, with a turbulence term from `speedTurbulentRate`, `rotTurbulentRate` and
-their cycles, reaches WindFxVectorNode times `airResistanceRate`. P.T. has one WindGlobal, in the ending: velocity
-(0, 0, 5), no turbulence; the only wind node is the ending dust `fx_sh_dstcomviw01` (`airResistanceRate` 0.1).
+Soft particles (confirmed): every material's draw setup (DL 0xB73370, Lit 0xB71620, Scroll 0xB72510, Liquid 0x8E57F0, HNM 0x8E3980) passes `softBlendFactor` when the material is soft (0 otherwise), and every shape's draw object stores its reciprocal (sprite 0x12C4010, the other shapes at 0xB7CD35, 0xB80EA1, 0xB81E18, 0xB867A2, 0xB87718, 0xB8DCC9, 0x12C420B, 0x12C67F7: `1.0 / factor`), which the renderer writes to `m_localParam[2].x` (0xDC9D40, constant 0xB5). The `Prim_*` pixel shaders compute `alpha *= saturate(m_localParam[2].x * (sceneViewZ - particleW))`, so `softBlendFactor` is the fade distance in metres (the radio glow: 0.2 m with its camera correction of 0.2 m; the blood drops 0.015 m; the ending's ground smoke 10 m). The DL setup also fills `m_localParam[3]` = (0, `cameraFadeInNear` x (1 for alpha blend, -1 otherwise), `cameraFadeInFar` x (-1 when `opaque`, the alpha test), `cameraZOffset`), both fade distances at least 0.01.
 
-Program effects: `TppLensFlareProgramEffectNode` registers one light per effect instance with the lens flare manager:
-`lensFlareName`, `lux`, `baseDistance`, `limitDistance`, temperature 0x2642E962, `offsets` (the light position in the
-effect's space), `drawPriority`, `numFlare` (1 in P.T.), cone angle 0x430D5D92 (degrees; 360 except the hand light, 90),
-0x32CA14EC (distance scaling uses the shape's `limitDistance`) and 0xF856246F (depth tolerance of the occlusion taps in
-metres). `FxSoundCallProgramEffectNode`: `soundEvent` and `soundStop` as Wwise ids, 0xE3A9CADA the stop curve, 0xD2ECAC68
-the stop fade in seconds, `lodDistance`, and a flags word (bit 0 `soundEvent` set, bit 1 `soundStop` set, bit 2 stop the
-playing id over the fade when the instance goes, bit 6 `enableLod`). Besides the 38 `fxsd_*` files, four effects carry
-it: `fx_sh_viwdis01_s1` (`Play_sfx_bug_loop_01`), `fx_sh_viwbld01_s0` (`Play_sfx_splinkle_blood_01`), `fx_sh_wtrbld01b_s2`
-(`Play_sfx_water_drop_b`) and `fx_sh_wtrbld02_s1` (`Play_sfx_refri_blood_01`).
+`Prim_Poly_Softblend_DL` (FxShaders_ps4, hash 4d3e2b93defb9aee): the texture is sampled raw and decoded from sRGB in the shader, times vertex colour times the luminance factor, then re-encoded to sRGB (no clamp) and premultiplied by `texture.a x colour.a x soft`; it writes two targets with the soft term against the two depths of the downsampled depth texture (`m_localParam[2].zw` scale the pixel position). The blend is on the gamma encoded 8-bit scene buffer (rendering.md section 6), so an additive glow adds `sRGB(c) a` to the encoded background.
+
+Fog (confirmed from `Prim_Poly_FastDraw_DL_VF` and ending_flare_trace): the `Prim_*` pixel shaders read the TPP fog volume (`inFogVolume`) at the particle's view depth (slice `m_fogParam[2].y ln(depth) + m_fogParam[2].z`, 29.89 ln(depth) in the ending, two slices blended) and apply it by the sign of `m_localParam[3].y`: with the alpha blend (y >= 0) the colour becomes `colour T + inscatter`, with every other blend (y < 0) the colour stays and the alpha is multiplied by the transmittance T. In ending_flare_trace all 126 alpha blended draws have y >= 0 and all 753 additive ones y < 0. The slice is clamped to the volume (0 to 127, view depths 1 m to `far`, at least 10 m; rendering.md 12.7), so a particle beyond `far` takes the fog of `far`. The port evaluates its per pixel TPP fog (rendering.md 12.13) at the point of the fragment's ray at view depth `clamp(depth, 1, max(far, 10))` with the same rule; floors without TPP fog are unchanged. The street lamp flare `fx_sh_flrcom04_s5` at 31.6 m (ending 4040) is the case that shows it: unfogged it washed out the view.
+
+Wind (confirmed): the wind manager (0x1C51708, created by 0x8273C0) keeps a global wind object whose update (0x824F80) takes its WindParameter (the one a wind functor installed, else its own), rotates +Z onto the velocity direction and applies it to the turbulence vector of 0x867E70: speed `|v| + speedTurbulentRate |v| (2/3)(sin p0 + 0.5 sin p1)` along `(sin a cos b, sin a sin b, cos a)` with `a = rotTurbulentRate pi (2/3)(sin p2 + 0.5 sin p3)` and `b = rotTurbulentRate 2 pi (2/3)(sin p4 + 0.5 sin p5)` (both rates times the manager's +0x94, 1.0; checked by running the relocated function). The phases start at 0 and advance by the cycles times `dt 2 pi` per frame (0x868820: p0 and p1 by `speedTurbulentCycle` and `sqrt(2)` times it, p2 to p5 by `rotTurbulentCycle` times 1, `sqrt(2)`, 1.014142 and `1.014142 sqrt(2)`). WindFxVectorNode reads it (global path 0x827AF0 when 0x4067A508 is set; 0x828290 multiplies by the manager scale at +0xA0, 1.0), times `airResistanceRate`, rotated into the particle's frame. P.T. has one WindGlobal, in the ending's `gc_p06_010.fox2`: velocity (0, 0, 5), all turbulence 0. The ending's wind functor 0x5B5B7F07E849 (0x8253F0, frames 4894 to 5625) sets speed 3.5 with the identity rotation and `rotTurbulentRate` 30 but leaves both cycles at 0 (its -1 values keep the current ones), so the phases stay 0 and the turbulence has no effect (the relocated 0x867E70 returns (0, 0, 3.5) for zero phases and rate 30). The only wind node is the ending dust `fx_sh_dstcomviw01` (`airResistanceRate` 0.1): it drifts 0.5 m/s along world +Z, 0.35 m/s during the functor.
+
+Program effects: `TppLensFlareProgramEffectNode` (factory 0x8E4890; its update 0x8E4CB0 registers one light per effect instance with the lens flare manager 0x8F8300 through 0x8F86F0 and copies the node values with 0x8F89E0, confirmed): `lensFlareName`, `lux`, `baseDistance`, `limitDistance`, temperature 0x2642E962, `offsets` (the light position in the effect's space), `drawPriority`, `numFlare` (1 in P.T.), cone angle 0x430D5D92 (degrees, stored in radians; 360 except the hand light, 90), 0x32CA14EC (distance scaling uses the shape's `limitDistance`; only the hand light sets it) and 0xF856246F (depth tolerance of the occlusion taps in metres: 0.3 hallway sconce, 0.6 CeilLamp and ceiling lamps, 0.1 hand light). Section 10 has the flare itself. `FxSoundCallProgramEffectNode` (factory 0xB6DCB0, confirmed): `soundEvent` and `soundStop` as Wwise ids, 0xE3A9CADA the stop curve (AkCurveInterpolation), 0xD2ECAC68 the stop fade in seconds (kept in ms), `lodDistance` squared, and a flags word: bit 0 `soundEvent` set, bit 1 `soundStop` set, bit 2 0x37CD447C, bit 3 0x4EF4B1E6, bit 4 0x6F15D5A0, bit 5 0x119432AD, bit 6 `enableLod` (0xD74A2B0AD013); 0x10CA0B28 adds 0x200000 to the node flags. Per effect instance 0xB6E050 creates a sound object and 0xB6E1C0 registers it at the effect's transform and posts `soundEvent` (retrying for up to 59 frames), keeps the transform up to date while it plays and stops the sound once the listener leaves `lodDistance` when `enableLod` is set (no P.T. file sets it); the release 0xB6E0F0, when the effect instance goes, stops a sound that still plays: with bit 2 the playing id over the fade along the curve (sound object vfunc +0x40), else with bit 1 by posting `soundStop` (+0x30), else it plays out. The kill functor (0x62B47A5B81EC -> 0xB5B4D0) removes an instance at the next effect update (0xB5B7F0 sets +0x2CD and +0x238 bit 0x10), a section end only stops its emission (0xB5B3D0, +0x25C bit 1). Besides the 38 `fxsd_*` files, four effects carry the node: `fx_sh_viwdis01_s1` (`Play_sfx_bug_loop_01`, 0.1 s Exp1), `fx_sh_viwbld01_s0` (`Play_sfx_splinkle_blood_01`), `fx_sh_wtrbld01b_s2` (`Play_sfx_water_drop_b`) and `fx_sh_wtrbld02_s1` (`Play_sfx_refri_blood_01`). The port plays the node of every demo effect (`DemoSystem`) and of every level `FxLocatorData` whose effect has one (`GameSound`, from the node's own fields; the hallway's blood water locator `FxLocator_fx_sh_wtrbld01_s0002` (`fx_sh_wtrbld01b_s2`) drips `Play_sfx_water_drop_b`, silent until the bathroom ambience lowers the game parameter 2556335218), with the node's release when a locator is hidden; `fx_sh_wtrbld02_s1` and `fx_sh_viwbld01_s0` are the Freezer's part effects FreezerBloodTop and FreezerBloodEye (`frz0_main0_def.parts`, lights 0 and 1), whose sounds `VfxScene` posts at the part when an instance starts and releases when it goes: the blood drip `Play_sfx_refri_blood_01` at each restart of light 0 (every 2 to 5 s on f080) and the splash `Play_sfx_splinkle_blood_01` when the player looks into the fridge.
 
 ## 8. Where effects are created
 
 ### 8.1 Levels
 
-`FxLocatorData` entities (`vfxFile`, transform) in the stage files: pt14_start 2, pt14_hallway 58 (40 visual, 18 sound),
-maze A 59, maze B 71, maze C 4, ending 34. An effect runs while its entity's body is visible and enabled (trap scripts
-toggle them, e.g. `enable_vfx_dust_glass`) and its stage is active; the instance is created suspended when the block
-loads and started at the block's activation, when `createOnInitialize` is set (false only for the two puzzle blood
-effects `fx_sh_wtrbld03_s1`).
+`FxLocatorData` entities (`vfxFile`, transform) in the stage files: pt14_start 2, pt14_hallway 58 (40 visual, 18 sound), maze A 59, maze B 71, maze C 4, ending 34. An effect runs while its entity's body is visible and enabled (trap scripts toggle them, e.g. `enable_vfx_dust_glass`) and its stage is active: the FxLocatorDataBody creates the instance suspended when the block loads and starts it at the block's activation, when `createOnInitialize` is set (false only for the two nazo `fx_sh_wtrbld03_s1`; `gameplay.md` 5.1).
 
 ### 8.2 Demos
 
-| functor | role |
-| --- | --- |
-| FxEffectCreateEventFunctor and five others | create an instance: path, `instanceName`, position, rotation; at the event's section end its emitters stop and its particles live out their lives |
-| 0x62B47A5B81EC | kill every live instance named `instanceName` |
-| 30 parameter functors (`color`, `Range`, `ParticlesSize`, `Spotlight_Cone_Angle`, `SpotlightColor`, `SpotlightBeamColor`, ...) | set a named receive parameter (vector4, optionally interpolated) |
-| EffectConnectToNullFunctor | attach to an `Eff_Null_*` locator |
+| functor | handler (registrar, priority) | role |
+| --- | --- | --- |
+| FxEffectCreateEventFunctor and five others (0xBA70C25C5CA2, 0x203658B3A68B, 0x02F0E5F78C3C, 0xE3ED34F2D068, 0x8CD77E7F0E7E, 0x458172C4FCB2) | 0x7760E0 (0x775F30, 300) | create an instance: path, `instanceName`, position, rotation; at the event's section end (phase 2) 0x7760E0 queues the instance with mode 2 (0xB08B30, the effect manager's list at +0x1E8, sorted into per-mode lists by 0xB08D20): its emitters stop and its particles live out their lives (ending_fx_trace 3200, demo frame 3563: the ground smoke instances whose sections ended at 3414, 3434 and 3502 still draw 7 to 9 particles each). The port stops the instance (`vfx::System::Stop`: no emission, no lens flares, particles of infinite life removed) while its demo plays and removes it when its last particle has died, or with its demo. 0x203658B3A68B (one use, the ending's `fx_sh_filfadaddviw01` at frame 115, no instance name, no end) adds `Time` 1.0 (0xB5E26689), `repeat` and `repeatIntervalFrame` (read by the handler, x 1/60 s); `Time` is likely the event length in seconds |
+| 0x62B47A5B81EC | 0x775D50 (0x775CD0, 400) | kill every live instance named `instanceName` (0xB494B0 on each) |
+| 30 parameter functors (0xD6081A44BF36 `color`, 0xFFA4190206B1 `Range`, 0xF212AD54D61A `ParticlesSize`, 0x8C933DF07461, 0x9D921C569DC5, 0x032285E22705 ...) | 0x778100..0x779440 (0x777820, none) | set a named receive parameter (vector4, optionally interpolated) |
+| EffectConnectToNullFunctor | 0x785510 | attach to an `Eff_Null_*` locator |
 
-The ending sets an instance's parameters on the frame it is created.
+The priorities order events of the same frame (likely higher first: kill 400, create 300, parameters 0); the ending sets an instance's parameters on the frame it is created, with the parameter events stored before the create event. The parameter name in the event is the receive name; P.T. data uses `color`, `Range`, `ParticlesSize`, `Spotlight_Cone_Angle`, `SpotlightColor`, `SpotlightBeamColor`. The port matches them to receive nodes by the low 16 bits of the name hash.
 
 ### 8.3 Gimmick parts
 
-Parts files (`/Assets/sh/parts/chara/*/*.parts`) hold `EffectDescription` entities: `partName`,
-`connectDestinationSkelNames` / `CnpNames`, `offsetSkelPositions` / `CnpPositions`, `generalSkelParameters` /
-`CnpParameters`, `effectConnect`, `visibleModelWithEffect`, `createStartEffect`, `effectRandomSeed`, `effectKind`,
-`effectFileFromVfxFileLoader`, `effectFileFromFilePtr`. The gimmick records switch them by index:
+Parts files (`/Assets/sh/parts/chara/*/*.parts`) hold `EffectDescription` entities (PartsBuilder): `partName`, `connectDestinationSkelNames` / `CnpNames`, `offsetSkelPositions` / `CnpPositions`, `generalSkelParameters` / `CnpParameters`, `effectConnect` (+0xF0), `changeEffectConnectSetting` (+0xF1), `visibleModelWithEffect` (+0xF2), `createStartEffect` (+0xF3), `effectRandomSeed` (+0xF4), `effectKind` (+0xF8), `effectFileFromVfxFileLoader`, `effectFileFromFilePtr`.
+
+ShGimmick records drive them through a light group controller (0x95F170, vtable 0x1BCF210; list object 0x965EE0, vtable 0x1BCF810): the record registers part names in order (0x953260, confirmed) and switches them by index.
 
 | record | index 0 | 1 | 2 | retrigger |
 | --- | --- | --- | --- | --- |
 | CeilLamp | `CeilLampGlass` (glscom01b) | `CeilLampFlareLight` (flrlgt01: spot light and lens flare) | `CeilLampFlareLightRed` (flrlgt01red) | no |
 | Freezer | `FreezerBloodTop` (wtrbld02 at CNP_FRZ_OPEN) | `FreezerBloodEye` (viwbld01) | | yes |
 
-Connection matrix: bone world matrix times a translation by the offset in bone space; `effectKind` 1 then adds
-`general.xyz` in world space, 2 rotates by `general` as a quaternion. The random seed is `effectRandomSeed` + connection
-index when non-zero. `Face_Light` (Lisa, lgtoch01) is registered by nothing, so it is never shown.
+- On (0x125CB80): nothing when already on unless the entry retriggers (then off first); creates one instance per connection with the connection matrix; the random seed is `effectRandomSeed + connection index` when non-zero. Off (0x125D030) kills them; all off 0x125D180; is on (0x125D420) is true while the first instance is alive; update (0x125C930) copies the bone matrices to live instances every frame.
+- Connection matrix (0x87D610 bones, 0x87DC00 connect points): bone world matrix times a translation by the offset in bone space; `effectKind` 1 then adds `general.xyz` in world space, 2 rotates by `general` as a quaternion.
+- Switching (gameplay.md 9.1): init and `SetEnabled(true)` turn CeilLamp 0 and 1 on, `SetEnabled(false)` turns everything off; `StageLight` (0x12536B0) normal: 2 off, 1 on; red: 1 off, 2 on; off: 2 and 1 off (0 untouched). The Freezer turns 0 on at every flicker interval (retriggered) and 1 when the player looks into the fridge.
+- `Face_Light` (Lisa, lgtoch01) is registered by nothing and its hash appears nowhere in the eboot, so it is never shown. `createStartEffect` is read only by Tpp character code (0x702610, 0x792D90), not by ShGimmick.
 
-## 9. Unnamed properties with a known meaning
+## 9. Unnamed properties used by the port
 
 | hash | class | role | confidence |
 | --- | --- | --- | --- |
 | 0x94390DB1 | shapes | draw and sort particles one by one | likely |
 | 0x32FF2253, 0x91365199 | Sprite2D | screen width, height | confirmed |
-| 0xDE02160D | Sprite2D | blend mode (`blendMode`) | confirmed |
+| 0xDE02160D | Sprite2D | blend mode (brute-forced name `blendMode`) | confirmed |
 | 0x55389195 | Sprite2D | origin at the projected effect position | confirmed |
 | 0x4296121B | UVMap | UV rectangle | likely |
 | 0x1D121378, 0x9EC5A541 | UV nodes | grid width, height | likely |
 | 0xBA7C713E | CameraCorrection | offset toward the camera | likely |
 | 0x73D22AD2, 0x849D3E0C | CameraFollow | offset, yaw only | likely |
 | 0xAB96FA51, 0xFC08FF2F | DynamicLuminance | luminance at min and max exposure | likely |
-| 0x23E90E5F, 0xF6B16443, 0xBD8530BE, 0x3B831F9F, 0x62133294 | Liquid | reflection cube, refraction, Fresnel base, power, reflection scale | confirmed |
+| 0x23E90E5F, 0xF6B16443, 0xBD8530BE, 0x3B831F9F, 0x62133294 | Liquid | reflection cube, refraction, Fresnel base, power, reflection scale | confirmed (by shader use) |
 | 0x9B076750, 0x8F88FA93 | RandomLife | base life, range (base +- range) | confirmed |
-| 0xEF65426D, 0x05B462F3, 0xE6B68466, 0xD8F07EBD | Spread | length random range, rotation, fixed polar angle, even angles per batch | confirmed |
-| 0x506F061C | CameraAngle | axis | confirmed |
-| 0xA07B1E26 | SpotLight | mask texture | confirmed |
-| 0x733D3780 | SpotLight, PointLight | light area rotation (quaternion) | confirmed |
-| 0x2642E962, 0x430D5D92 | lens flare node | temperature, cone angle | confirmed |
-| 0xF856246F, 0x32CA14EC | lens flare node | occlusion depth tolerance, use the shape's limit distance | confirmed |
+| 0xEF65426D, 0x05B462F3, 0xE6B68466, 0xD8F07EBD | Spread | length random range, rotation, fixed polar angle, even angles per batch | confirmed (factory 0xB96B50, generator 0xB96F10) |
+| 0x506F061C | CameraAngle | axis | confirmed (0xB9FB30, 0xB9FBE0) |
+| 0xA07B1E26 | SpotLight | mask texture | confirmed (0xB84260) |
+| 0x733D3780 | SpotLight, PointLight | light area rotation (quaternion) | confirmed (spot reader 0xB84260, node +0x10) |
+| 0x2642E962, 0x430D5D92 | lens flare node | temperature, cone angle | confirmed (0x8FCA80, 0x907B40) |
+| 0xF856246F, 0x32CA14EC | lens flare node | occlusion depth tolerance, use the shape's limit distance | confirmed (0x8F0540, 0x8F3300) |
 | 0xFA4CEAA3 | Receive | global parameter | guess |
-| 0x1364CE7E, 0x6B880E78 | ScrollAnimation | initial rain angles in degrees | confirmed |
-| 0xACB0CDBB, 0xF1A308EB | ScrollAnimation | rain angle swings in degrees | confirmed |
+| 0x1364CE7E, 0x6B880E78 | ScrollAnimation | initial rain angles in degrees | confirmed, 0xB71F40 |
+| 0xACB0CDBB, 0xF1A308EB | ScrollAnimation | rain angle swings in degrees | confirmed, 0xB72840 |
 | 0xFB5568AF | NumLod | percent | likely |
-| 0x7241DEDA | ModelPrimitive | texcoord from the uv input | confirmed |
+| 0x7241DEDA | ModelPrimitive | texcoord from the uv input (flag bit 4 of 0xB8BED0, used in 0xB8DF70) | confirmed |
 
 ## 10. Lens flare files (.vfxlf)
 
-Fox2 data sets (`fox2.md`) loaded by name from `/Assets/sh/effect/vfx_data/lensflare/<lensFlareName>.vfxlf`:
-`fx_sh_lfrlgt02` (hallway sconce), `lfrlgt03` (corner and lobby ceiling lamps, maze C), `lfrlgt01` and `lfrlgt01red`
-(ceiling lamp), `lfrgun00` (hand light). The root `TppHandLightLensFlareRoot` holds `exposureBlend`, `needCollisionCheck`
-and the `shapes` list; every file also carries unlisted template shapes (Halo1, ArrayGost1, HSmear1), which are never
-drawn. A root or listed shape whose entity `flags` bit 0 is clear is not drawn either. No listed shape is a
-`TppLensFlareShapeArray` or `TppLensFlareShapeCircle` and no material sets `arcAlphaField` or `maskShape`, so of the
-flare shaders P.T. uses only `Draw2D_TppLensFlare`. Everything below is confirmed.
+Fox2 data sets (fox2.md) loaded by name from `/Assets/sh/effect/vfx_data/lensflare/<lensFlareName>.vfxlf`: `fx_sh_lfrlgt02` (hallway sconce), `lfrlgt03` (corner and lobby ceiling lamps, maze C), `lfrlgt01` and `lfrlgt01red` (CeilLamp), `lfrgun00` (hand light). The root `TppHandLightLensFlareRoot` holds `exposureBlend`, `needCollisionCheck` and the `shapes` list; every file also carries unlisted template shapes (Halo1, ArrayGost1, HSmear1), which are never drawn. A root or listed shape whose entity `flags` bit 0 is clear is not drawn either (0x8FCA80, 0x8F25D0): `lfrlgt01` lists `Flare2` with flags 0x80000006. No listed shape is a `TppLensFlareShapeArray` or `TppLensFlareShapeCircle` and no material sets `arcAlphaField` or `maskShape`, so of the flare shaders P.T. uses only `Draw2D_TppLensFlare` (0x8EFB50 picks `ArcAlpha` and `ShapeMsk` for those materials; `Field` and `AsyField` have no reference in the eboot). Everything below is confirmed in the eboot unless marked.
 
-Per light and frame:
+Per light and frame (0x907B40):
 
-- `d` = distance from the camera; cone factor `c` = (dot(direction to the camera, Z) - cos(a/2)) / (1 - cos(a/2)), 0
-  below, with Z the third row of the effect instance's matrix and `a` the node's cone angle.
-- Distance fade ((d - limit) / (base - limit))^2 clamped to [0, 1] and ratio base / d from the node's `baseDistance`
-  and `limitDistance`.
-- Visibility state: shielded when the light is behind the camera; every 6 frames a light in front becomes visible.
-  With `needCollisionCheck` (only `lfrgun00`) a camera-to-light raycast decides instead. Fade = 1 - min(1, shielded
-  time / `shieldFadeOutTime`); while visible it moves to 1 over `shieldFadeInTime`.
+- `d` = distance from the camera; cone factor `c` = (dot(direction to the camera, Z) - cos(a/2)) / (1 - cos(a/2)), 0 below, with Z the third row of the effect instance's matrix and `a` the node's cone angle (360 degrees gives (1 + dot) / 2).
+- Distance fade ((d - limit) / (base - limit))^2 clamped to [0, 1] and ratio base / d from the node's `baseDistance` and `limitDistance`; NDC and w of the light (0x8CC330).
+- Visibility state: shielded when the light is behind the camera; every 6 frames a light in front becomes visible. With `needCollisionCheck` (only `lfrgun00`) a camera-to-light raycast (0xBD4E60, every count / 100 + 3 frames, count = registered lights) decides instead. A new light starts shielded with both timers at 100 s. Fade = 1 - min(1, shielded time / `shieldFadeOutTime`); while visible it moves to 1 over `shieldFadeInTime`.
 
-Per shape:
+Per shape (0x8F25D0 gate, 0x8F3300):
 
 - Drawn while visible or still fading out, and only with `c` > 0.
-- Position `p` (NDC, y up): `offsetType` 0 `baseOffset`, 1 light + `baseOffset`, 2 light x `offsetScale`, 3 and 4 scale
-  only x or only y.
-- Fields at `p`, or at the light with `scaleFieldPickSunPositionFlag` / `alphaFieldPickSunPositionFlag`: distance
-  max(|x|, |y|) for `shapeType` 0, else sqrt(x^2 + (0.5625 y)^2); `innerValue` below `innerScale`, then interpolated to
-  `centerValue` at `centerScale` and `outerValue` at `outerScale` (`interpType` 0 linear, 1 cosine, 2 t^2, 3 1 - (1 - t)^2;
-  all P.T. fields use 0).
-- Rate graphs (11 samples over [0, 1], clamped) at `c`: `angleScaleGraphX/Y` scale the size, `angleAlphaGraph` the alpha.
-- alpha = alpha field x fade x angle graph x root colour red; size = scale fields x angle graphs; then `distanceScaling`
-  1: size x base / d; 2: alpha x distance fade; 3: size x base / d x saturate((limit - d) / (limit - base)).
-- Rotation: `rotateType` 1 -atan2(p.y, p.x), 2 +atan2, 3 screen-space rotation fields (unused in P.T.), plus
-  `baseRotate`.
+- Position `p` (NDC, y up): `offsetType` 0 `baseOffset`, 1 light + `baseOffset`, 2 light x `offsetScale`, 3 and 4 scale only x or only y.
+- Fields (0x8FA8A0) at `p`, or at the light with `scaleFieldPickSunPositionFlag` / `alphaFieldPickSunPositionFlag`: distance max(|x|, |y|) for `shapeType` 0, else sqrt(x^2 + (0.5625 y)^2) (the constant of 0x8CC320); `innerValue` below `innerScale`, then interpolated to `centerValue` at `centerScale` and `outerValue` at `outerScale` (`interpType` 0 linear, 1 cosine, 2 t^2, 3 1 - (1 - t)^2, table 0x1BC9E20; all P.T. fields use 0). `reverse` is not read. `TppLensFlareAsymmetricField` (vertical set) is not referenced by a listed shape.
+- Rate graphs (0x8F7B00, 11 samples over [0, 1], clamped) at `c`: `angleScaleGraphX/Y` scale the size, `angleAlphaGraph` the alpha.
+- alpha = alpha field x fade x angle graph x root colour red; size = scale fields x angle graphs; then `distanceScaling` 1: size x base / d; 2: alpha x distance fade; 3: size x base / d x saturate((limit - d) / (limit - base)), limit / d when limit <= base. With the node flag 0x32CA14EC the shape's `limitDistance` replaces the node's (mode 2 is then 0 or 1 up to base and ((d - limit) / (base - limit))^2 beyond).
+- Rotation: `rotateType` 1 -atan2(p.y, p.x), 2 +atan2, 3 `screenSpaceRotField` x (x `screenSpaceRotSpeedX` + y `SpeedY`) (unused in P.T.), plus `baseRotate`.
 
-Quad: screen space [0, 1] with y down; corners at rotation + (-135, -45, 135, 45) degrees with UV (0, 0), (1, 0),
-(0, 1), (1, 1), offset (A cos, B sin) from the centre with A = 0.25 x `width` x size x and B = 0.25 x `height` x
-size y / 0.5625 (so equal pixels). Root colour: with `exposureBlend` b > 0 (only `lfrgun00`) c = exposure x 10.267 x the
-temperature colour of the node's temperature and `lux`, normalized when longer than 1; colour = mix(white, c, b), of
-which only red is used.
+Quad (0x8F4020): screen space [0, 1] with y down; corners at rotation + (-135, -45, 135, 45) degrees with UV (0, 0), (1, 0), (0, 1), (1, 1), offset (A cos, B sin) from the centre with A = 0.25 x `width` x size x (screen widths) and B = 0.25 x `height` x size y / 0.5625 (screen heights, so equal pixels); size also scales by the shape transform's scale (1 in every file, likely). Vertex (0xC72590): position and UV as truncated halves, colour as truncated RGBA8 holding the light's screen position (0.5, 0.5 off screen) and the alpha x `baseColor.a`; position z holds the light's w, 0 off screen (|x| or |y| over 1), so an off-screen light is never occluded; u packs floor(15 r) x 16 + floor(15 g) + 0.9375 b, so red and green get 4 bits and blue what the half keeps (3 bits for red of 8/15 and more).
 
-Draw: a 2D layer after the post chain, additive, one batch per material; texture 0 the shape texture, texture 1 the
-scene depth. The pixel shader takes three depth taps around the light pixel, v = sum of saturate((tolerance + scene
-depth - light w) / tolerance); rgb = texture x colour, alpha = texture alpha x vertex alpha x (1 - (1 - v/3)^2).
+Root colour (0x8FCA80, 0xCAB7C0, 0xCAB140): with `exposureBlend` b > 0 (only `lfrgun00`) c = e x 10.267 x the temperature colour of the node's temperature and `lux`, with e the exposure of 0xCAE7C0 (rendering.md 12.8); c is normalized when longer than 1 and the light is hidden when |c|^2 < 0.001 and b >= 1; colour = mix(white, c, b), of which only red is used.
 
-In the first corridor the sconce (`lfrlgt02`: `Flare1` width 1 and alpha 0.6, `Flare2` width 0.25 and alpha 0.85, mode 3,
-limit 20 m, tolerance 0.3 m) gives a core on the lamp and a soft halo of 0.4 screen widths radius at 3 m.
+Draw (0x8FB140, 0x8F0540): a Draw2D layer after the post chain with blend command 0x1B = 2 (additive, as `FxSprite2DShapeNode`), one batch per material; texture 0 the shape texture (no sRGB flag), texture 1 the scene depth, `m_materials[1].x` = max(0.001, depth tolerance of the batch's first light). `Draw2D_TppLensFlare` ps: three taps at the light pixel + (0.69, -3.94), (-3.76, 1.37), (3.06, 2.57), v = sum of saturate((tol + scene depth - light w) / tol); rgb = texture x colour, alpha = texture alpha x vertex alpha x (1 - (1 - v/3)^2).
+
+Result in the first corridor: the sconce (`lfrlgt02`: `Flare1` width 1 and `baseColor` alpha 0.6, `Flare2` width 0.25 and alpha 0.85, mode 3, node limit 20 m, tolerance 0.3 m) gives a core on the lamp and a soft halo of 0.4 screen widths radius at 3 m (base / d = 1.6). Its `Gost1` (width 2, offset -1.5, alpha 0.1, alpha field at its own position) is a wash several screen widths across whose alpha is 0 while the lamp is more than 0.47 (box distance) from the screen centre and at most 0.02 in the corridor poses of the captures.
+
+## 11. Open points
+
+- Lens flares: the `needCollisionCheck` raycast (hand light) is not ported, the ray counts as clear inside the cone and only the depth taps occlude; after a camera cut (over 3 m or 45 degrees in one tick) the port settles the visibility state instead of fading over `shieldFadeInTime`/`OutTime`, as it settles the exposure; the order of the flare layer against film grain and screen distortion in the Draw2D pass is not traced (the port draws it after both); the port keeps float positions and uses the view's aspect ratio where the eboot has the constant 0.5625.
+- Liquid: reflection cubes wait for cube texture support in the texture manager (the reflection term is 0 until then); the lights' specular terms and the fog volume of `Primitive_Liquid2Final` are not evaluated.
+- Lit particles take one light block per draw (the box around the draw's quads stands for the draw object's world box; a shape with 0x94390DB1 draws each particle as its own draw object, so each such particle has its own block: ending_fx_trace's 976 `Prim_Poly_LitDP3_NS_VF` draws over 20 frames are all one quad, with `m_materials[0]` = (1, 0.25, 0.25, 0) and `m_localParam[1]` = 0 in every one, so the directional term is 0 in P.T.) and the port evaluates the three lights at each particle's centre rather than per pixel; `PT_VFX_LIT_LEGACY=1` restores the former lighting (probe band 0 per draw, the three strongest point lights per particle).
+- `updateType`, `boundingBox*` and the LOD fields of lights are not used.
+- Blending: the original blends effects in gamma space on the 8-bit scene buffer, the port blends linear values on the HDR target (additive glows over lit surfaces are weaker at their cores; rendering.md 13.5).
+- Wind: local wind areas (0x8227D0) are not ported; P.T. has only the ending's WindGlobal.
+- FxCameraAngleVectorNode: 0xB9FBE0 takes row 2 of the context's camera matrix, the row that FxCameraFollowVectorNode (0xB9AF30) scales by its z offset and that therefore points forward (the view blood `viwbld01` sits 0.15 m along it). The only user, the ending's hand light `fx_sh_lgthnd01_s5`, matches ending_street only when the angle is taken against the back axis: with the forward axis its lens sprite (`fx_flrgunlgt01`, alpha 0.3 up to 19 degrees) covers the view in the point of view shots 2900 to 3000, which the capture does not show. Either the effect's local Z points the other way than in the port while its light still lands where the capture has it, or the context differs; both give the same result for this effect.
+- Model particles: the triangle depth sort (0x0E49C84B, 0xB8F1B0) is not ported; no P.T. file sets it.

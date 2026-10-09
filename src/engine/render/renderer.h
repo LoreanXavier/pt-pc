@@ -26,17 +26,23 @@ struct RendererSettings {
     uint32_t height = 900;
 };
 
+// The VR mode's outputs of one frame (docs/vr.md): images of the OpenXR runtime's swapchains that EndFrame fills besides the
+// window or the headless target. Colour goes in as linear values (an sRGB swapchain encodes them again on write).
 struct XrTarget {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent2D extent{};
+    // the part of the frame the target shows: uv offset (xy) and size (zw)
     glm::vec4 rect{0.0f, 0.0f, 1.0f, 1.0f};
 };
 
 struct XrFrame {
+    // the composited frame (fade, brightness, film grain as the window's), cropped to the target's rect
     const XrTarget* eye = nullptr;
+    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
     const XrTarget* hud = nullptr;
+    // the overlay over the frame as without VR (the virtual screen), else only on the hud
     bool overlay_on_frame = false;
 };
 
@@ -45,6 +51,7 @@ public:
     bool Init(SDL_Window* window, const RendererSettings& settings);
     void Shutdown();
 
+    // present: whether this frame goes to the window (VR draws the second eye without presenting)
     bool BeginFrame(bool present = true);
     void EndFrame(bool draw_ui);
     void Resize(uint32_t width, uint32_t height);
@@ -69,12 +76,16 @@ public:
     float grain_offset[2] = {0.0f, 0.0f};
     std::function<void(VkCommandBuffer, VkImageView, VkExtent2D)> overlay;
     std::function<const vk::Image*(uint32_t)> hudless;
+    // frame generation's hooks, applied before swapchain creation and image acquisition
     std::function<FrameStartAction(bool)> frame_start;
     std::function<bool()> swapchain_failed;
 
     void SetGrainNoise(VkImageView view);
 
+    // VR: a fixed render size independent of the window (the eye images), applied at the next BeginFrame; {0, 0} follows the
+    // window again. The window then shows the frame scaled to fit.
     void SetRenderExtent(VkExtent2D extent) { render_extent_ = extent; }
+    // VR: the swapchain images the next EndFrame also fills (only for that frame)
     void SetXrFrame(const XrFrame& frame) { xr_frame_ = frame; xr_pending_ = true; }
     static constexpr VkExtent2D kHudExtent{1920, 1080};
 
@@ -126,6 +137,7 @@ private:
     VkPipeline composite_pipeline_ = VK_NULL_HANDLE;
     VkPipeline final_composite_pipeline_ = VK_NULL_HANDLE;
 
+    // VR (SetRenderExtent, SetXrFrame)
     VkExtent2D render_extent_{0, 0};
     bool presenting_ = false;
     XrFrame xr_frame_;

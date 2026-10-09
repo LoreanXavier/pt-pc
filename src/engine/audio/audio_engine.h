@@ -26,6 +26,7 @@ private:
     static void Callback(void* user, SDL_AudioStream* stream, int additional, int total);
 
     SDL_AudioStream* stream_ = nullptr;
+    uint32_t device_id_ = 0;
     RenderFunction render_;
     std::vector<float> buffer_;
     uint32_t channels_ = 2;

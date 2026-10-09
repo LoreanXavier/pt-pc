@@ -19,6 +19,7 @@ char Lower(char c) {
     return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 }
 
+// UTF-8 whatever the system code page (a path's string() throws on Windows for names outside it)
 std::string Utf8(const std::u8string& text) {
     return std::string(reinterpret_cast<const char*>(text.data()), text.size());
 }
@@ -29,6 +30,7 @@ std::string LowerCopy(std::string_view text) {
     return out;
 }
 
+// A JSON reader for mod.json: one object of plain values; comments, trailing commas and unknown keys are let through
 class JsonReader {
 public:
     explicit JsonReader(std::string_view text) : text_(text) {
@@ -198,6 +200,7 @@ private:
         return false;
     }
 
+    // nested objects and arrays are skipped (no key of mod.json takes one)
     bool SkipNested(char open, char close) {
         int depth = 0;
         while (!AtEnd()) {
@@ -285,6 +288,7 @@ std::string AssetKey(std::string_view path) {
     } else {
         return {};
     }
+    // "a//b" and "./" spellings of the same file
     std::string out;
     out.reserve(rest.size());
     size_t i = 0;
@@ -447,6 +451,7 @@ std::optional<std::vector<uint8_t>> ReadDiskFile(const std::filesystem::path& pa
     if (size < 0) {
         return std::nullopt;
     }
+    // no game file comes near this; a larger override is refused with a reason instead of an allocation that fails
     constexpr std::streamoff kMaxFile = std::streamoff(1) << 30;
     if (size > kMaxFile) {
         LogError("mods: {} is {} bytes, more than the {} an override may have; the game's own file is used", pt::os::PathToUtf8(path), size, kMaxFile);

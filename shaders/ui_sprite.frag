@@ -63,6 +63,10 @@ vec4 ShadeText(UiDraw d) {
     return vec4(in_color.rgb, coverage * in_color.a);
 }
 
+// Draw2D_Border, the subtitles' technique: the glyph cache at the pixel and 1.2 pixels to either side across and down (the UV's screen
+// derivatives, scaled by d.extra.z so the taps stay 1.2 pixels of the original's 1080p, each offset clamped to +-d.extra.xy, 4 texels).
+// A pixel the glyph covers at all is opaque, grey by its coverage; a pixel beside one is black with alpha (the mean of its covered
+// neighbours)^0.4. COLOR0 is not read, so the text is white.
 vec4 ShadeBorder(UiDraw d) {
     vec2 dx = dFdxFine(in_uv) * d.extra.z;
     vec2 dy = dFdyFine(in_uv) * d.extra.z;
@@ -87,6 +91,7 @@ vec3 SceneDisplay(vec2 uv, UiDraw d) {
 
 vec4 ShadeNoise(UiDraw d) {
     float phase = d.extra.x;
+    // the noise textures span the original's 16:9 frame: d.extra2.z is the window's width in such frames (0 taken as 1)
     float across = d.extra2.z > 0.0 ? d.extra2.z : 1.0;
     vec2 noise_uv = vec2((in_uv.x - 0.5) * across + 0.5, in_uv.y);
     vec4 normal = Sample(d.textures.y, vec2(phase + noise_uv.x, d.extra.y + noise_uv.y));

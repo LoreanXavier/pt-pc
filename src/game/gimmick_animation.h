@@ -48,6 +48,7 @@ public:
 
     float MotionSeconds(std::string_view key);
     bool MotionLoops(std::string_view key);
+    // 0x1253590: SetEnabled(false) stops the sounds of the record (sound control 0x95CFB0), the bag's talk included
     void StopSounds(GimmickType type);
     void ResetSession();
     void Update(float dt);
@@ -55,6 +56,8 @@ public:
     bool ConnectPointWorld(GimmickType type, std::string_view name, glm::vec3& out) const;
     bool BoneWorld(GimmickType type, std::string_view bone, glm::vec3& out) const;
     bool RigRoot(GimmickType type, glm::vec3& translation, glm::quat& rotation) const;
+    // RIG_ROOT at the first and the last frame of the current motion when its root unit loops (the key stepping of
+    // 0xAD4A90 and 0xAD5E70 carries the root across the loop seam); false when it does not loop
     bool RigRootLoop(GimmickType type, glm::vec3& start_translation, glm::quat& start_rotation, glm::vec3& end_translation,
                      glm::quat& end_rotation) const;
     const anim::GaniMotion* Motion(std::string_view key);

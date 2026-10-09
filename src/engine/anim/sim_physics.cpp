@@ -17,12 +17,17 @@
 namespace pt::anim {
 namespace {
 
+// No engine parameter of the file sets these (SimEngineOnPhysicsParam has only isEnableGeoCheck, convertMoveToWind and the
+// LOD range): the step is the original's 60 Hz motion rate, the rest are the solver's own.
 constexpr float kStep = 1.0f / 60.0f;
 constexpr int kMaxSubsteps = 8;
 constexpr int kIterations = 4;
 constexpr float kGravity = 9.8f;
+// a gap longer than this restarts from the animated pose instead of integrating it
 constexpr float kMaxFrameTime = 0.25f;
+// a keyframed body that jumps this far in one frame is a cut or a teleport: restart from the animated pose
 constexpr float kTeleportDistance = 1.0f;
+// wind acceleration per m/s of air speed relative to the body, times SimWindControlParam.coefficient
 constexpr float kWindDrag = 2.0f;
 
 glm::vec3 g_wind{0.0f};
@@ -56,6 +61,7 @@ glm::vec3 Perpendicular(const glm::vec3& v) {
     return glm::normalize(glm::cross(v, a));
 }
 
+// the direction d turned toward the cone axis onto the cone of half angle acos(cos_limit)
 glm::vec3 ClampToCone(const glm::vec3& axis, const glm::vec3& d, float cos_limit) {
     glm::vec3 perp = d - axis * glm::dot(d, axis);
     const float length = glm::length(perp);
@@ -71,6 +77,7 @@ glm::vec3 ClosestOnSegment(const glm::vec3& p, const glm::vec3& a, const glm::ve
     return a + ab * t;
 }
 
+// the hit shape's core segment (capsule) or point (sphere) in the frame of its body
 void HitSegment(const SimBody& body, const glm::vec3& position, const glm::quat& rotation, glm::vec3& a, glm::vec3& b) {
     const glm::vec3 center = position + rotation * body.shape.offset;
     if (body.shape.type == 5) {
@@ -145,6 +152,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         return fail("no SimOnPhysics or PhObjectDesc");
     }
 
+    // PhObjectDesc.bodies: each PhRigidBodyParam followed by its PhPrimitiveShapeParam
     std::unordered_map<const fox2::Entity*, int> rigid_index;
     std::vector<const fox2::Entity*> shapes;
     if (const fox2::Property* list = file.FindProperty(*desc, "bodies")) {
@@ -185,6 +193,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         bodies_[i].radius = bodies_[i].shape.size.x;
     }
 
+    // constraints: bodyIndices holds (A, B) per constraint as rigid body ordinals
     std::unordered_map<const fox2::Entity*, int> constraint_index;
     if (const fox2::Property* list = file.FindProperty(*desc, "constraints")) {
         for (size_t i = 0; i < list->Count(); ++i) {
@@ -205,6 +214,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         }
     }
 
+    // association units: the bone of each body and its offset
     size_t bound = 0;
     for (const char* group : {"simRootBones", "simBones", "simTransBones", "simHitBones"}) {
         const bool hit = std::strcmp(group, "simHitBones") == 0;
@@ -235,6 +245,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         }
     }
 
+    // wind control and engine parameters
     std::unordered_set<std::string> wind_bones;
     if (const fox2::Property* controls = file.FindProperty(*sim, "controls")) {
         for (size_t i = 0; i < controls->Count(); ++i) {
@@ -259,6 +270,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         b.wind = b.dynamic && wind_bones.contains(b.bone);
     }
 
+    // the parent of every dynamic body: the B of the constraint whose A it is (the unit's constraint when it names one)
     const int count = static_cast<int>(bodies_.size());
     for (size_t c = 0; c < constraints_.size(); ++c) {
         const SimConstraint& k = constraints_[c];
@@ -272,6 +284,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         a.parent = k.b;
         a.constraint = static_cast<int>(c);
     }
+    // parents before children; dynamic bodies without a usable parent chain stay out
     std::vector<int> depth(bodies_.size(), -1);
     auto depth_of = [&](auto&& self, int i, int guard) -> int {
         if (depth[static_cast<size_t>(i)] != -1 || guard > count) {
@@ -295,6 +308,8 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
     }
     std::stable_sort(order_.begin(), order_.end(), [&](int a, int b) { return depth[static_cast<size_t>(a)] < depth[static_cast<size_t>(b)]; });
 
+    // the stick of each dynamic body: from its joint to its only simulated child's joint (a chain link), else through the
+    // body's centre to the mirror of the joint (the end links hang 2 x bodyOffsetPos below their bone)
     std::vector<int> children(bodies_.size(), 0);
     std::vector<int> only_child(bodies_.size(), -1);
     for (int i : order_) {
@@ -322,6 +337,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
         b.length = glm::length(b.end_local - b.pivot_local);
         b.direction_local = (b.end_local - b.pivot_local) / b.length;
         b.relative_rotation = glm::normalize(parent_inverse * b.bind_rotation);
+        // the cone: refA of the child turned onto refB of the parent, applied to the stick's bind direction
         const glm::vec3 direction = b.bind_rotation * b.direction_local;
         const glm::vec3 axis = RotationBetween(c.ref_a, c.ref_b) * direction;
         b.cone_axis_parent = glm::normalize(parent_inverse * axis);
@@ -334,6 +350,7 @@ bool SimRig::Load(std::string_view name, std::span<const uint8_t> data, std::str
                                  glm::length(b.pivot_parent - parent.end_local) < 2e-3f;
     }
 
+    // keyframed hit bodies and the distance each stick end keeps from them
     for (int i = 0; i < count; ++i) {
         const SimBody& b = bodies_[static_cast<size_t>(i)];
         if (b.hit && !b.dynamic && !b.bone.empty()) {
@@ -395,6 +412,7 @@ void SimPhysics::Bind(const SimRig& rig, const Skeleton& skeleton) {
     end_.assign(rig.Order().size(), glm::vec3(0.0f));
     previous_end_ = end_;
     velocity_ = end_;
+    // skeleton bones parents first, for moving the bones below the simulated ones
     const size_t n = skeleton.Size();
     std::vector<int> depth(n, -1);
     for (size_t i = 0; i < n; ++i) {
@@ -442,6 +460,10 @@ void SimPhysics::Snap(const SimRig& rig, const std::vector<glm::mat4>& world, co
     warm_ = false;
 }
 
+// One Gauss-Seidel visit of a dynamic body: the joint distance (both stick ends by mass when the joint is the parent's stick
+// end), the keyframed hit shapes, the cone limit around the parent's axis, then the body's frame from its stick with the
+// twist of its parent (stopTwistFlag). The closing pass (constrain false, parents first) keeps the stick length and the
+// cone only, so every link ends rigid and inside its limit after the children moved the parents' ends.
 void SimPhysics::Solve(const SimRig& rig, size_t k, const std::vector<int>& slot, bool constrain) {
     const auto& bodies = rig.Bodies();
     const size_t i = static_cast<size_t>(rig.Order()[k]);
@@ -460,6 +482,7 @@ void SimPhysics::Solve(const SimRig& rig, size_t k, const std::vector<int>& slot
     glm::vec3 delta = end - pivot;
     float length = glm::length(delta);
     if (!constrain) {
+        // the closing pass: the frame from the stick and the cone, after the children moved the stick ends
     } else if (length < 1e-6f) {
         end = pivot + follow * b.direction_local * b.length;
     } else {
@@ -492,6 +515,7 @@ void SimPhysics::Solve(const SimRig& rig, size_t k, const std::vector<int>& slot
         }
     }
 
+    // the cone last, as a hard limit: in the closing pass too, against the parent's final frame
     if (b.cone_cos > -1.0f) {
         const glm::vec3 axis = parent.rotation * b.cone_axis_parent;
         const glm::vec3 offset = end - pivot;
@@ -542,6 +566,7 @@ bool SimPhysics::Step(const SimRig& rig, const Skeleton& skeleton, std::vector<g
     for (size_t k = 0; k < order.size(); ++k) {
         slot[static_cast<size_t>(order[k])] = static_cast<int>(k);
     }
+    // substeps of at most kStep that end on this frame's pose; the keyframed bodies move along between the two frames
     const int steps = dt > 1e-6f ? std::clamp(static_cast<int>(std::ceil(dt / kStep - 1e-3f)), 1, kMaxSubsteps) : 1;
     const float h = dt > 1e-6f ? dt / static_cast<float>(steps) : 0.0f;
     const glm::vec3 gravity(0.0f, -kGravity, 0.0f);
@@ -562,6 +587,7 @@ bool SimPhysics::Step(const SimRig& rig, const Skeleton& skeleton, std::vector<g
                 glm::vec3 v = velocity_[k] * std::exp(-b.linear_damping * h);
                 glm::vec3 a = b.no_gravity ? glm::vec3(0.0f) : gravity;
                 if (b.wind) {
+                    // convertMoveToWind: the air acts on the body's velocity through it, not only on the wind
                     const glm::vec3 air = rig.ConvertMoveToWind() ? wind - v : wind;
                     a += air * (kWindDrag * rig.WindCoefficient());
                 }
@@ -594,6 +620,7 @@ bool SimPhysics::Step(const SimRig& rig, const Skeleton& skeleton, std::vector<g
         }
     }
 
+    // the bones of the simulated bodies, then every other bone below them moved with its parent
     const glm::mat4 to_model = glm::inverse(model_world);
     std::vector<glm::mat4> delta(world.size(), glm::mat4(1.0f));
     std::vector<uint8_t> moved(world.size(), 0);

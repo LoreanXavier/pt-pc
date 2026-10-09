@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
         failures += !ok;
     };
 
+    // Import the whole ordinary data tree, including less common siblings and caches.
     const auto legacy = root / "legacy";
     const auto dest = root / "game" / "data";
     Write(legacy / "pt.ini", "legacy settings");
@@ -52,12 +53,14 @@ int main(int argc, char** argv) {
           "destination settings win and migrated file contents are preserved");
     check(Read(legacy / "PT_Save_Data0") == "legacy save", "legacy data remains untouched");
 
+    // Destination wins, and the marker prevents a later import from resurrecting reset saves.
     Write(dest / "pt.ini", "new settings");
     fs::remove(dest / "PT_Save_Data0");
     report = pt::platform::PrepareUserDataDirectory(dest, legacy);
     check(report.success && Read(dest / "pt.ini") == "new settings" && !fs::exists(dest / "PT_Save_Data0"),
           "repeat call preserves destination and does not resurrect deleted save");
 
+    // A fresh install with no legacy tree records the decision once, preventing later unrelated imports.
     const auto fresh = root / "fresh" / "data";
     const auto absent = root / "not-yet-present";
     report = pt::platform::PrepareUserDataDirectory(fresh, absent);
@@ -66,6 +69,7 @@ int main(int argc, char** argv) {
     check(report.success && !report.migrated_legacy && !fs::exists(fresh / "PT_Save_Data0"),
           "missing legacy path is marked checked and later unrelated data is ignored");
 
+    // Valid native settings and save files survive migration and remain loadable by game code.
     const auto nativeLegacy = root / "native-legacy";
     const auto nativeDest = root / "native-game" / "data";
     pt::AppSettings oldSettings;
@@ -92,6 +96,7 @@ int main(int argc, char** argv) {
           loadedSave && loadedSave->progress.floor == "f050",
           "migrated settings and save files restore through native loaders");
 
+    // A conflict that prevents publication must leave the marker absent; retry must finish cleanly.
     const auto retryDest = root / "retry" / "data";
     const auto retryLegacy = root / "retry-legacy";
     Write(retryLegacy / "nested" / "save", "retry save");
@@ -119,6 +124,7 @@ int main(int argc, char** argv) {
     check(report.success && !report.migrated_legacy && Read(sameDest / "PT_Save_Data0") == "already in destination",
           "identical legacy and destination paths do not self-migrate");
 
+    // A destination that is a file cannot pass the actual write probe.
     const auto blocked = root / "blocked";
     Write(blocked, "not a directory");
     report = pt::platform::PrepareUserDataDirectory(blocked, legacy);
@@ -136,6 +142,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // Symlinked directories must never be traversed into or imported.
     const auto linkDest = root / "links" / "data";
     const auto linkLegacy = root / "link-legacy";
     Write(root / "outside" / "secret", "outside");

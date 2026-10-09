@@ -15,6 +15,7 @@ struct Entry {
 
 };
 
+// English; the other languages are in engine/core/<language>_text.h (localized::Menu)
 constexpr Entry kTexts[] = {
     {"pc_microphone_trigger_assign", {"Assign {input} for the microphone trigger"}},
     {"pc_note_microphone_trigger", {"Optional input alternative to the microphone. Keyboard and both controller triggers activate it only while the game is listening."}},
@@ -192,6 +193,7 @@ constexpr Entry kTexts[] = {
     {"pc_quit", {"Quit"}},
     {"pc_nav_columns", {"Tab / L1 / R1: switch column"}},
     {"pc_quit_confirm", {"Quit?"}},
+    // the save dialogs (game_ui.cpp): the PS4 shows its own system dialog when the storage is full, the PC this text
     {"pc_save_no_space", {"There is not enough free space to save the game.\nFree some space, then close this message to try again."}},
     {"pc_ok", {"OK"}},
     {"pc_note_quit", {"Exit the game."}},

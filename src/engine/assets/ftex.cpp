@@ -82,6 +82,7 @@ std::optional<std::vector<uint8_t>> ReadTextureFile(const QarArchive& qar, const
 
 bool LoadFtex(const QarArchive& qar, std::string_view path, FtexTexture& out) {
     const std::string stem = FtexStem(path);
+    // a mod's .ftex brings its own .ftexs: the game's streams belong to the game's header
     auto header = mods::ReadOverride(stem + ".ftex");
     const bool modded = header.has_value();
     if (!modded) {
@@ -259,6 +260,8 @@ bool DecodeFtexLevel(const FtexTexture& ftex, uint32_t level, std::vector<uint8_
     return true;
 }
 
+// Opaque BC1 (c0 > c1, four colours): the endpoints span the colours along their principal axis, then least squares refines them for the
+// chosen indices
 void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
     float px[16][3];
     float mean[3] = {0.0f, 0.0f, 0.0f};
@@ -319,6 +322,7 @@ void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
             palette[2][i] = static_cast<uint8_t>((2 * palette[0][i] + palette[1][i]) / 3);
             palette[3][i] = static_cast<uint8_t>((palette[0][i] + 2 * palette[1][i]) / 3);
         }
+        // the share of endpoint 0 in the palette entries 0 to 3
         constexpr float kWeight[4] = {1.0f, 0.0f, 2.0f / 3.0f, 1.0f / 3.0f};
         float aa = 0.0f;
         float ab = 0.0f;
@@ -372,6 +376,7 @@ void EncodeBc1Block(const uint8_t* rgba, uint8_t* out) {
     }
 }
 
+// The alpha half of a BC3 block, eight-value mode between the lowest and highest alpha
 void EncodeBc3AlphaBlock(const uint8_t* rgba, uint8_t* out) {
     uint8_t lo = 255;
     uint8_t hi = 0;

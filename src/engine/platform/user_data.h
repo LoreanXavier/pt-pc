@@ -15,8 +15,11 @@ struct UserDataReport {
     std::vector<std::string> warnings;
 };
 
+// Creates destination, verifies it is writable, and imports missing files from legacy once.
+// Existing destination files win. A migration marker prevents later imports from resurrecting
+// reset saves or importing unrelated data after the game directory has been copied elsewhere.
 UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination,
                                        const std::filesystem::path& legacy,
                                        bool migrate_legacy = true);
 
-}
+} // namespace pt::platform

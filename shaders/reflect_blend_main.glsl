@@ -1,5 +1,10 @@
+// The local reflection blend (rendering.md 12.16): reflect_blend.frag, and reflect_blend_rt.frag with PT_RT_REFLECTIONS (12.21).
+// With PT_REFLECT_LAYER (reflect_layer.frag, reflect_layer_rt.frag; a PC addition for the temporal upscalers, 12.16) the pass
+// writes the reflection on its own instead of mixing it into the scene: premultiplied colour and amount, and where its history
+// lies, for reflect_temporal.frag, which accumulates it and does the mix.
 #include "common.glsl"
 #ifdef PT_RT_REFLECTIONS
+// the traced hits' colour (reflect_make_rt.frag's second target), through the ray tracing set
 layout(set = 2, binding = 2) uniform sampler2D rt_reflection_color;
 #include "reflection_mix.glsl"
 #endif
@@ -23,10 +28,15 @@ layout(location = 0) out vec4 out_color;
 #ifdef PT_REFLECT_LAYER
 layout(location = 1) out vec4 out_history;
 
+// out_color with no reflection: amount 0 on a floor (the temporal pass may keep its history there), -1 on anything else
 vec4 NoReflection(vec3 N, vec3 plane) {
     return vec4(0.0, 0.0, 0.0, dot(N, plane) >= 0.9 ? 0.0 : -1.0);
 }
 
+// Where the reflection at uv was last frame, as an offset from uv: the reflected point's virtual image (the mirror image of the
+// hit across the horizontal floor) lies on the pixel's own ray, as far as the floor plus the hit's distance from the floor point,
+// and the previous unjittered view projection (pass.m) puts it on last frame's screen. The offset follows the upscaler's motion
+// convention (unjittered now to unjittered then). z: 1 for a reflection's own motion, 0 for the floor's (no hit to go by).
 vec4 HistoryOffset(View v, vec2 uv, vec2 hit_uv, bool has_hit) {
     vec2 ndc = uv * 2.0 - 1.0;
     vec3 P = ReflectionViewPosition(ndc, v.projection_param.xy, v.jitter.xy, ViewZ(v, ReflectionFloorDepth(v, uv)));
@@ -66,6 +76,7 @@ void main() {
     vec4 refl = ImgLod(IMG_REFMAP, SMP_LINEAR_WRAP, (uv + 0.15 * vec2(-tilt.x, tilt.y)) / map_scale, 0.0);
     float valid = refl.y < 0.0 || refl.y > 1.0 || refl.x > 1.0 || refl.x < 0.0 ? 0.0 : refl.w;
 #ifdef PT_RT_REFLECTIONS
+    // traced hits off screen: their colour, premultiplied by their weight (reflect_make_rt.frag)
     vec4 traced = textureLod(rt_reflection_color, (uv + 0.15 * vec2(-tilt.x, tilt.y)) / map_scale, 0.0);
     if (!(valid > 0.0) && !(traced.a > 1.0e-4)) {
 #ifdef PT_REFLECT_LAYER
@@ -110,6 +121,7 @@ void main() {
     amount = max(amount, 0.0);
     out_color = vec4(min(hit, vec3(1.0)) * amount, amount);
 #ifdef PT_RT_REFLECTIONS
+    // a traced hit off screen has no screen position: its history follows the floor
     bool on_screen = refl.w > 1.0e-4 && refl.z > 0.0 && all(greaterThanEqual(coordinate, vec2(0.0))) && all(lessThanEqual(coordinate, vec2(1.0)));
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * coordinate - 1.0), on_screen);
 #else

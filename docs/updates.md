@@ -41,8 +41,25 @@ Users still on 1.0.1 after the compatibility asset is removed will need a manual
 
 ## Behaviour
 
-- Game: one detached thread starts right after the settings are read, in windowed runs only. `--no-update-check` or
-  `[network] check_updates = 0` in pt.ini turns it off. When a newer version exists, the main PC settings page shows
-  "Version X is available (this is Y)" in its corner line, and pt.log gets the URL and notes.
-- Installer: the Windows setup shows "Version X is available: URL" under the options once the answer is in; the Linux
-  setup prints it after the install. `pt_setup.exe --check-update <file>` writes the result to a file.
+- Game: `pt::update::Checker` starts one detached thread right after the settings are read (windowed runs only; headless
+  runs and `--no-update-check` never send a request; `[network] check_updates = 0` in pt.ini turns it off). The game loop
+  never touches the network: it polls the result once a frame until the thread is done. When a newer version exists, pt.log
+  gets the URL and notes, and the game shows a notice once per run: one line, "Version X is available (this is Y)" (the
+  text key `pc_update_available`, in the subtitle language), in the PC system font, small and muted, centred at the top
+  of the picture below the letterbox's bar (`GameUi::DrawUpdateNotice`). It fades in over 0.5 s, stays 6 s and fades out
+  over 1 s. It shows only in the game proper (controller step 15, so not at the first start's option screen and preface,
+  the game over, the ending and the credits), with no cutscene camera, outside the Museum's theater and the photo mode,
+  with the pause menu and the PC settings page counting as the game; until then it waits. It never shows in VR. The main
+  PC settings page keeps the same text in its small muted corner line for as long as the game runs.
+- Test: `--fake-update <version>` makes the check answer that version without a request (headless too); a version not
+  newer than this build's is "nothing". The input script shots of the notice: `tools/update_notice_check.py`.
+- Installer (Windows): the check starts when the window opens; a timer shows "Version X is available: URL" under the
+  options when the thread is done. Linux installer: printed after the install (and in the zenity message).
+- Timeouts: 5 s per request. Quitting never waits for it.
+
+## Tests
+
+- `pt_platform_test`: version order, GitHub asset selection for every platform, missing-asset fallback, ignored drafts/prereleases/API errors and legacy parsing, the
+  placeholder sends nothing; with `--network`, a real HTTPS request and, when `PT_UPDATE_MANIFEST_URL` is set, the check.
+- `pt_setup.exe --check-update <file>` and `pt_setup_linux --check-update <file>` write the URL, this version and what
+  was found.

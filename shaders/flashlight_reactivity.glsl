@@ -1,6 +1,7 @@
 vec2 FlashlightSurfaceNdc(vec2 uv, vec2 jitter) {
     return uv * 2.0 - 1.0 - jitter;
 }
+// The beam's share at a surface, before the reactive weight: the cone edge and the distance falloff
 float FlashlightCone(vec3 world, vec3 origin, float cos_outer, vec3 direction, float cone_range) {
     if (!(cos_outer > -1.0 && dot(direction, direction) > 1.0e-8)) return 0.0;
     vec3 delta = world - origin;

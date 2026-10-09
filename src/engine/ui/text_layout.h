@@ -10,6 +10,8 @@
 
 namespace pt::ui {
 
+// U+E000 in a text is a picture placed inline (a button prompt): it takes `inline_advance` of the line and is laid out as a glyph
+// without a font glyph, so the caller draws it at its box
 constexpr uint32_t kInlinePicture = 0xE000;
 
 struct TextStyle {
@@ -22,7 +24,7 @@ struct TextStyle {
 };
 
 struct LaidGlyph {
-    const FfntGlyph* glyph = nullptr;
+    const FfntGlyph* glyph = nullptr;  // null for an inline picture, whose box is position and size (the advance and the line height)
     glm::vec2 position{0.0f};
     glm::vec2 size{0.0f};
 };
@@ -38,6 +40,8 @@ struct TextLayout {
     float line_pitch = 0.0f;
     float width = 0.0f;
     float height = 0.0f;
+    // right-to-left text (Arabic in a Unicode font): its paragraphs start at the right; with mirror_rtl PlaceText and
+    // LayoutTextInBox swap the start and end alignments for it
     bool rtl = false;
 };
 

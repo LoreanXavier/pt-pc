@@ -32,6 +32,7 @@ struct RayHit {
     uint32_t triangle = 0;
 };
 
+// hit record +0x2C: squared distance or travel, the overlap depth as a negative length when the cast starts inside
 struct SphereHit {
     float distance_sq = 0.0f;
     glm::vec3 point{0.0f};
@@ -45,7 +46,9 @@ class CollisionWorld {
 public:
     void Clear();
     void AddTriangles(std::span<const GeomTriangle> triangles, const glm::mat4& world, int node_filter, uint32_t owner = 0);
+    // the world space triangle AddTriangles makes of t, false for a degenerate one (it adds none)
     static bool MakeTriangle(const GeomTriangle& t, const glm::mat4& world, CollisionTriangle& out);
+    // triangles already in world space (MakeTriangle), each block with its owner set to the block's owner, in block order
     struct Block {
         const std::vector<CollisionTriangle>* triangles = nullptr;
         uint32_t owner = 0;
@@ -58,13 +61,20 @@ public:
         return static_cast<uint32_t>(owners_.size() - 1);
     }
     const std::string& OwnerName(uint32_t owner) const { return owners_[owner]; }
+    // An inactive owner's triangles stay in the world and its grid but no query, ray or sweep sees them: a geom toggle
+    // (BodyState::geom_active) is a flag here instead of a rebuild. The active triangles keep their relative order, so the
+    // queries return what a world built from the active owners alone returns, in the same order.
     void SetOwnerActive(uint32_t owner, bool active) { owner_active_[owner] = active ? 1 : 0; }
     bool OwnerActive(uint32_t owner) const { return owner_active_[owner] != 0; }
+    // the triangles of the active owners
     size_t ActiveTriangles() const;
     void Build();
 
+    // Reflection query 0x80700: C11C20 rejects backfaces unless the shape is double-sided (normalized flag 0x200).
     bool Raycast(const glm::vec3& origin, const glm::vec3& direction, float max_distance, RayHit& hit, bool respect_winding = false) const;
+    // 0xC0F470: one-sided triangles within the radius, nearest first
     void SphereOverlap(const glm::vec3& center, float radius, std::vector<SphereHit>& hits) const;
+    // 0xC11C20: one-sided triangles touched by the swept sphere, in order along the path
     void SphereCast(const glm::vec3& from, const glm::vec3& to, float radius, std::vector<SphereHit>& hits) const;
     void Query(const glm::vec3& min, const glm::vec3& max, std::vector<uint32_t>& out) const;
     const std::vector<CollisionTriangle>& Triangles() const { return triangles_; }
@@ -72,12 +82,16 @@ public:
 private:
     static constexpr float kCellSize = 1.0f;
     static int64_t CellKey(int x, int z) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(z); }
+    // the triangles registered in cell (x, z), in ascending order
     std::span<const uint32_t> Cell(int x, int z) const;
 
     std::vector<CollisionTriangle> triangles_;
     std::vector<std::string> owners_{""};
     std::vector<uint8_t> owner_active_{1};
     std::vector<uint32_t> owner_triangles_{0};
+    // The x/z grid as one array of triangle indices, cell after cell: a dense table of cell starts over the cells the triangles
+    // cover (cell_x0_, cell_z0_, cell_nx_ by cell_nz_), or, where that table would be too large, a map from the cell key to its
+    // start and count. Build used to fill a hash map of vectors, which took most of a rebuild's 6 to 25 ms.
     std::vector<uint32_t> cell_items_;
     std::vector<uint32_t> cell_start_;
     int cell_x0_ = 0;
@@ -92,6 +106,7 @@ private:
     mutable std::vector<uint32_t> candidates_;
 };
 
+// 0xB02700 defaults with the player values of 0x963570
 struct CharacterShape {
     float radius = 0.4f;
     float center_height = 0.8f;
@@ -101,6 +116,7 @@ struct CharacterShape {
     float rise_accel = 0.005f;
 };
 
+// Fox character controller 0xB001E0: one sphere at center_height above the feet
 class CharacterController {
 public:
     glm::vec3 position{0.0f};
@@ -109,6 +125,7 @@ public:
     CharacterShape shape;
 
     void Reset();
+    // gravity_dt: the frame length on the first tick of a 29.97 fps frame, else 0
     void Move(const CollisionWorld& world, const glm::vec3& displacement, float dt, float gravity_dt);
     glm::vec3 BodyPosition() const { return glm::vec3(position.x, body_y_, position.z); }
     float Radius() const { return radius_; }

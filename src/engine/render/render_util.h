@@ -34,6 +34,7 @@ void BeginPass(VkCommandBuffer cmd, VkExtent2D extent, std::initializer_list<Col
                bool depth_read_only = false, bool clear_depth = false);
 void BeginPass(VkCommandBuffer cmd, VkRect2D area, std::span<const ColorOutput> colors, RenderTarget* depth, bool depth_read_only, bool clear_depth);
 void SetViewport(VkCommandBuffer cmd, VkRect2D area);
+// also a VK_NV_device_diagnostic_checkpoints checkpoint when g_checkpoints is set (Context::checkpoints); name must outlive the frame
 void BeginLabel(VkCommandBuffer cmd, const char* name);
 extern bool g_checkpoints;
 void EndLabel(VkCommandBuffer cmd);
@@ -53,6 +54,7 @@ struct PipelineDesc {
     VkCullModeFlags cull = VK_CULL_MODE_NONE;
     bool depth_bias = false;
     BlendMode blend = BlendMode::None;
+    // per colour attachment in place of blend where given
     std::vector<BlendMode> blends;
     VkColorComponentFlags write_mask = 0xF;
     std::vector<VkColorComponentFlags> write_masks;

@@ -20,6 +20,7 @@ struct PhotoCropRect {
     float height = 1.0f;
 };
 
+// These focal lengths use the game's 13.5 mm sensor height, matching Player's camera projection.
 int PhotoFocalLengthStepCount();
 float PhotoFocalLengthForStep(int step);
 int PhotoFocalLengthStep(float focal_length_mm);
@@ -31,4 +32,4 @@ PhotoCropRect PhotoCropForAspect(float source_aspect, float target_aspect);
 float PhotoCropFovYDegrees(float fov_y_degrees, PhotoCropRect crop);
 PhotoExtent PhotoCaptureExtent(uint32_t source_width, uint32_t source_height, PhotoAspectPreset aspect, PhotoResolution resolution);
 
-}
+}  // namespace pt::game

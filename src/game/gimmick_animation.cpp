@@ -19,6 +19,8 @@ namespace {
 
 constexpr const char* kDefaultMtar = "/Assets/sh/motion/mtar/gimmick/ShGimmick_layers.mtar";
 constexpr uint32_t kDialogueEvent = 0xC48783C5;
+// ShGimmick body clock: vtable+0x80 (0x12570D0) sets entry+0x88 = dt x 299.7003 ticks and the layers step ticksPerFrame
+// ticks per gani frame (5 in every P.T. motion), so gimmick motions run at 59.94 frames per second (60000 / 1001).
 /* ShGimmick advances its body clock by dt x 299.7003 ticks and every P.T. gani has 5 ticks a frame, so gimmicks animate at 59.94 fps. */
 constexpr double kBodyTicksPerSecond = 299.7003;
 
@@ -339,10 +341,13 @@ void GimmickAnimation::SampleMotion(const Record& record, const anim::GaniMotion
 
 void GimmickAnimation::FireEvents(Record& record, const Gimmick& gimmick, double from, double to) {
     const anim::GaniMotion* motion = record.gani;
+    // motion events come from the body update, which runs only while the body is active and not suspended (0x95E880); a record
+    // whose locators were unloaded (a game over, Endf120) stays silent until 0x953A80 activates it at its new locator
     if (!motion || motion->frames == 0 || to <= from || !gimmick.active || !gimmick.enabled) {
         return;
     }
     const double length = static_cast<double>(motion->frames);
+    // a clip without the loop bit plays once and holds its last frame (0xAA7580), so its events fire on the first pass only
     const double last_pass = motion->Loops() ? std::numeric_limits<double>::max() : 0.0;
     for (const anim::GaniEvent& ge : motion->events) {
         for (const anim::EventSection& s : ge.event.sections) {
@@ -377,6 +382,8 @@ void GimmickAnimation::FireEvents(Record& record, const Gimmick& gimmick, double
                     auto* sound = dynamic_cast<GameSound*>(game_.Audio());
                     LogInfo("gimmick anim: {} dialogue {:#x} chara {} condition {}", gimmick.name, static_cast<uint32_t>(e.ints[1]), chara,
                             condition ? condition : "?");
+                    // 0x965A10 hands the event to the record (0x128A570 -> 0x1253B50, which picks chara bab or pab by the
+                    // partsType), and the sound control posts it on a "Gimmick" object owned by this record.
                     if (sound && sound->Ready() && condition) {
                         const std::string_view args[] = {chara, condition};
                         record.dialogue_id = sound->PostGimmickDialogue(kDialogueEvent, args, gimmick.type);

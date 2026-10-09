@@ -194,6 +194,7 @@ struct ShapeDef {
     float shadow_umbra_scale = 1.0f;
     float shadow_penumbra_scale = 1.0f;
     std::string light_mask;
+    // light area box (0xB84260): enableLightArea, lightAreaTranslation, the rotation 0x733D3780 (x, y, z, w), lightAreaScale (full size)
     bool light_area = false;
     glm::vec3 area_translation{0.0f};
     glm::vec4 area_rotation{0.0f, 0.0f, 0.0f, 1.0f};

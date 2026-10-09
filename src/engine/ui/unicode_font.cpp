@@ -5,6 +5,9 @@
 #include <array>
 #include <cstdio>
 
+// Unicode fonts for the languages the original did not ship (Turkish, Chinese, Arabic, Russian, Ukrainian, Czech): the bundled Noto
+// fonts rasterised and shaped by the system on Windows (GDI and Uniscribe, below), and by HarfBuzz and stb_truetype
+// elsewhere (unicode_font_harfbuzz.cpp).
 namespace pt::ui {
 uint8_t FfntFont::Coverage(const FfntGlyph& glyph, int x, int y) const {
     if (unicode_) {
@@ -30,6 +33,8 @@ struct UnicodeFontState {
     ~UnicodeFontState() { ScriptFreeCache(&cache); if (dc) { SelectObject(dc, previous); DeleteObject(font); DeleteDC(dc); } }
 };
 namespace {
+// The added languages' fonts: Noto Sans (Latin, Cyrillic), Noto Sans SC, and for Arabic Noto Kufi Arabic in the menus and
+// Noto Naskh Arabic in the subtitles (the Naskh book hand reads best in running text, the Kufi matches the menus' plain sans)
 constexpr const wchar_t* kBundledFonts[] = {L"NotoSans.ttf", L"NotoSansSC.ttf", L"NotoKufiArabic.ttf", L"NotoNaskhArabic.ttf"};
 struct PrivateFonts {
     std::vector<std::wstring> paths;
@@ -84,6 +89,9 @@ bool FfntFont::LoadUnicodeFont(std::string_view family, std::string_view charact
             for(int g=0;g<glyph_count;++g) ids.insert(shaped[g]);
         }
     }
+    // The line is as tall as the font's own metrics, except for Arabic: Noto Kufi's and Naskh's ascent and descent (1.50 and 0.65 em)
+    // leave room for marks stacked far beyond what the texts use, which made every description too tall for its box (all 143
+    // were shrunk). Its line runs from the highest to the lowest ink of the glyphs the texts shape to, plus 2 pixels.
     int ascent = tm.tmAscent, height = tm.tmHeight;
     if (rtl) {
         int above = 0, below = 0;
@@ -100,6 +108,7 @@ bool FfntFont::LoadUnicodeFont(std::string_view family, std::string_view charact
         }
     }
     if (rtl) {
+        // Arabic contextual forms and ligatures have glyph IDs without standalone Unicode code points.
         unsigned char maxp[6]{};
         if (GetFontData(state->dc, 0x7078616d, 0, maxp, 6) == GDI_ERROR) return false;
         const unsigned count = (unsigned(maxp[4]) << 8) | maxp[5];

@@ -5,6 +5,7 @@
 
 namespace pt::audio {
 
+// Converts the selected voice's stereo PCM into the DualSense USB actuator band (20–250 Hz, 48 kHz input).
 class ControllerHapticFilter {
 public:
     bool Process(std::span<const float> stereo_input, std::span<float> stereo_output, size_t frames);

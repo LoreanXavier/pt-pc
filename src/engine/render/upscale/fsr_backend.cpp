@@ -50,6 +50,9 @@ FfxApiResource Resource(const UpscaleImage& image, uint32_t state, bool depth, b
     return resource;
 }
 
+// the FidelityFX API lists the upscaler providers of the loaded DLL by version; FSR 3 and FSR 4 are two providers of the same
+// API (AMD FSR SDK 2.x: FSR 4 falls back to FSR 3.1 on other GPUs). amd_fidelityfx_vk.dll v1.1.4, the newest Vulkan build AMD
+// ships, has only FSR 3.1.4; FSR 4 is in AMD's DirectX 12 DLLs only (upscaling.md, AMD FSR 4)
 /* FSR 3 and FSR 4 are two providers of one FidelityFX API, but AMD ships FSR 4 only in its DX12 DLLs; on Vulkan the FSR 4 path can only say why it is missing. */
 class FsrBackend final : public UpscaleBackend {
 public:
@@ -69,6 +72,7 @@ public:
             return false;
         }
         if (generation_ == 4 && !probed_) {
+            // known without loading the DLL: the one this build ships (cmake/Upscalers.cmake) has no FSR 4 provider
             std::string probe;
             if (!Available(probe)) {
                 reason = probe;
@@ -122,6 +126,7 @@ public:
             reason = "no FSR upscaler in amd_fidelityfx_vk.dll";
             return false;
         }
+        // the newest provider of this generation ("3.1.4", "4.1.1")
         std::string listed;
         std::vector<int> best;
         for (uint64_t i = 0; i < count; ++i) {

@@ -109,6 +109,7 @@ struct StageData {
     std::vector<SoundSourcePlacement> sound_sources;
 };
 
+// logs nothing, so it can run on a worker (StageManager's prefetch); LogStageData logs the summary line
 std::unique_ptr<StageData> BuildStageData(std::shared_ptr<fox2::DataSetFile> file, std::string package_path);
 void LogStageData(const StageData& stage);
 

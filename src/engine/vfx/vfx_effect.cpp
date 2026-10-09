@@ -82,6 +82,7 @@ public:
             }
         }
         std::sort(roots.begin(), roots.end(), [](const Edge* a, const Edge* b) { return a->to_port < b->to_port; });
+        // one emitter per shape (0xBB5880); its index goes into the node ids of the random seeds (0xBB0E70)
         uint32_t emitter = 0;
         for (const Edge* e : roots) {
             const Node& n = file_.nodes[e->from];
@@ -177,6 +178,7 @@ private:
         s.base_size = n.Float("baseSizeScale", 1.0f);
         s.cull_face = n.Bool("cullFace");
         if (s.kind == ShapeKind::Model) {
+            // 0xB8BED0
             s.model = n.Code("modelFile");
             s.invert_face = n.Bool("invertFace");
             s.model_uv = n.Bool(kHashModelUv);
@@ -203,10 +205,12 @@ private:
             s.shadow_bias = n.Float("shadowBias") * 0.001f;
             s.shadow_umbra_scale = n.Float("shadowUmbraAngleScale", 1.0f);
             s.shadow_penumbra_scale = n.Float("shadowPenumbraAngleScale", 1.0f);
+            // 0xB84260: the light area (node +0x00 translation, +0x10 rotation, +0x20 scale, +0x6D bit 0 enable)
             s.light_area = n.Bool("enableLightArea");
             s.area_translation = glm::vec3(n.Vec4("lightAreaTranslation"));
             s.area_rotation = n.Vec4(kHashLightAreaRotation, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
             s.area_scale = glm::vec3(n.Vec4("lightAreaScale", glm::vec4(1.0f)));
+            // 0xB84260: projected mask texture, 0xB85E40 hands it to the light (0xCDBF70)
             if (s.kind == ShapeKind::SpotLight) {
                 s.light_mask = n.String(kHashLightMask);
             }
@@ -241,6 +245,12 @@ private:
         return true;
     }
 
+    // Each node of an emitter is numbered when the instance starts (0xBB0E70): the instance's random value (0xB61AB0) + 0xFFFF x the
+    // emitter + the node's place in the emitter, and a random node with randomGatherType 0 seeds itself with that id + the instance's
+    // random value (0xBA1A40, 0xB6D5B0 and the other inits). The emitter's nodes are listed by 0x12BDEB0 in a walk from the shape, each
+    // node before its inputs and the inputs in port order (0xB645E0, edges sorted by target port in 0x12C26C0), a node reached twice
+    // listed twice, then numbered by kind (0xB5E650): emit nodes, life nodes, vector nodes, then the rest. node_id keeps
+    // 0xFFFF x the emitter + the place; an expression shared by two shapes keeps the first shape's.
     void NumberNodes(const Node& shape, uint32_t emitter, ShapeDef& s, size_t first_emit) {
         std::vector<uint32_t> walk;
         Walk(shape.index, walk, 0);
@@ -277,6 +287,8 @@ private:
                 continue;
             }
             Expr& e = def_.exprs[it->second];
+            // 0xBA0670: a random start, random flips or fixed flips set 0x180 on the emitter, which then gives every new particle a
+            // 16-bit random value (0xBA7F20)
             if (e.op == ExprOp::UvAnime && (e.flags & (2u | 4u | 8u | 16u | 32u))) {
                 s.particle_random = true;
             }
@@ -359,6 +371,9 @@ private:
         if (cls == "FxConstLifeNode") {
             life.min = life.max = static_cast<float>(n.UInt("lifeFrame", 60)) / kFrameRate;
         } else if (cls == "FxRandomLifeNode") {
+            // 0xB6D480 reads 0x9B076750 as the base life and 0x8F88FA93 as a range, both frames / 60; 0xB6D5F0 draws
+            // base + (2 range r - range), r = xorshift (13, 7, 5) / 2^32: uniform in [base - range, base + range]. The port had
+            // taken them as minimum and maximum, so the ending's ground smoke (360, 0) lived 0 to 6 s instead of 6 s
             const float a = static_cast<float>(n.UInt(kHashRandomLifeMin, 60)) / kFrameRate;
             const float b = static_cast<float>(n.UInt(kHashRandomLifeMax, 60)) / kFrameRate;
             life.min = a - b;
@@ -430,6 +445,7 @@ private:
         } else if (cls == "FxScrollAnimationMaterialNode") {
             m.kind = MaterialKind::Scroll;
             m.blend = static_cast<BlendMode>(std::min(n.UInt("blendType"), 5u));
+            // B71F40/B72510: Scroll has its own soft factor, independent of shaderType.
             m.soft_factor = n.Float(0x0E3C1540);
             m.soft = m.soft_factor > 0.0f;
             m.luminance = n.Float("luminance", 1.0f);
@@ -588,6 +604,7 @@ private:
                              static_cast<float>(std::max(1u, n.UInt(kHashDivisionH, 1))), 0.0f);
             e.flags = (n.Bool("clamp") ? 1u : 0u) | (n.Bool("randomStart") ? 2u : 0u) | (n.Bool("randomFlipU") ? 4u : 0u) |
                       (n.Bool("randomFlipV") ? 8u : 0u) | (n.Bool(kHashFlipU) ? 16u : 0u) | (n.Bool(kHashFlipV) ? 32u : 0u);
+            // no seed of its own: 0xBA0670 does not read randomGatherType, the start and flips come from the particle's random value
             e.slot = static_cast<int32_t>(NewSlot());
         } else if (cls == "FxCameraCorrectionVectorNode") {
             e.op = ExprOp::CameraCorrection;
@@ -634,6 +651,9 @@ private:
             e.v1 = n.Vec4("endPosition");
             e.v0.w = e.v1.w = 0.0f;
         } else if (cls == "FxSpreadVectorNode") {
+            // factory 0xB96B50: elevation / 180, force, its random range 0xEF65426D (with forceType != 0 the length is uniform in
+            // force -/+ range, the range cut to force so it never goes below 0), rangeAngle in radians, the rotation 0x05B462F3 and
+            // the flags 0xE6B68466 (a fixed polar angle instead of a random one) and 0xD8F07EBD (one length per batch, even angles)
             e.op = ExprOp::Spread;
             const float force = n.Float("force", 1.0f);
             float range = n.Float(kHashSpreadRange);

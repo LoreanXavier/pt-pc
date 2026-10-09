@@ -1,3 +1,5 @@
+// pt.ini round trip: every field of AppSettings changed from its default, saved, loaded back; out-of-range and malformed values
+// clamped or ignored on load. usage: pt_settings_roundtrip_test <temporary folder>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -56,6 +58,7 @@ int main(int argc, char** argv) {
     const std::filesystem::path ini = dir / "roundtrip.ini";
 
     Check("defaults", Same(RoundTrip(ini, {}), {}));
+    // one field at a time, each to a value the PC settings page can write
     const std::vector<std::pair<std::string, std::function<void(pt::AppSettings&)>>> changes = {
         {"display.width/height", [](auto& s) { s.display.width = 2560; s.display.height = 1080; }},
         {"display.hdr", [](auto& s) { s.display.hdr = true; }},
@@ -122,6 +125,7 @@ int main(int argc, char** argv) {
         Check(name + " changes the settings", !Same(s, pt::AppSettings{}));
         Check(name + " round trip", Same(loaded, s));
     }
+    // a hand-edited file: out-of-range values are clamped, malformed ones keep the default, unknown keys are ignored
     const pt::AppSettings odd = LoadText(ini,
         "[display]\nletterbox = 7\nfullscreen = -3\nwidth = 99999\n[graphics]\nanisotropy = 5\nfilm_grain = nan\nclarity = 3\n"
         "shadow_quality = 9\ntexture_detail = -1\n[raytracing]\nshadows = 4\n[audio]\nvolume = loud\n[input]\nrumble = yes\ngamepad_sensitivity = 9\n[nothing]\nx = 1\n"

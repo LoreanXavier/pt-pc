@@ -56,6 +56,8 @@ public:
     void Record(VkCommandBuffer cmd, VkExtent2D extent);
 
     VkExtent2D Extent() const { return extent_; }
+    // VR's HUD (docs/vr.md): the next Record draws on a transparent image and builds its coverage in alpha (alpha blend: one,
+    // one minus source alpha), so the image is premultiplied; off (the default) leaves the target's alpha as it is
     void SetCoverageAlpha(bool enabled) { coverage_ = enabled; }
     void SetScreenArea(glm::vec2 origin, float height) { screen_ = glm::vec4(origin, 1.0f / std::max(height, 1.0f), 0.0f); }
 
@@ -84,6 +86,7 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    // 0 alpha, 1 additive; 2 and 3 the same with the coverage in alpha (SetCoverageAlpha)
     VkPipeline pipelines_[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool coverage_ = false;
     VkFormat pipeline_format_ = VK_FORMAT_UNDEFINED;

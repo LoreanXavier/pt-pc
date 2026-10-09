@@ -68,6 +68,8 @@ bool UilbLayout::Parse(std::span<const uint8_t> d, std::string* error) {
         const size_t r = models + i * kModelRecordSize;
         UilbModel model;
         model.path = text_at(Read<uint16_t>(d, r + 2));
+        // the model's placement: scale +0x0C, rotation quaternion +0x18, translation +0x2C (UI units; UI_sys_loading puts its icon at
+        // (54.39, -26.66), low on the right), colour +0x3C
         model.translate = glm::vec3(Read<float>(d, r + 0x2C), Read<float>(d, r + 0x30), Read<float>(d, r + 0x34));
         const uint32_t list = Read<uint32_t>(d, r + 0x5C);
         const uint16_t count = Read<uint16_t>(d, r + 0x60);

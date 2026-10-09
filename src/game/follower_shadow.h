@@ -18,6 +18,8 @@ inline void ApplyFollowerShadow(std::vector<SceneLight>& lights, const glm::vec3
     }
     if (best == lights.size()) return;
     SceneLight shadow = lights[best];
+    // A silhouette-only projection reaches beyond the fill light's attenuation radius.
+    // Zero lighting scales preserve the level's unoccluded diffuse/specular illumination.
     shadow.diffuse_scale = shadow.specular_scale = 0.0f;
     shadow.outer_range = std::max(shadow.outer_range, 24.0f);
     shadow.dimmer = 0.0f;

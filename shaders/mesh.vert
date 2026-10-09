@@ -25,6 +25,8 @@ layout(location = 4) out vec3 out_bitangent;
 layout(location = 5) out vec3 out_normal;
 layout(location = 6) out vec3 out_view_position;
 layout(location = 7) out vec3 out_world;
+// the fox3ddf_* vertex shaders' outViewDir: -normalize(view position) per vertex, which the pixel shaders normalize again after
+// the interpolation (fox3ddf_micro_subnorm vs 29259f9e915623c5); on a long wall triangle that is not the pixel's own direction
 layout(location = 8) out vec3 out_view_dir;
 layout(location = 9) out vec2 out_uv2;
 

@@ -32,6 +32,9 @@ struct FogBlock {
 
 constexpr VkDeviceSize kFogStride = 256;
 
+// offscreen: the effect buffer keeps the transmittance in alpha, which alpha blending multiplies by (1 - a) and the additive and
+// subtractive modes leave alone (CB_BLEND 0x65000501 of the Prim_* draws: alpha ZERO and ONE_MINUS_SRC_ALPHA)
+// scene: a draw on the HDR scene target (the forward pass's world layer, depth tested), not the effect buffer or the post chain
 VkPipelineColorBlendAttachmentState BlendState(vfx::BlendMode mode, bool offscreen, bool scene) {
     VkPipelineColorBlendAttachmentState s{};
     s.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | (offscreen ? VK_COLOR_COMPONENT_A_BIT : 0u);
@@ -47,6 +50,9 @@ VkPipelineColorBlendAttachmentState BlendState(vfx::BlendMode mode, bool offscre
         if (offscreen) {
             s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         } else if (scene) {
+            // on the scene target only the alpha tested liquids blend this way (VfxPass::DrawLayer); they and the opaque draws
+            // leave alpha 1 where they replace the pixel, which the handy light demodulation of a temporal upscaler
+            // (upscale_demod.frag) leaves alone: the colour there is not the G-buffer surface's (the Freezer's view blood)
             s.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
             s.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             s.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -98,11 +104,11 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
     if (!vk::Check(vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &set_layout_), "vfx set layout")) {
         return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * Renderer::kFramesInFlight},
-                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * Renderer::kFramesInFlight}};
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * Renderer::kFramesInFlight},
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * Renderer::kFramesInFlight},
+                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 * Renderer::kFramesInFlight}};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 2 * Renderer::kFramesInFlight;
+    pool_info.maxSets = 3 * Renderer::kFramesInFlight;
     pool_info.poolSizeCount = 3;
     pool_info.pPoolSizes = sizes;
     if (!vk::Check(vkCreateDescriptorPool(device_, &pool_info, nullptr, &pool_), "vfx descriptor pool")) {
@@ -143,25 +149,26 @@ bool VfxPass::Init(Renderer& renderer, TextureManager& textures, Vfs& vfs) {
         return false;
     }
     for (FrameSlot& slot : slots_) {
-        VkDescriptorSetLayout layouts[2] = {set_layout_, set_layout_};
-        VkDescriptorSet sets[2] = {};
+        VkDescriptorSetLayout layouts[3] = {set_layout_, set_layout_, set_layout_};
+        VkDescriptorSet sets[3] = {};
         VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         alloc.descriptorPool = pool_;
-        alloc.descriptorSetCount = 2;
+        alloc.descriptorSetCount = 3;
         alloc.pSetLayouts = layouts;
         if (!vk::Check(vkAllocateDescriptorSets(device_, &alloc, sets), "vfx descriptor sets")) {
             return false;
         }
         slot.forward = sets[0];
         slot.filter = sets[1];
+        slot.effects = sets[2];
         if (!renderer.Context().CreateBuffer(slot.quads, sizeof(vfx::Quad) * kInitialQuads, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) {
             return false;
         }
-        if (!renderer.Context().CreateBuffer(slot.fog, 2 * kFogStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) {
+        if (!renderer.Context().CreateBuffer(slot.fog, 3 * kFogStride, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true)) {
             return false;
         }
-        std::memset(slot.fog.mapped, 0, 2 * kFogStride);
-        vmaFlushAllocation(renderer.Context().allocator, slot.fog.allocation, 0, 2 * kFogStride);
+        std::memset(slot.fog.mapped, 0, 3 * kFogStride);
+        vmaFlushAllocation(renderer.Context().allocator, slot.fog.allocation, 0, 3 * kFogStride);
     }
     return true;
 }
@@ -225,6 +232,9 @@ void VfxPass::DecodeAhead(const std::vector<std::string>& paths) {
     textures_->DecodeAhead(vfs_->Textures(), pending);
 }
 
+// The liquid's reflection cube (TppLiquidMaterial2Node 0x23E90E5F, gr_cub01 by default) is bound as the effect loader leaves it,
+// without its FTEX sRGB flag: liquid_trace_f010 op 578, the first Primitive_Liquid2Final draw of frame 1490, binds gr_cub01 as a
+// 64x64 BC1 UNORM image whose first layer is the file's face 0 byte for byte, and the shader squares the texel
 uint32_t VfxPass::Cube(const std::string& path) {
     if (path.empty() || !textures_ || !vfs_) {
         return vfx::kNoTexture;
@@ -244,6 +254,8 @@ uint32_t VfxPass::Cube(const std::string& path) {
 }
 
 void VfxPass::Submit(vfx::RenderList& list) {
+    // one finished ahead decode uploaded a frame (DecodeAhead), so the next stage's effect textures do not all upload in the
+    // frame that first draws them
     if (textures_ && vfs_) {
         textures_->PumpDecoded(vfs_->Textures(), 1);
     }
@@ -293,16 +305,18 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     depth.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
     const VkPipelineColorBlendAttachmentState attachment = BlendState(static_cast<vfx::BlendMode>(key.blend), key.offscreen,
                                                                        key.depth_test && !key.offscreen);
+    const VkPipelineColorBlendAttachmentState attachments[2] = {attachment, attachment};
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    blend.attachmentCount = 1;
-    blend.pAttachments = &attachment;
+    blend.attachmentCount = key.offscreen ? 2u : 1u;
+    blend.pAttachments = attachments;
     const VkDynamicState dynamic_states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dynamic.dynamicStateCount = 2;
     dynamic.pDynamicStates = dynamic_states;
+    const VkFormat color_formats[2] = {key.color, key.color};
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &key.color;
+    rendering.colorAttachmentCount = key.offscreen ? 2u : 1u;
+    rendering.pColorAttachmentFormats = color_formats;
     rendering.depthAttachmentFormat = key.depth;
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     info.pNext = &rendering;
@@ -325,11 +339,12 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     return pipeline;
 }
 
-void VfxPass::WriteSet(FrameSlot& slot, VkDescriptorSet set, VkImageView view, VkImageView scene) {
+void VfxPass::WriteSet(FrameSlot& slot, VkDescriptorSet set, VkImageView view, VkImageLayout depth_layout, VkImageView scene,
+                       VkDeviceSize fog_offset) {
     VkDescriptorBufferInfo buffer{slot.quads.buffer, 0, VK_WHOLE_SIZE};
-    VkDescriptorImageInfo image{sampler_, view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo image{sampler_, view, depth_layout};
     VkDescriptorImageInfo scene_image{scene_sampler_, scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo fog{slot.fog.buffer, set == slot.forward ? 0 : kFogStride, sizeof(FogBlock)};
+    VkDescriptorBufferInfo fog{slot.fog.buffer, fog_offset, sizeof(FogBlock)};
     VkWriteDescriptorSet writes[4]{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffer, nullptr};
     writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &image, nullptr, nullptr};
@@ -353,6 +368,8 @@ bool VfxPass::Upload(uint32_t frame_index) {
         }
         slot.forward_view = VK_NULL_HANDLE;
         slot.filter_view = VK_NULL_HANDLE;
+        slot.effects_depth_view = VK_NULL_HANDLE;
+        slot.effects_scene = VK_NULL_HANDLE;
     }
     if (bytes) {
         std::memcpy(slot.quads.mapped, list_.quads.data(), bytes);
@@ -368,12 +385,20 @@ uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer
     uint32_t copies = 0;
     bool bound = false;
     bool copy_stale = true;
+    // the original copies the scene buffer (compute 8c7e2adaa817965c into an 8-bit image) before liquid draws that follow other drawing,
+    // and runs consecutive liquid draws on one copy (f010_dumps frame 1490: one copy, then 64 Primitive_Liquid2Final draws)
     const float refraction_scale = static_cast<float>(extent.height) / 1080.0f;
     for (uint32_t index : order_) {
         const vfx::Draw& d = list_.draws[index];
         if (d.layer != layer || d.count == 0) {
             continue;
         }
+        // opaque liquids (Primitive_Liquid2Final with the alpha test, at full resolution), multiply, min and opaque draws stay on the
+        // scene target. A liquid without the alpha test goes to the effect pass in its place among the other effects, as the
+        // original's material setup sends it (formats/vfx.md 7: liquid_trace_f010 1490 draws the blood water at 960 x 540 between
+        // the smoke and dust): it covers the effects drawn before it there by its alpha, so the f120 view distortion sprites
+        // (fx_sh_viwdis01_s1, 02) take the CeilLamp's glow sprites with the image they move instead of leaving them, unmoved,
+        // over the moved lamp. PT_VFX_LIQUID_SCENE=1 draws every liquid on the scene before the effect buffer, as before.
         static const bool liquid_scene = std::getenv("PT_VFX_LIQUID_SCENE") != nullptr;
         const bool effect_liquid = d.refract && !d.opaque && !liquid_scene;
         const bool buffered = (!d.refract || effect_liquid) &&
@@ -407,6 +432,7 @@ uint32_t VfxPass::DrawLayer(VkCommandBuffer cmd, VkDescriptorSet set, vfx::Layer
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         Push push;
         push.view_projection = view_projection;
+        // w: refraction pixels per 1080p pixel when the scene copy is valid for this draw, else 0 (scalar transmission)
         push.eye = glm::vec4(eye, refract ? refraction_scale : 0.0f);
         push.frame = glm::vec4(exposure, near_plane, 1.0f / static_cast<float>(std::max(1u, extent.width)),
                                1.0f / static_cast<float>(std::max(1u, extent.height)));
@@ -430,21 +456,30 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
         return;
     }
     FrameSlot& slot = slots_[frame];
-    if (slot.forward_view != context.depth_view || slot.forward_scene != context.scene_copy_view) {
-        WriteSet(slot, slot.forward, context.depth_view, context.scene_copy_view);
+    const bool offscreen = context.subset == kVfxOffscreen;
+    if (offscreen) {
+        if (slot.effects_depth_view != context.near_far_depth_view || slot.effects_scene != context.scene_copy_view) {
+            WriteSet(slot, slot.effects, context.near_far_depth_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, context.scene_copy_view,
+                     2 * kFogStride);
+            slot.effects_depth_view = context.near_far_depth_view;
+            slot.effects_scene = context.scene_copy_view;
+        }
+    } else if (slot.forward_view != context.depth_view || slot.forward_scene != context.scene_copy_view) {
+        WriteSet(slot, slot.forward, context.depth_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, context.scene_copy_view, 0);
         slot.forward_view = context.depth_view;
         slot.forward_scene = context.scene_copy_view;
     }
     FogBlock fog;
     std::copy(std::begin(context.fog), std::end(context.fog), std::begin(fog.fog));
     fog.mode = glm::uvec4(context.fog_mode, 0u, 0u, 0u);
-    std::memcpy(slot.fog.mapped, &fog, sizeof(fog));
-    vmaFlushAllocation(renderer_->Context().allocator, slot.fog.allocation, 0, sizeof(fog));
+    const VkDeviceSize fog_offset = offscreen ? 2 * kFogStride : 0;
+    std::memcpy(static_cast<uint8_t*>(slot.fog.mapped) + fog_offset, &fog, sizeof(fog));
+    vmaFlushAllocation(renderer_->Context().allocator, slot.fog.allocation, fog_offset, sizeof(fog));
     const float near_plane = context.projection[3][2];
-    const uint32_t copies = DrawLayer(context.cmd, slot.forward, vfx::Layer::World, context.color_format, context.depth_format, true, 0,
-                                      context.view_projection, context.eye, context.exposure, near_plane, context.extent,
-                                      context.scene_copy_view && context.copy_scene ? &context.copy_scene : nullptr, context.subset,
-                                      context.recorded);
+    const uint32_t copies = DrawLayer(context.cmd, offscreen ? slot.effects : slot.forward, vfx::Layer::World, context.color_format,
+                                      context.depth_format, true, 0, context.view_projection, context.eye, context.exposure, near_plane,
+                                      context.extent, context.scene_copy_view && context.copy_scene ? &context.copy_scene : nullptr,
+                                      context.subset, context.recorded);
     static const bool debug = std::getenv("PT_VFX_DEBUG") != nullptr;
     if (debug && (generation_ % 120) == 0) {
         LogDebug("vfx: exposure {:.5f} ev {:.2f} near {:.3f}, {} scene copies for liquids", context.exposure,
@@ -469,7 +504,7 @@ void VfxPass::RecordFilter(const SceneFilterContext& context) {
     }
     FrameSlot& slot = slots_[frame];
     if (slot.filter_view != context.depth_view || slot.filter_scene != context.source) {
-        WriteSet(slot, slot.filter, context.depth_view, context.source);
+        WriteSet(slot, slot.filter, context.depth_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, context.source, kFogStride);
         slot.filter_view = context.depth_view;
         slot.filter_scene = context.source;
     }

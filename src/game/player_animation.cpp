@@ -28,6 +28,9 @@ constexpr const char* kSkeletonFile = "/Assets/sh/chara/plr/Scenes/plr0_main0_de
 constexpr const char* kClipNames[kClipCount] = {"front", "right", "back", "left", "stand"};
 constexpr const char* kStartNames[] = {"start front", "start right", "start back", "start left"};
 constexpr const char* kStopNames[] = {"stop front", "stop right", "stop back", "stop left"};
+// The walk and stand states (0x9874F0 case 6, 0x986420) play motion 0xf784cef74395 on layer (0, 1) while the handy light is
+// on and 0xc1a2050d3802 while it is off. The archive's only one-frame animation is this pose: the left hand raised to the
+// chin 0.25 m in front of the eye, where the Spot_Mask constants put the light (rendering.md 12.5 and 12.20)
 constexpr uint64_t kLightArmMotion = 0xFC517D57B3A9F1EEull;
 
 PlayerLocomotion g_locomotion;
@@ -86,6 +89,7 @@ std::vector<WalkSound> SoundEvents(const anim::GaniMotion& motion) {
     return sounds;
 }
 
+// RIG_ROOT xz relative to frame 0 and its horizontal path length per frame
 void RootPath(const anim::GaniMotion& motion, BodyClip& clip) {
     const anim::GaniUnit* unit = motion.FindUnit(anim::kHashRigRoot);
     if (!unit || unit->translation < 0) {
@@ -119,6 +123,7 @@ BodyClip MakeClip(const anim::GaniMotion& motion) {
     return clip;
 }
 
+// 0xACCF70: starts in (from, to], frame 0 when advancing from frame 0
 template <typename Event, typename Fn>
 void ForEachEvent(const std::vector<Event>& events, float from, float to, float length, bool loop, Fn&& fn) {
     for (const Event& e : events) {
@@ -194,6 +199,8 @@ bool LoadPlayerAnimation(Vfs& vfs) {
     g_light_arm_weights.clear();
     for (const anim::GaniMotion& motion : g_archive.Motions()) {
         if (motion.path_code == kLightArmMotion && g_rig_ready) {
+            // the layer's mask is in the motion graph (ShPlayer_layers.mog, not read); the rig's LArm mask moves the arm,
+            // the hand and the fingers that hold the light
             anim::RigOutput evaluated;
             anim::SampleRigPose(g_rig, motion, 0.0, g_light_arm, false);
             anim::EvaluateRig(g_rig, g_binding, g_skeleton, g_light_arm, evaluated);
@@ -295,6 +302,8 @@ void PlayerBody::Play(Kind kind, int clip) {
 }
 
 BodyAdvance PlayerBody::Advance(float frames, float blend_frames, bool drawn_only) {
+    // the jacket simulation steps by the game time that passed (blend_frames is dt at 59.94 motion frames per second,
+    // independent of the walk rate), not by a fixed 1/60 s whatever the frame rate
     sim_seconds_ += blend_frames / 59.94006f;
     BodyAdvance out;
     const BodyClip* clip = Current();
@@ -352,6 +361,7 @@ glm::quat PlayerBody::HeadRotation() {
 }
 
 namespace {
+// The leg units of the HumanFinger rig and the foot rotation units, left first (FootPlant)
 struct LegUnits {
     int leg[2] = {-1, -1};
     int foot[2] = {-1, -1};
@@ -394,6 +404,8 @@ glm::vec4 QuatTrack(const glm::quat& q) {
 }
 }
 
+// moves the legs' IK targets (relative to the thigh's parent, MakeRigPoseRelative) to the planted ones and turns their knee
+// swivels and the feet's rotations about the model's vertical axis (PlayerBody::FootPlant)
 bool PlayerBody::ApplyFootPlant(const FootPlant& plant, const anim::RigOutput& evaluated, anim::RigPose& pose) const {
     const LegUnits& units = FindLegUnits();
     if (!pose.relative) {
@@ -422,6 +434,7 @@ bool PlayerBody::ApplyFootPlant(const FootPlant& plant, const anim::RigOutput& e
             swivel = QuatTrack(glm::normalize(glm::conjugate(pr) * turn * pr * TrackQuat(swivel)));
             changed = true;
         }
+        // a foot placed in model space (rotation unit) turns with its target; a foot rotation relative to the leg follows the leg
         if (units.foot[side] >= 0) {
             const anim::RigUnit& foot = g_rig.Units()[static_cast<size_t>(units.foot[side])];
             if (foot.Is(anim::RigUnitType::Rotation) && !foot.tracks.empty() && static_cast<size_t>(foot.tracks[0]) < pose.tracks.size()) {
@@ -463,6 +476,7 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
     const anim::RigOutput* out = &out_;
     if (light_arm && g_light_arm.tracks.size() == pose_.tracks.size() && g_light_arm.relative == pose_.relative &&
         g_light_arm_weights.size() == g_rig.Units().size()) {
+        // a layer over the body pose by the mask's unit weights (0xAC4440 per unit type)
         arm_pose_ = pose_;
         for (size_t u = 0; u < g_rig.Units().size(); ++u) {
             const float w = g_light_arm_weights[u];
@@ -505,6 +519,7 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
     if (help) {
         help->Apply(g_skeleton, world_);
     }
+    // a time since the last skinning longer than 0.25 s (the mirror captures run now and then) restarts from the pose
     if (!sim || !body_world || !sim_.Step(*sim, g_skeleton, world_, *body_world, sim_seconds_, anim::SimWind())) {
         sim_bones_.Apply(g_skeleton, world_, sim_seconds_);
     }
@@ -516,7 +531,9 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
     return true;
 }
 
+
 namespace {
+// the shortest turn from unit vector u to unit vector v
 glm::quat ArcBetween(const glm::vec3& u, const glm::vec3& v) {
     const float c = glm::dot(u, v);
     if (c < -0.99999f) {
@@ -529,8 +546,9 @@ glm::quat ArcBetween(const glm::vec3& u, const glm::vec3& v) {
     const glm::vec3 axis = glm::cross(u, v);
     return glm::normalize(glm::quat(1.0f + c, axis.x, axis.y, axis.z));
 }
-}
+}  // namespace
 
+// turns `root` and every bone below it about `pivot` (model space)
 void PlayerBody::TurnSubtree(int root, const glm::quat& turn, const glm::vec3& pivot) {
     const glm::mat4 m = glm::translate(glm::mat4(1.0f), pivot) * glm::mat4_cast(turn) * glm::translate(glm::mat4(1.0f), -pivot);
     for (size_t i = 0; i < world_.size() && i < g_skeleton.parents.size(); ++i) {
@@ -564,6 +582,7 @@ void PlayerBody::ReachLeftHand(const glm::mat4& target) {
     }
     const float d = std::clamp(glm::length(to), std::abs(a - b) + 1.0e-4f, a + b - 1.0e-4f);
     const glm::vec3 n = glm::normalize(to);
+    // the elbow stays on the side it bends to now, and hangs: the target above the shoulder would otherwise lift it over the head
     glm::vec3 pole = (e - s) + glm::vec3(0.0f, -0.5f * a, 0.0f);
     pole -= n * glm::dot(pole, n);
     if (glm::length(pole) < 1.0e-5f) {

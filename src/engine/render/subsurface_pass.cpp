@@ -98,11 +98,13 @@ bool SubsurfacePass::CreateTargets(VkExtent2D extent) {
         LogError("subsurface: cannot create targets {}x{}", extent.width, extent.height);
         return false;
     }
+    // both are shader read between the passes; the set is written once per size (the device is idle while targets change)
     ctx_->Submit([&](VkCommandBuffer cmd) {
         UseTargets(cmd, {{&copy_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {&temp_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
     });
     const VkDescriptorImageInfo copy{sampler_, copy_.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo temp{sampler_, temp_.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // binding 0 the copy in both sets; binding 1 the copy (horizontal) or the temporary target (vertical)
     const VkDescriptorImageInfo* infos[4] = {&copy, &copy, &copy, &temp};
     VkWriteDescriptorSet writes[4]{};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -131,6 +133,8 @@ void SubsurfacePass::Record(VkCommandBuffer cmd, RenderTarget& diffuse, uint32_t
     if (!pipeline_ || !copy_.Valid()) {
         return;
     }
+    // 0xDDBEA0: CopyBuffer (light -> copy), SubSurfaceScattering with m_localParam[0].x = 0 (copy -> temporary, horizontal),
+    // then with 1 (temporary and copy -> light, vertical and the mix)
     UseTargets(cmd, {{&diffuse, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL}, {&copy_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL}});
     VkImageCopy region{};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};

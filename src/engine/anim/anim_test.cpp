@@ -684,6 +684,8 @@ RigCheck CheckRig(const GaniMotion& motion, JsonDoc& doc, Vfs& vfs) {
     return check;
 }
 
+// helpbones_<model>.json (tools/motion.py --help-poses): random model space poses and the help bones of the Python model,
+// which matches the original evaluator run natively. Every bone is compared after the C++ evaluation.
 struct HelpCheck {
     Stats rotation;
     Stats position;

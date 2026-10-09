@@ -6,6 +6,7 @@
 #include "engine/physics/collision_world.h"
 
 int main() {
+    // A back-facing furniture plane precedes a front-facing wall along +Z.
     std::array<pt::GeomTriangle, 2> triangles{};
     triangles[0].a = {-2, -2, 1};
     triangles[0].b = {2, -2, 1};
@@ -43,6 +44,9 @@ int main() {
     wall_floor[2].a = {-20, 0, -20}; wall_floor[2].b = {-20, 0, 20}; wall_floor[2].c = {20, 0, 20};
     wall_floor[3].a = {-20, 0, -20}; wall_floor[3].b = {20, 0, 20}; wall_floor[3].c = {20, 0, -20};
     world.Clear(); world.AddTriangles(wall_floor, glm::mat4(1.0f), -1); world.Build();
+    // The decompiled controller (the default) stops a move at its first hit, 8 mm before it (0x12AD310), and takes the
+    // part into the wall off the next frame's move (0xB001E0), so a push along a wall slides from the second frame on;
+    // the sliding variant (PT_CONTROLLER_SLIDE=1) slides within the frame of the hit
     const bool original = pt::OriginalController();
     std::printf("controller: %s\n", original ? "decompiled" : "sliding variant");
     pt::CharacterController player;
@@ -72,6 +76,7 @@ int main() {
     player.Move(world, {-3, 0, 5}, 1.0f / 30.0f, 0);
     movement_check("inside corner blocks both planes", player.position.x >= .39f && player.position.z <= 2.61f && (original || player.position.z > 2.5f));
 
+    // A 0.9 m opening leaves 0.1 m clearance around the 0.8 m player diameter.
     std::array<pt::GeomTriangle, 4> doorway{};
     doorway[0].a = {-.45f, -2, -20}; doorway[0].b = {-.45f, 5, -20}; doorway[0].c = {-.45f, 5, 20};
     doorway[1].a = {-.45f, -2, -20}; doorway[1].b = {-.45f, 5, 20}; doorway[1].c = {-.45f, -2, 20};
@@ -83,6 +88,8 @@ int main() {
     for (int i = 0; i < 120; ++i) player.Move(world, {.01f, 0, .02f}, 1.0f / 60.0f, 0);
     movement_check("narrow opening while pressing jamb", std::abs(player.position.x) <= .061f && player.position.z > 2.35f);
     if (original) {
+        // the 0.796 m gap at the f010 stairs (x -11.53, gameplay.md 10.3) is narrower than the 0.8 m sphere: the original
+        // passes it by casting a sphere 10 cm inside the nearest plane (0xAFEB60)
         for (pt::GeomTriangle& t : doorway) {
             for (glm::vec3* v : {&t.a, &t.b, &t.c}) v->x = v->x < 0.0f ? -.398f : .398f;
         }
@@ -92,6 +99,7 @@ int main() {
         for (int i = 0; i < 120; ++i) player.Move(world, {0, 0, .02f}, 1.0f / 60.0f, 0);
         movement_check("stair gap narrower than the sphere", player.position.z > 2.35f);
     }
+    // Finite door jambs exercise the rounded entry corners, unlike the parallel-wall test above.
     std::vector<pt::GeomTriangle> jambs;
     const auto quad = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d) {
         pt::GeomTriangle t{}; t.a=a; t.b=b; t.c=c; jambs.push_back(t);
@@ -122,6 +130,7 @@ int main() {
         std::printf("finite jamb entry %.2f: %s; max forward %.5f, max step %.5f, stalled %d, end %.3f %.3f\n",x,ok?"PASS":"FAIL",max_forward,max_step,stalled,player.position.x,player.position.z);
         failures+=!ok;
     }
+    // Two angled opposing jamb contacts from the captured f060 correction.
     std::vector<pt::GeomTriangle> angled;
     for(glm::vec3 n : {glm::normalize(glm::vec3(-.2377f,0,.9713f)),glm::normalize(glm::vec3(-.4068f,0,-.9135f))}) {
         const glm::vec3 t=glm::vec3(n.z,0,-n.x)*10.0f;

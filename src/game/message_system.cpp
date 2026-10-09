@@ -12,6 +12,10 @@ bool FloorMatches(Game& game, const MessageScript& script) {
     if (!script.order_floor) {
         return true;
     }
+    // 0x91B0E0 subscribes only when the current floor is in floorNames, so an empty list never does. The one script with that
+    // data is the maze C exit door's ShDemoScript_open_hallway_door (orderFloor true, floorNames empty, where the hallway's copy
+    // has orderFloor false): left dead, the maze's closed door stays drawn under the swinging demo door and, behind the player,
+    // beside the hallway's own door. The port applies the authored intent (hide the door while gc_p00_010 plays).
     if (script.floor_names.empty() && script.class_name == "ShDemoScript" && script.demo_id == "gc_p00_010") {
         return true;
     }
@@ -80,6 +84,7 @@ void MessageSystem::SetupMessageBox(Stage& stage, const fox2::Entity& entity) {
 }
 
 void MessageSystem::Dispatch() {
+    // 0x52D170, 0x119E390: posts wait in the hub's ring for the next game frame's dispatch
     auto ready = [&] { return !queue_.empty() && queue_.front().ready <= game_.Time() + 1e-4; };
     for (int round = 0; round < 64 && ready(); ++round) {
         std::deque<Message> batch;

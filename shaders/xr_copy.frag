@@ -1,5 +1,11 @@
 #version 460
 
+// VR (docs/vr.md, Renderer::CopyToXr): a frame or the HUD into an OpenXR swapchain image. The port's images hold sRGB-encoded
+// values in UNORM formats; OpenXR reads an sRGB swapchain format as encoded and a UNORM one as linear, so this writes linear
+// values and an sRGB target encodes them again on write. The frame gets what composite.frag's mode 1 gives the window (film
+// grain, brightness); the HUD is premultiplied by its coverage (the UI's blend on a transparent image), unpremultiplied, decoded
+// and premultiplied again in linear light.
+
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 
@@ -8,7 +14,7 @@ layout(set = 0, binding = 1) uniform sampler2D grain_noise;
 
 layout(push_constant) uniform XrCopyParams {
     vec4 rect;
-    vec4 params;
+    vec4 params;  // x 1 for the premultiplied HUD, y brightness
     vec4 grain;
     vec4 grain_offset;
 } p;
@@ -29,6 +35,7 @@ void main() {
     }
     vec3 color = c.rgb;
     if (p.grain.x > 0.0) {
+        // as composite.frag (Draw2D_ShFilmGrain)
         float y = abs(dot(color, vec3(0.299, 0.587, 0.114)));
         float strength = p.grain.z;
         float alpha;

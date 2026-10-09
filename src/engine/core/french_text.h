@@ -1,6 +1,8 @@
 #pragma once
 #include <string_view>
 
+// French for the port's own menus (PC settings, extras, photo mode, loop browser, notes and prompts) and the added
+// languages' names on the option screen. The options screen's other texts and the subtitles are the game's own.
 namespace pt::french {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
@@ -48,6 +50,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Russe"},
     {"op_sub_ukrainian","Ukrainien"},
     {"op_sub_czech","Tchèque"},
+    {"op_sub_polish","Polonais"},
     {"pc_loop_browser","Sélection de boucle"},
     {"pc_note_loop_browser_entry","Démarrez n'importe quelle boucle sans remplacer votre sauvegarde."},
     {"pc_loop_choose","Choisissez une boucle"},

@@ -61,6 +61,9 @@ int main(int argc,char** argv) {
                 failures += mips[0][(g.atlas_y+y)*font.AtlasWidth()+g.atlas_x+x] != (font.Bit(g,x,y)?255:0);
         std::printf("Turkish font %s: %zu -> %zu glyphs\n",path,before,font.Glyphs().size());
     }
+    // The port's own texts in the game's six other languages: every key the full Chinese table has (all pc_ keys) and the added
+    // languages' names, the same {tokens}, and only characters the game's own font of that language has (font_def_jp for
+    // Japanese, font_def_ltn for the others), since those languages draw the PC pages with it
     {
         const char* names[]={"","French","German","Spanish","Japanese","Italian","Portuguese"};
         for(int lang=1;lang<=6;++lang) {
@@ -71,7 +74,7 @@ int main(int argc,char** argv) {
             auto tokens=[](std::string_view s){std::string out;for(size_t i=s.find('{');i!=std::string_view::npos;i=s.find('{',i+1))out+=s.substr(i,s.find('}',i)-i+1);return out;};
             for(const auto& e:pt::chinese::kMenu) {
                 const bool wanted=e.key.starts_with("pc_") || e.key=="op_sub_turkish" || e.key=="op_sub_chinese" || e.key=="op_sub_arabic" ||
-                                  e.key=="op_sub_russian" || e.key=="op_sub_ukrainian" || e.key=="op_sub_czech";
+                                  e.key=="op_sub_russian" || e.key=="op_sub_ukrainian" || e.key=="op_sub_czech" || e.key=="op_sub_polish";
                 if(!wanted) continue;
                 const auto text=pt::localized::Menu(e.key,lang); ++count;
                 if(text.empty()) {std::printf("FAIL: %s lacks %.*s\n",names[lang],int(e.key.size()),e.key.data());++local;continue;}

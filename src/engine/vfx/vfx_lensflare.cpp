@@ -44,6 +44,7 @@ LensFlareGraph ReadGraph(const fox2::DataSetFile& f, const fox2::Entity& shape, 
     return graph;
 }
 
+// 0x1BC9E20
 float Interp(int32_t type, float d, float s0, float s1, float v0, float v1) {
     const float t = (d - s0) / (s1 - s0);
     switch (type) {

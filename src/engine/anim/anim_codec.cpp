@@ -38,6 +38,7 @@ uint64_t ReadBits(std::span<const uint8_t> data, size_t bit_pos, uint32_t count)
     return (raw >> shift) & mask;
 }
 
+// 0xAD4610: exponent bias 8 (exponent << 13 + 0x3B800000)
 /* Not IEEE half: the motion codec's 16-bit floats use an exponent bias of 8 (0xAD4610), so a standard conversion comes out 128 times too small. */
 float HalfToFloat(uint32_t raw) {
     const uint32_t exponent = (raw >> 10) & 0x1F;

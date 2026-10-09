@@ -43,8 +43,16 @@ glm::mat4 FoxView(const glm::mat4& gl_view) {
     return glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f)) * gl_view;
 }
 
+// The MirrorLight stands behind the bathroom wall, in the hallway, and shines into the room through the mirror opening. The
+// capture caster set bypasses paper_a1 (submesh 10), a broad sheet 0.158 m behind the glass, and wood_b (submesh 2), the casing.
+// The paper bypass lets rays outside the glass reach the wall; the MirrorLight's projective area test supplies the finite
+// aperture. This is a port model inferred from the mesh and the PS4 patch, not a claim about the original shadow-map contents.
+// PT_MIRROR_SKIP_SUB=<n,n,...> replaces the list (-1: none).
+// Measured against mirror_f060 5335's 2048x2048 shadow passes (trace.txt, draws counted by index count): the pass that matches the
+// MirrorLight's holds the port's draws except the cockroach models (coc0_main0_def, 37 draws, none in any original pass), the
+// baby, the wall clock, the sconce shsb_lght005 and the flashlight's lens: those stay out of the MirrorLight's casters.
 bool MirrorLightSkips(const GpuMesh& mesh, int sub) {
-    static const bool all_casters = std::getenv("PT_MIRROR_CASTERS_ALL") != nullptr;
+    static const bool all_casters = std::getenv("PT_MIRROR_CASTERS_ALL") != nullptr;  // tests: the room's casters as before
     for (const char* name : {"coc0_main0_def", "bab0_main0_def", "shsb_clck001.fmdl", "shsb_lght005.fmdl", "handy_lens"}) {
         if (!all_casters && mesh.name.find(name) != std::string::npos) {
             return true;
@@ -60,6 +68,9 @@ bool MirrorLightSkips(const GpuMesh& mesh, int sub) {
     return list.find("," + std::to_string(sub) + ",") != std::string::npos;
 }
 
+// PT_SHADOW_LEGACY=1: the port's former shadow stand-ins for A/B tests (a slope scaled polygon offset of -1.5 constant and
+// -2 slope on every shadow draw, no viewBias receiver offset and no half texel offset in the spot lookup). Otherwise the
+// original's: no polygon offset, and the spot receiver moved by viewBias along the view's z (0xDC07F0, rendering.md 12.5).
 /* The original uses no polygon offset; its spot shadows move the receiver along the view's z by viewBias instead (0xDC07F0). */
 bool ShadowLegacy() {
     static const bool legacy = [] {
@@ -85,12 +96,14 @@ void ExtractPlanes(const glm::mat4& vp, glm::vec4 planes[6]) {
     }
 }
 
+// An oriented box: centre, unit axes, half extents.
 struct OrientedBox {
     glm::vec3 center{0.0f};
     glm::vec3 axes[3] = {glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
     glm::vec3 half{0.0f};
 };
 
+// a box matrix that maps [-1, 1] on each axis to the world (a light or probe area)
 OrientedBox BoxFromMatrix(const glm::mat4& box) {
     OrientedBox o;
     o.center = glm::vec3(box[3]);
@@ -102,6 +115,7 @@ OrientedBox BoxFromMatrix(const glm::mat4& box) {
     return o;
 }
 
+// 0x534960: the separating axis test of two oriented boxes (the 15 axes, 1e-6 added to the rotation terms)
 bool BoxesOverlap(const OrientedBox& a, const OrientedBox& b) {
     float r[3][3];
     float abs_r[3][3];
@@ -140,6 +154,7 @@ bool BoxesOverlap(const OrientedBox& a, const OrientedBox& b) {
     return true;
 }
 
+// 0x534440: a point within 1 mm of an oriented box
 bool PointInBox(const glm::vec3& p, const OrientedBox& b) {
     const glm::vec3 d = p - b.center;
     float sq = 0.0f;
@@ -150,6 +165,7 @@ bool PointInBox(const glm::vec3& p, const OrientedBox& b) {
     return sq < 1.0e-6f;
 }
 
+// the clip w of the light's rank point (GrLight +0x80) sets the screen size
 glm::vec3 LightLodScales(const SceneLight& l, const glm::vec3& at, const glm::vec3& eye, const glm::vec3& forward, float p00) {
     float level = -1.0f;
     if (l.lod.x != 0.0f || l.lod.y != 0.0f) {
@@ -176,6 +192,8 @@ glm::vec3 AnyPerpendicular(const glm::vec3& d) {
     return std::abs(d.y) < 0.95f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
 }
 
+// The box min to max lies wholly in the space an occluder polygon hides from the eye: beyond its plane and inside the planes
+// through the eye and its edges
 bool BoxOccluded(const glm::vec3& lo, const glm::vec3& hi, const glm::vec3& eye, const SceneOccluder& o) {
     const glm::vec3 n = glm::cross(o.points[1] - o.points[0], o.points[2] - o.points[0]);
     float side = glm::dot(n, eye - o.points[0]);
@@ -196,6 +214,7 @@ bool BoxOccluded(const glm::vec3& lo, const glm::vec3& hi, const glm::vec3& eye,
     }
     for (uint32_t i = 0; i <= o.count; ++i) {
         const glm::vec3 p = glm::vec3(planes[i]);
+        // the box corner least inside this plane
         const glm::vec3 worst(p.x > 0.0f ? lo.x : hi.x, p.y > 0.0f ? lo.y : hi.y, p.z > 0.0f ? lo.z : hi.z);
         if (glm::dot(p, worst) + planes[i].w < 0.0f) {
             return false;
@@ -213,6 +232,8 @@ bool SphereInPlanes(const glm::vec3& c, float r, const glm::vec4* planes) {
     return true;
 }
 
+// the box centre c, half size h meets the space inside the four side planes (the light query has no near plane:
+// lightsel_f060_1 keeps a spot light whose box lies wholly behind the camera)
 bool BoxInPlanes(const glm::vec3& c, const glm::vec3& h, const glm::vec4* planes) {
     for (int i = 0; i < 4; ++i) {
         const glm::vec3 n = glm::vec3(planes[i]);
@@ -223,6 +244,10 @@ bool BoxInPlanes(const glm::vec3& c, const glm::vec3& h, const glm::vec4* planes
     return true;
 }
 
+// The light's box in the scene grid. Point lights: the position plus and minus outerRange (0xCDB1A0). Spot lights
+// (0xCDB4F0): the apex, the point r = outerRange / cos(u / 2) along the axis and the octagon around the circle at angle u
+// from the axis at distance r (u the umbra half angle, at most 90 degrees; octagon corners (1, tan 22.5) and its turns
+// in the light's frame), cut to the light area's box (0x512340); the cut can leave a box whose minimum passes its maximum
 LightBox LightGridBox(const SceneLight& l) {
     LightBox box{l.position - glm::vec3(l.outer_range), l.position + glm::vec3(l.outer_range)};
     if (l.type != LightType::Spot) {
@@ -253,6 +278,9 @@ LightBox LightGridBox(const SceneLight& l) {
     return box;
 }
 
+// 0xCC3530's score of a light for a box seen from its centre with radius r (half the box's largest extent): |colour| times
+// the spot's cone^e at the centre times 1/d^2 - d^2/R^4, d = max(distance, inner range), R = outer range + r. cone is the
+// spot's cone^e at the centre, 1 for a point light.
 float LightScore(const SceneLight& l, const glm::vec3& center, float radius, float& cone) {
     const glm::vec3 to = center - l.position;
     const float dist = glm::length(to);
@@ -269,6 +297,7 @@ float LightScore(const SceneLight& l, const glm::vec3& center, float radius, flo
 
 }
 
+// the texel size of the formats the dump copy writes (mirror diagnostics), as scene_renderer.cpp has it
 static uint32_t TargetTexelBytes(VkFormat format) {
     switch (format) {
     case VK_FORMAT_R16G16B16A16_SFLOAT:
@@ -280,6 +309,7 @@ static uint32_t TargetTexelBytes(VkFormat format) {
     }
 }
 
+// IEEE 754 half to float, for the readbacks of the 16-bit float targets (mirror diagnostics)
 static float HalfToFloat(uint16_t bits) {    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
     const uint32_t exponent = (bits >> 10) & 0x1Fu;
     const uint32_t mantissa = bits & 0x3FFu;
@@ -344,6 +374,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         v.eye = glm::vec4(eye, 0.0f);
         v.clip_plane = clip;
         v.shadow = glm::vec4(0.0f);
+        // w: the shadow taps' per frame rotation (lighting.glsl ShadowPcf), only with PT_SHADOW_ROTATE=1
         static const float shadow_rotate = std::getenv("PT_SHADOW_ROTATE") ? 1.0f : 0.0f;
         v.jitter = up_.enabled ? glm::vec4(up_.jitter_ndc, up_.mip_bias, shadow_rotate) : glm::vec4(0.0f);
         v.jitter.z += graphics.texture_detail==0?1.0f:graphics.texture_detail==2?-.5f:0.0f;
@@ -362,6 +393,9 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
     if (static const bool log = std::getenv("PT_DOMINANT_LOG") != nullptr; log) {
         LogInfo("dominant light: view space ({:.4f} {:.4f} {:.4f} {:.4f})", dominant_light.x, dominant_light.y, dominant_light.z, dominant_light.w);
     }
+    // the dither and shadow tap patterns the upscaler averages (View temporal): the Bayer rank steps by 39 a frame (about
+    // 64 / phi, odd so all 64 come round) and d cycles (1,1) (-1,-1) (1,-1) (-1,1); PT_UPSCALE_FIXED_DITHER=1 keeps the
+    // native fixed patterns under the upscaler, for A/B runs
     static const bool fixed_dither = std::getenv("PT_UPSCALE_FIXED_DITHER") != nullptr;
     if (up_.enabled && !fixed_dither) {
         static constexpr glm::vec2 kTaps[4] = {{1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
@@ -421,6 +455,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
                                       glm::length(glm::vec3(item.transform[2]))});
         const glm::vec3 center = glm::vec3(item.transform * glm::vec4(local_center, 1.0f));
         const bool masked = item.hidden_meshes.any();
+        // PT_DRAW_EXCLUDE=<text>: leave out every model whose name contains it (A/B of one model's share of a frame)
         if (static const char* exclude = std::getenv("PT_DRAW_EXCLUDE"); exclude && mesh.name.find(exclude) != std::string::npos) {
             continue;
         }
@@ -429,6 +464,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             if (masked && i < kMaxHiddenMeshes && item.hidden_meshes[i]) {
                 continue;
             }
+            // PT_DRAW_EXCLUDE_MESH=<model text>:<mesh index>[,...]: leave out one mesh of the models whose name contains the text
             static const std::vector<std::pair<std::string, size_t>> exclude_meshes = [] {
                 std::vector<std::pair<std::string, size_t>> out;
                 if (const char* v = std::getenv("PT_DRAW_EXCLUDE_MESH")) {
@@ -470,6 +506,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
     }
     motion_history_.swap(motion_history_next_);
     motion_history_next_.clear();
+    // PT_TARGET_DUMP shots: every draw whose bounds come within 0.3 m of the camera, which the depth of a full screen
+    // surface just in front of the eye points at
     if (dump_requested_) {
         for (const Draw& d : draws_) {
             if (glm::distance(d.center, camera.position) < d.radius + 0.3f) {
@@ -479,6 +517,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             }
         }
     }
+    // 0x958530: every Mirror hides its own model in the capture views (+0x1AC bit 1), so the mirror view neither draws it nor
+    // takes it as a shadow caster
     if (lighting.mirror_capture) {
         for (Draw& d : draws_) {
             for (const SceneMirror& mirror : lighting.mirrors) {
@@ -505,6 +545,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         }
     }
     if (toggles.mirrors && lighting.mirror_capture) {
+        // 0x956D10: the capture follows the Mirror whose model origin is nearest to the camera; the port renders it only while
+        // that mirror faces the camera within 12 m (a capture nobody sees changes nothing on screen)
         const SceneMirror* nearest = nullptr;
         float nearest_distance = 0.0f;
         for (const SceneMirror& mirror : lighting.mirrors) {
@@ -548,6 +590,15 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             if (distance > 12.0f || !SphereInPlanes(center, radius, main_view_.planes) || facing < 0.01f) {
                 continue;
             }
+            // 0x959870 (camera +0x150 the near distance, +0xF8 the focal length): the capture view looks from the camera position
+            // mirrored at the plane through the mirror model's origin (normal its -Z), moved to 5.5 m (High, 0x1422E50) or 0.5 m
+            // (Low) from the origin when it is farther, at the origin, with a square field of view whose half angle holds the
+            // corners of the model box's x and y extents around the origin (focal length = distance / corner radius) and the
+            // near plane through the origin, square to the view; no clip plane (the capture's draws enable no user clip planes,
+            // PA_CL_CLIP_CNTL 0x00080000). The view is 512x512 (MirrorCapture) or 128x128 (MirrorCaptureLow, 0x959070) at the
+            // top left of the targets, and the mirror reads it through its projection (ProjViewCol). mirror_f060's mirror draws
+            // (4950 op 2248, 5335 op 4789) give the eye at the mirrored camera within 0.1 mm, the axis through the origin and
+            // a corner radius of 0.4872 m, the port's half diagonal of the mirror mesh's bounds
             const glm::vec3 origin = glm::vec3(mirror.transform[3]);
             const float side = glm::dot(normal, camera.position - origin);
             glm::vec3 eye = camera.position - 2.0f * side * normal;
@@ -589,9 +640,11 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             gpu::View& capture = frame_->views[mirror_view_.index];
             capture.viewport = glm::vec4(static_cast<float>(size), static_cast<float>(size), 1.0f / size, 1.0f / size);
             capture.jitter = glm::vec4(capture_jitter, 0.0f, 0.0f);
+            // the capture's own history (RecordMirrorTemporal) averages the same patterns as the upscaler (View temporal)
             if (mirror_temporal_enabled_) {
                 capture.temporal = frame_->views[main_view_.index].temporal;
             }
+            // the depth to view distance of the lighting passes takes the view's own near distance
             capture.projection_param.z = eye_distance;
             mirror_view_.area = VkExtent2D{size, size};
             mirror_view_.view_bit = 2;
@@ -609,6 +662,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             break;
         }
     }
+    // no capture this frame: the last one's square (still in mirror_) through the last capture camera, for that mirror only
     if (!mirror_active_ && toggles.mirrors && mirror_stale_.valid && view_count_ < gpu::kMaxViews) {
         const uint32_t index = add_view(mirror_stale_.projection, mirror_stale_.view, mirror_stale_.eye, glm::vec4(0.0f));
         gpu::View& stale = frame_->views[index];
@@ -627,11 +681,16 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         }
     }
 
+    // PT_LIGHT_CULL_LEGACY=1: the port's former stand-in for A/B tests (every OccluderEx tested from the eye with no
+    // selection, and BuildShadowViews' hysteresis and 4 + 8 limits); otherwise the original's occluder stage below
     static const bool legacy_cull = [] {
         const char* s = std::getenv("PT_LIGHT_CULL_LEGACY");
         return s && std::string_view(s) == "1";
     }();
     legacy_light_cull_ = legacy_cull;
+    // PT_LIGHT_CULL_TRACE=1: which lights the frame's own rules drop and why, and what became of each occluder. A light
+    // that comes and goes while the player walks forward and back is one of these tests flipping, and the reason names it.
+    // PT_LIGHT_CULL_TRACE=every: each rendered frame (a headless run renders only its screenshot frames)
     static const char* trace_cull_env = std::getenv("PT_LIGHT_CULL_TRACE");
     static const bool trace_cull = trace_cull_env != nullptr;
     static const bool trace_cull_every = trace_cull && std::string_view(trace_cull_env) == "every";
@@ -640,6 +699,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
     main_occluders_ = {};
     mirror_occluders_ = {};
     if (!legacy_cull) {
+        // 0xD53AC0 runs its occluder stage (0xD29E90, 0xD2A100 per OccluderEx, 0xD2AC10) for every frustum query, so for
+        // the camera view and for the mirror capture view on their own (rendering.md 12.23)
         const lightcull::OccluderLimits& limits = lightcull::LimitsFromEnv();
         main_cull_view_projection_ = unjittered * gl_view;
         main_occluders_ = lightcull::BuildOccluderVolumes(lighting.occluders, main_cull_view_projection_, camera.position, limits);
@@ -672,6 +733,11 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         if (light_count_ >= gpu::kMaxLights) {
             break;
         }
+        // The view's query (0xCFFED0 on the scene grid) holds the lights whose box, filed in whole grid cells, is not
+        // wholly outside one of the query's six planes (lightcull::GridBoxInFrustum), less the boxes an occluder volume of
+        // the view holds. The grid's origin and cell size are set at run time by code not decompiled yet: without
+        // PT_LIGHT_GRID the port tests the box itself against the view's four side planes, a stand-in. With a mirror
+        // capture the port's one light list serves both views, so a light stays when either view keeps it.
         const LightBox box = LightGridBox(l);
         const bool explain = trace_cull_frame || light_changes;
         std::string drop;
@@ -743,6 +809,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             if (light_changes) cull_reasons_[l.name] = "lod.y is zero";
             continue;
         }
+        // 0xD553A0 drops a light whose intensity sum (pi times these, the GrLight value) times the exposure is below 0.01
         if (glm::pi<float>() * (l.intensity.x + l.intensity.y + l.intensity.z) * exposure_ < 0.01f) {
             if (light_changes) cull_reasons_[l.name] = "intensity times exposure below 0.01";
             continue;
@@ -754,6 +821,7 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         g.color = glm::vec4(l.intensity, l.source_radius);
         g.direction = glm::vec4(glm::normalize(l.direction), l.shadow_bias);
         const float outer = l.outer_range + l.dimmer;
+        // range.w: the spot receiver's offset along the view's z (viewBias * 0.001, 0xDC07F0; SpotShadow in lighting.glsl)
         g.range = glm::vec4(l.dimmer, l.inner_range, 1.0f / std::max(outer * outer * outer * outer, 1.0e-12f),
                             ShadowLegacy() ? 0.0f : l.view_bias);
         g.cone = spot ? glm::vec4(l.cos_outer, l.inv_cone_range, l.cone_exponent, l.dimmer) : glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
@@ -790,6 +858,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
             g.sh[i] = glm::vec4(p.sh[i], 0.0f);
         }
     }
+    // PT_PROBE_AT="x y z nx ny nz": the probes that reach a world point, in drawing order, with their box weight there and their
+    // irradiance for the normal (before the exposure), and the blend probe.frag makes of them
     if (static const char* probe_at = std::getenv("PT_PROBE_AT"); probe_at) {
         glm::vec3 at(0.0f);
         glm::vec3 n(0.0f, 1.0f, 0.0f);
@@ -815,6 +885,8 @@ void SceneRenderer::PrepareFrame(const Camera& camera, const std::vector<DrawIte
         LogInfo("probe at: blend ({:.4f} {:.4f} {:.4f})", blend.x, blend.y, blend.z);
     }
     BuildShadowViews(lighting, camera.position);
+    // PT_LIGHT_CHANGES=1: each frame where a light enters or leaves the frame, or gains or loses its shadow, with the eye and
+    // the light's diffuse scale, so a light that comes and goes while the player walks names itself at the frame it happens
     if (static const bool light_changes = std::getenv("PT_LIGHT_CHANGES") != nullptr; light_changes) {
         std::map<std::string, std::pair<bool, float>> now;
         for (uint32_t i = 0; i < light_count_; ++i) {
@@ -878,6 +950,8 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
     mirror_shadow_lights_.assign(light_count_, gpu::kInvalid);
     light_upload_count_ = light_count_;
     std::vector<Candidate> ranked;
+    // SelectionLocalLight (0xD553A0) ranks the lights of the view's own list, so a light the view's query left out has
+    // no shadow there: the port's one light list holds the lights of both views while a mirror capture runs
     const auto occluded = [&](const ViewSetup& view, const LightBox& box) {
         if (legacy_light_cull_) {
             return std::any_of(lighting_->occluders.begin(), lighting_->occluders.end(),
@@ -904,9 +978,13 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
             const glm::vec3 d = (src.has_rank_point ? src.rank_point : (box.lo + box.hi) * 0.5f) - view.eye;
             const float factor = src.type == LightType::Spot ? 0.63661977f : 1.0f;
             float score = (src.intensity.x + src.intensity.y + src.intensity.z) * factor / std::max(glm::dot(d, d), 1.0e-12f);
+            // PT_LIGHT_CULL_LEGACY=1 only: a port rule, not the original's (0xD553A0 ranks every frame afresh). A light the
+            // view shadowed last frame keeps its shadow until another scores 25 % more.
             if (legacy_light_cull_ && view.view_bit == 1 && previous_shadowed_.contains(src.name)) {
                 score *= 1.25f;
             }
+            // the MirrorLight's shadow is the mirror view's whichever view lights with it: that view's casters leave the Mirror
+            // models out, so the light stands behind the wall and shines through the opening the mirror closes
             order.push_back({i, score, src.priority, src.id == kMirrorLightId ? uint8_t{2} : view.view_bit});
         }
         std::stable_sort(order.begin(), order.end(), [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
@@ -930,6 +1008,10 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
         }
         return selected;
     };
+    // The view's pair (params +0x84, +0x88) from 0xD3F0C0: the capture worker's hook on 0xD553A0 reads (3, 5) for the game's
+    // view in every frame of lightsel_f060 and lightsel_f010 (12.5), so at most 3 lights below priority 0x80 and 8 in all;
+    // (2, 2) for the mirror capture views. PT_LIGHT_CULL_LEGACY=1 keeps the port's former 4 and 12. With the view byte +0x5D4,
+    // which the floor environment sets on f110 (maze A and B, ScreenSettings::wide_shadow_limit), the pair is (10, 5).
     const uint32_t normal_limit = lighting.screen.wide_shadow_limit ? 10u : 3u;
     std::vector<Candidate> candidates = legacy_light_cull_ ? select(main_view_, 4, 12) : select(main_view_, normal_limit, normal_limit + 5);
     if (normal_limit != shown_shadow_limit_) {
@@ -968,6 +1050,8 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
         }
     }
     if (rt_active_) {
+        // ray traced shadows (12.21): the same lights, no maps; info.x holds the light's caster set (the mirror view's for a
+        // light only that view has, as RecordShadows picks it), the ray culling flag and the ray count
         const uint32_t samples = raytracing.soft_shadows ? (2u << std::clamp(graphics.ray_quality,0,2)) : 1u;
         for (const Candidate& c : candidates) {
             const uint32_t casters = light_sources_[c.light]->id == kMirrorLightId ? 32u : c.view_bit;
@@ -975,6 +1059,7 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
         }
         return;
     }
+    // the tiles go by score: a spot takes one tile, a point light two (its paraboloid halves), as the original's targets
     std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
     const uint32_t shadow_tile = shadow_.Extent().width / kShadowTiles;
     const uint32_t shadow_size = shadow_.Extent().width;
@@ -1040,10 +1125,16 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
             sv.radius = src->outer_range;
             ExtractPlanes(v.view_projection, sv.planes);
             sv.frustum = true;
+            // shadow_f010_fix: no shadow draw enables a polygon offset; the receiver offsets (shadowBias along the light's
+            // axis, viewBias along the view's z) keep lit surfaces out of their own shadow. PT_SHADOW_LEGACY=1 keeps the
+            // port's former slope scaled offset.
             sv.bias_constant = ShadowLegacy() ? -1.5f : 0.0f;
             sv.bias_slope = ShadowLegacy() ? -2.0f : 0.0f;
+            // shadow_f010 trace: shadow draws cull front faces (PA_SU_SC_MODE_CNTL 0x245), double-sided materials none (0x244)
             sv.cull = VK_CULL_MODE_FRONT_BIT;
             shadow_views_.push_back(sv);
+            // 0xDC07F0's texture matrix (0x1E91370) maps clip to (0.5 x + 0.50024414, -0.5 y + 0.50024414): the lookup sits
+            // half a texel (1/4096 of the 2048 map) past the plain mapping, 1/n in clip space for a tile of n texels
             const float half_texel = ShadowLegacy() ? 0.0f : 1.0f / static_cast<float>(shadow_tile);
             g.shadow = glm::translate(glm::mat4(1.0f), glm::vec3(half_texel, half_texel, 0.0f)) * v.view_projection;
             g.shadow_rect = glm::vec4(tx * tile_uv, ty * tile_uv, tile_uv, tile_uv);
@@ -1068,8 +1159,13 @@ void SceneRenderer::BuildShadowViews(const SceneLighting& lighting, const glm::v
                 sv.center = pos;
                 sv.radius = r;
                 sv.frustum = false;
+                // no polygon offset (shadow_f010_fix, 86 paraboloid draws); the lookup's receiver offset is shadowBias along
+                // the view's z (section 4.5)
                 sv.bias_constant = ShadowLegacy() ? -1.5f : 0.0f;
                 sv.bias_slope = ShadowLegacy() ? -2.0f : 0.0f;
+                // Both halves share the lookup's x = -d.x, so one of them is a mirror image of a camera looking along its
+                // axis: here the lower half (side 1, d.z > 0). Front faces culled on the upper half and back faces on the lower
+                // cull the faces toward the light in both, as the original's 0x245 on one half and 0x246 on the other (shadow_f010).
                 sv.cull = side == 0 ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_BACK_BIT;
                 shadow_views_.push_back(sv);
             }
@@ -1096,10 +1192,17 @@ void SceneRenderer::SetTppFog(const TppAtmosphereSettings& tpp) {
         }
     }
     const float e = exposure_ * std::exp2(offset);
+    // The froxel volume spans view depths 1 m to far (0xC79530, called by 0x8EF500 with the fog's far and 1.0: slice s at
+    // 1 m x (far / 1 m)^(s / 127), far raised to 10 m at least); the composite and the Prim shaders clamp the slice, so a pixel
+    // or particle takes the fog of the depth clamp(z, 1, far). ending_flare_trace's m_fogParam[2] = (1.0183, 55.155, 0, 127)
+    // at its 3470 to 3545, while the demo's far is below 10 (it is 0 from demo frame 3989 and ramps from 4200): 127 / 55.155 =
+    // ln 10.
     frame_->fog[0] = glm::vec4(tpp.fog_density, tpp.fog_falloff, tpp.fog_near, std::max(tpp.fog_far, 10.0f));
     frame_->fog[1] = glm::vec4(tpp.fog_self * e, 1.0f);
     frame_->fog[2] = glm::vec4(tpp.fog_mie, tpp.fog_mie_anisotropy);
+    // 0x906330: m0.w = e dirLightGain |dir|, the weight of the directional light's in-scatter (the shaders' ray.w)
     frame_->fog[3] = glm::vec4(tpp.fog_rayleigh, e * tpp.dir_gain * glm::length(tpp.dir_color));
+    // fog[4..6] are unused: the area box term of VolFog_TppVolFog_Area never reaches the volume (compose.frag)
     frame_->fog[4] = glm::vec4(0.0f);
     frame_->fog[5] = glm::vec4(0.0f);
     frame_->fog[6] = glm::vec4(0.0f);
@@ -1162,10 +1265,13 @@ void SceneRenderer::RecordRayTracing(VkCommandBuffer cmd) {
         return;
     }
     rt_built_frame_ = frame_counter_;
+    // PT_RT_SKINNED=0 leaves the skinned casters out (tests)
     static const bool skinned = [] {
         const char* env = std::getenv("PT_RT_SKINNED");
         return !env || std::atoi(env) != 0;
     }();
+    // the shadow pass's casters (RecordShadows): every submesh with the shadow flag, mask bits 0 and 1 for the views that draw it;
+    // with the reflections also the camera view's G-buffer surfaces, mask bit 2
     rt_casters_.clear();
     for (const Draw& d : draws_) {
         if (!skinned && d.sub->skinned && d.skin_base != gpu::kInvalid) {
@@ -1174,6 +1280,7 @@ void SceneRenderer::RecordRayTracing(VkCommandBuffer cmd) {
         uint32_t mask = 0;
         if (d.sub->shadow) {
             mask |= ((d.hidden_views & 1u) == 0 ? 1u : 0u) | ((d.hidden_views & 2u) == 0 ? 2u : 0u);
+            // bit 5: the mirror view's casters as the MirrorLight takes them
             if ((d.hidden_views & 2u) == 0 && !MirrorLightSkips(*d.mesh, static_cast<int>(d.sub - d.mesh->submeshes.data()))) {
                 mask |= 32u;
             }
@@ -1184,15 +1291,21 @@ void SceneRenderer::RecordRayTracing(VkCommandBuffer cmd) {
         if (static const bool skin_shadow_only = std::getenv("PT_SHADOW_SKIN_ONLY") != nullptr; skin_shadow_only && !d.sub->skinned) {
             mask &= ~3u;
         }
+        // PT_SHADOW_NO_SKIN=1: no skinned casters (Lisa, the player's body) in either shadow path, so a shot with and one
+        // without isolate the characters' shadows
         if (static const bool no_skin_shadow = std::getenv("PT_SHADOW_NO_SKIN") != nullptr; no_skin_shadow && d.sub->skinned) {
             mask &= ~3u;
         }
+        // the G-buffer's surfaces and the forward pass's (glass, emissive, the mirror), which write depth too
         const bool deferred = d.sub->pass == RenderPass::Opaque && d.sub->kind == gpu::kKindDeferred;
         const bool forward = (d.sub->pass == RenderPass::Unlit || d.sub->pass == RenderPass::Transparent) && d.sub->kind != gpu::kKindShadowOnly;
         const bool surface = (deferred || forward) && (d.hidden_views & 1u) == 0;
         if (rt_reflections_ && surface) {
             mask |= 4u;
         }
+        // the ambient occlusion's occluders (bit 3): the camera view's G-buffer surfaces; the contact shadows' (bit 4): the same
+        // without the lights' own fittings, a mesh under 1 m across whose bounds hold one of the frame's lights (a lamp's shade
+        // or glass, which the original's light shines through)
         if (deferred && (d.hidden_views & 1u) == 0) {
             if (rt_ao_active_) {
                 mask |= 8u;
@@ -1252,6 +1365,7 @@ void SceneRenderer::RecordShadows(VkCommandBuffer cmd) {
     if (shadow_views_.empty()) {
         return;
     }
+    // tiles fill the atlas row by row: clear only the rows in use
     uint32_t rows = 0;
     for (const ShadowView& sv : shadow_views_) {
         rows = std::max(rows, static_cast<uint32_t>(sv.rect.offset.y) + sv.rect.extent.height);
@@ -1262,6 +1376,8 @@ void SceneRenderer::RecordShadows(VkCommandBuffer cmd) {
     for (const ShadowView& sv : shadow_views_) {
         SetViewport(cmd, sv.rect);
         vkCmdSetDepthBias(cmd, sv.bias_constant, 0.0f, sv.bias_slope);
+        // The camera view's lights take the casters that view draws (guess: the light views were not traced); a light only the
+        // mirror view has (the MirrorLight) takes the mirror view's, as the capture views render their own shadow maps (0xD3F0C0)
         const uint8_t casters = sv.casters;
         uint32_t shadow_draws = 0, shadow_indices = 0;
         for (const Draw& d : draws_) {
@@ -1320,6 +1436,8 @@ void SceneRenderer::RecordGBuffer(VkCommandBuffer cmd, const ViewSetup& view) {
             vkCmdSetDepthBias(cmd, 1.0f, 0.0f, 1.0f);
         }
         const RenderPass wanted = pass == 0 ? RenderPass::Opaque : RenderPass::Decal;
+        // decal meshes carry a layer in mesh flag bits 20 to 23 (the ending street's blood is layer 2 to 4 over the layer 0
+        // wet asphalt of the road placements, which come later in the draw list): lower layers blend first
         decal_order_.clear();
         for (const Draw& d : draws_) {
             if (d.sub->pass == wanted && d.sub->kind == gpu::kKindDeferred && Visible(d, view)) {
@@ -1347,6 +1465,9 @@ void SceneRenderer::RecordOcclusion(VkCommandBuffer cmd, const ViewSetup& view) 
     push.ids = glm::uvec4(view.index, 0, 0, 0);
     push.f0 = glm::vec4(3.0f, 1.0f, 0.0f, 0.0f);
     push.f1 = glm::vec4(1.0f, 4.0f, 1.0f, 0.25f);
+    // GrxLineSSAOParameters gainonStart 0.85, gainonRange 5, falloffRange 150 (0xE21CD0 copies them to the plugin, 0xDA39F0 makes
+    // the constants); the fade ends at min(far clip, falloffStart 100 + falloffRange), 100 m in play, so near the camera the
+    // occlusion keeps two thirds of its strength
     push.f2 = glm::vec4(1.0f / 5.0f, 0.85f, std::min(camera_.far_plane, 100.0f + 150.0f), 1.0f / 150.0f);
     Fullscreen(cmd, occlusion_, push);
     vkCmdEndRendering(cmd);
@@ -1363,6 +1484,7 @@ bool SceneRenderer::EnsureAoTargets() {
         return true;
     }
     vk::Context& ctx = renderer_->Context();
+    // the sets of the frames in flight get new descriptors
     vkDeviceWaitIdle(device_);
     for (RenderTarget& t : rt_ao_images_) {
         ctx.DestroyImage(t.image);
@@ -1387,6 +1509,7 @@ bool SceneRenderer::EnsureAoTargets() {
         const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         for (uint32_t i = 0; i < RayTracing::kAoImages; ++i) {
             UseTargets(cmd, {{&rt_ao_images_[i], VK_IMAGE_LAYOUT_GENERAL}});
+            // no occlusion, and histories without frames
             const VkClearColorValue value = (i == 1 || i == 2) ? VkClearColorValue{} : VkClearColorValue{{1.0f, 1.0f, 1.0f, 1.0f}};
             vkCmdClearColorImage(cmd, rt_ao_images_[i].image.image, VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
         }
@@ -1398,8 +1521,11 @@ bool SceneRenderer::EnsureAoTargets() {
     return true;
 }
 
+// Ray traced ambient occlusion (12.21) of the main view: rt_ao.comp traces, rt_ao_filter.comp accumulates and blurs; the
+// lighting pass then draws the probes with probe_ao.frag, which reads the result
 void SceneRenderer::RecordRtAmbientOcclusion(VkCommandBuffer cmd, const ViewSetup& view) {
     const gpu::View& v = frame_->views[view.index];
+    // a camera cut starts the history again
     const bool cut = glm::distance(rt_ao_previous_eye_, view.eye) > kCameraCutDistance;
     const uint32_t previous = rt_ao_written_;
     gpu::PassPush push;
@@ -1417,6 +1543,7 @@ void SceneRenderer::RecordRtAmbientOcclusion(VkCommandBuffer cmd, const ViewSetu
     vkCmdDispatch(cmd, groups_x, groups_y, 1);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rt_ao_filter_);
     for (uint32_t pass = 0; pass < 3; ++pass) {
+        // each pass reads what the one before wrote
         UseTargets(cmd, {{&rt_ao_images_[0], VK_IMAGE_LAYOUT_GENERAL}, {&rt_ao_images_[1], VK_IMAGE_LAYOUT_GENERAL},
                          {&rt_ao_images_[2], VK_IMAGE_LAYOUT_GENERAL}, {&rt_ao_images_[3], VK_IMAGE_LAYOUT_GENERAL}});
         push.ids.z = pass;
@@ -1438,6 +1565,12 @@ void SceneRenderer::RecordLighting(VkCommandBuffer cmd, const ViewSetup& view) {
     const bool probes = toggles.probes && probe_count_ > 0;
     const bool lights = toggles.lights && debug_view != DebugView::Ambient;
     const VkExtent2D area = ViewArea(view);
+    // The SH resolve (rendering.md 5): SSLighting2_SH_MultiBlend accumulates the probes at half resolution (isShrinkSHBuffer,
+    // 960x540 of the 1080p frame), SSLighting2_SH_SkyLight_Encode divides the sum by its coverage 1 - T where T <= 0.9 (else the
+    // atlas's cell 0, black in P.T.) and BilateralUpscale2x2 takes it to full resolution by depth. With a temporal upscaler (and
+    // with the ray traced ambient occlusion, whose result is per render pixel) the probes accumulate at render resolution and
+    // the resolve only normalizes: the fixed 2x2 grid of the half resolution pass would not move with the jitter.
+    // PT_SH_RESOLVE=legacy draws the probes straight into the diffuse target without the normalization, as before.
     static const bool legacy_resolve = [] {
         const char* v = std::getenv("PT_SH_RESOLVE");
         return v && std::string_view(v) == "legacy";
@@ -1484,13 +1617,16 @@ void SceneRenderer::RecordLighting(VkCommandBuffer cmd, const ViewSetup& view) {
     if (probes) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, probe_resolve_);
         gpu::PassPush push;
+        // ids.x: 0 the accumulation's own pixel, 1 the bilateral upscale from half resolution, 2 legacy (no normalization)
         push.ids = glm::uvec4(legacy_resolve ? 2u : (shrink ? 1u : 0u), acc_area.width, acc_area.height, view.index);
         PushConstants(cmd, &push, sizeof(push));
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
+    // the contact shadows are the main view's (their occluders are its surfaces)
     const bool contact = rt_contact_active_ && view.index == main_view_.index;
     if (lights && light_count_ > 0) {
         if (rt_active_ || contact) {
+            // sets 0 and 1 stay bound: the ray tracing layout is compatible with the scene layout up to set 1
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rt_active_ ? light_rt_ : light_contact_);
             const VkDescriptorSet rt_set = rt_->Set(renderer_->FrameIndex());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rt_->Layout(), 2, 1, &rt_set, 0, nullptr);
@@ -1574,12 +1710,16 @@ void SceneRenderer::UpdateReflectionTexture(const std::string& path) {
     LogInfo("scene renderer: reflection texture {} {}", path, slot == TextureManager::kNoCube ? "is not a loadable cube map" : "loaded");
 }
 
+// 0xD6BB90, 0xCC3530, 0xCC4FE0, 0xDB6C10
 uint32_t SceneRenderer::ForwardLights(const Draw& draw, glm::vec4 aux[2], uint8_t view_bit) const {
     const glm::vec3 local_center = (draw.mesh->bounds_min + draw.mesh->bounds_max) * 0.5f;
     const glm::vec3 local_half = (draw.mesh->bounds_max - draw.mesh->bounds_min) * 0.5f;
     const glm::mat3 m(draw.transform);
     const glm::vec3 half = glm::abs(m[0]) * local_half.x + glm::abs(m[1]) * local_half.y + glm::abs(m[2]) * local_half.z;
     const glm::vec3 center = glm::vec3(draw.transform * glm::vec4(local_center, 1.0f));
+    // The job's own box of the model: the local box centre plus the matrix translation (the rotation is left out of the centre,
+    // so for the house, turned 90 degrees, that point lies outside the hallway), the local extents and the matrix rotation.
+    // A probe counts when it holds that point (0x534440), a light with a lightArea when its area box meets that box (0x534960).
     const glm::vec3 area_point = local_center + glm::vec3(draw.transform[3]);
     OrientedBox model_box;
     model_box.center = area_point;
@@ -1597,6 +1737,7 @@ uint32_t SceneRenderer::ForwardLights(const Draw& draw, glm::vec4 aux[2], uint8_
     std::vector<Candidate> candidates;
     for (uint32_t i = 0; i < light_count_ && i < 0xFFu; ++i) {
         const SceneLight& l = *light_sources_[i];
+        // the lights whose grid box meets the model's box (0x534400)
         const LightBox& box = light_boxes_[i];
         if ((l.hidden_views & view_bit) != 0 || glm::any(glm::greaterThan(box.lo, center + half)) ||
             glm::any(glm::lessThan(box.hi, center - half))) {
@@ -1652,6 +1793,17 @@ uint32_t SceneRenderer::ForwardLights(const Draw& draw, glm::vec4 aux[2], uint8_
     return lights;
 }
 
+// DominantLightSearch (ShEffet, 0x8D12A0, once a frame; rendering.md 3): the direction g_psSystem.m_dominantLightDir
+// gives fox3DDF_Hair's highlight. It reads the render camera of MainViewport (GrCamera at view +0x4A8, rows right +0x30,
+// up +0x40, forward +0x50, position +0x60) composed with a translation by (0, 0, 2) applied after the camera matrix, so the
+// point P it works from is the camera position plus 2 m along world Z (not along the view). The box of the four points
+// P + 0.25 forward +- 0.9 up +- 0.25 right goes to 0xCC6570: the scene's lights whose grid box meets it (0xCC30F0, all
+// views, no light area test), scored at the box centre with half its largest extent as the radius (0xCC3530) and packed by
+// 0xCC4FE0, whose first four enabled point or spot lights carry their colour / pi (a spot's times its cone^e at the centre).
+// The strongest of those (|colour / pi| above the scene's directional light, which P.T. does not have, so above 0) gives
+// the direction normalize(P - light position); with none it is (0, -1, 0). DominantLightState fades or turns it to a new
+// result. The view constant takes it through the view's rotation (0xD8B8E0); every other view keeps the (0, 1, 0, 1) its
+// constructor sets (0xCAC3D0, 0xCAD110), the mirror captures among them. dt is the game time since the last render.
 void SceneRenderer::UpdateDominantLight(const Camera& camera, const SceneLighting& lighting, float dt) {
     const glm::vec3 p = camera.position + glm::vec3(0.0f, 0.0f, 2.0f);
     const glm::vec3 half = 0.9f * glm::abs(camera.Up()) + 0.25f * glm::abs(camera.Right());
@@ -1701,6 +1853,11 @@ void SceneRenderer::UpdateDominantLight(const Camera& camera, const SceneLightin
     }
 }
 
+// 0x958790, the mirror material's lights. With the handy light on, LocalLightMask (0, 0, 0, 1) keeps only the LocalLight:
+// the handy light, its colour scaled by its cone at the point of the mirror's box nearest to where the light's axis line
+// crosses the mirror plane (0x543DF0 intersects the whole line; a parallel axis leaves the world origin), with its own
+// position, dimmer, inner range and 1/R^4. Otherwise (1, 1, 1, 0) keeps the model's light block as for glass. The hemisphere
+// terms of the light block apply either way. The mirror's front normal is its model's -Z (0x95ADA0).
 uint32_t SceneRenderer::MirrorLights(const Draw& draw, glm::vec4 aux[2]) const {
     const uint32_t block = ForwardLights(draw, aux, 1u);
     for (uint32_t i = 0; i < light_count_ && i < 0xFFu; ++i) {
@@ -1726,6 +1883,12 @@ uint32_t SceneRenderer::MirrorLights(const Draw& draw, glm::vec4 aux[2]) const {
     return block;
 }
 
+// The original draws its forward materials (fox3dfw_constant, fox3dfw_glass, the mirror) on the 8-bit scene buffer through a UNORM view
+// with CB_BLEND 0x65000501 (colour src + dst (1 - src.a), alpha dst.a (1 - src.a); f010_dumps 1490, draws 567 to 575), so what lies behind
+// translucent glass is mixed on sRGB encoded values. In the main view the port draws them into the effect buffer instead, cleared to
+// (0, 0, 0, 1): the encoded premultiplied colours chain there as on the scene buffer (P = src + P (1 - a), T = T (1 - a)), and
+// vfx_composite then sets scene = decode(P + T encode(scene)) with the scene alpha times T, the result of the same blends in the same
+// order. The mirror view keeps the linear blend.
 void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, RenderTarget& output) {
     const bool main_view = &output == &hdr_;
     bool any = false;
@@ -1753,6 +1916,7 @@ void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, Re
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             bound = pipeline;
         }
+        // forward.frag: write the encoded premultiplied colour for the effect buffer
         uint32_t flags = main_view ? 0x80u : 0u;
         glm::vec4 aux[2]{};
         if (d.sub->kind == gpu::kKindGlass) {
@@ -1764,12 +1928,15 @@ void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, Re
                 is_mirror = is_mirror || (m->mesh == d.mesh && m->transform == d.transform);
             }
             if (is_mirror) {
+                // 0x958530 hides the mirror's own model in the capture views (+0x1AC bit 1)
                 if (!main_view) {
                     continue;
                 }
                 flags |= 1u;
             }
             flags |= MirrorLights(d, aux) << 8;
+            // PT_MIRROR_DIRT=0|1: the mirror's blend forced to the reflection alone (0) or the lit dirt alone (1), for
+            // the measurement that tells which of the two is short of the original (forward.frag's flags bit 1 and 2)
             static const int mirror_dirt = [] {
                 const char* value = std::getenv("PT_MIRROR_DIRT");
                 return value ? std::atoi(value) : -1;
@@ -1780,15 +1947,23 @@ void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, Re
                     flags |= 4u;
                 }
             }
+            // PT_MIRROR_RAW_REFLECTION=1: the capture sampled without the sRGB encode the material applies to it
             static const bool raw_reflection = std::getenv("PT_MIRROR_RAW_REFLECTION") != nullptr;
             if (raw_reflection) {
                 flags |= 8u;
             }
+            // PT_MIRROR_LINEAR_DIRT=1: the mirror's dirt taken as a linear colour instead of as the encoded value the
+            // shader comment describes. The port applies SrgbDecode to it while the comment says the original writes the
+            // lit dirt into the gamma buffer without a curve; the two readings differ by the decode, which is the size
+            // of the mirror's excess over the capture (scratch/mirror-region/FINDINGS.md).
             static const bool linear_dirt = std::getenv("PT_MIRROR_LINEAR_DIRT") != nullptr;
             if (linear_dirt) {
                 flags |= 16u;
             }
+            // A mirror whose lit dirt never changes with the frame's lights needs these two checked: the parallax branch
+            // is what gives it the light block, and a zero aux leaves the shader's `lit` term at zero.
             static const bool trace_mirror_draw = std::getenv("PT_MIRROR_TRACE") != nullptr;
+            // PT_MIRROR_TRACE=every: each rendered frame
             static const bool trace_mirror_every = trace_mirror_draw && std::string_view(std::getenv("PT_MIRROR_TRACE")) == "every";
             if (trace_mirror_draw && (trace_mirror_every || frame_counter_ % 240 == 0) && is_mirror) {
                 const uint32_t block = flags >> 8;
@@ -1815,6 +1990,7 @@ void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, Re
                      {&particles_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
     BeginPass(cmd, extent_, {{&output, false, {}}});
     gpu::PassPush push;
+    // vfx_composite: the forward blends also take the scene alpha (the composite's bloom luminance) down by the transmittance
     push.ids.x = 1u;
     Fullscreen(cmd, vfx_composite_, push);
     vkCmdEndRendering(cmd);
@@ -1822,13 +1998,37 @@ void SceneRenderer::RecordForward(VkCommandBuffer cmd, const ViewSetup& view, Re
     BeginPass(cmd, extent_, {{&output, false, {}}}, &depth_, false, false);
 }
 
+// the liquid materials' scene copy (Primitive_Liquid2Final inScreenTexture): the forward pass ends, the HDR target is copied to
+// hdr_copy_ and the pass resumes with the same attachments
+// The original downsamples reverse-Z depth to RG16F min/max, draws alpha/additive/subtractive effects into two 960x540 RGBA16F
+// premultiplied layers, then resolves them at full resolution with NearFarUpScale2x2. Called inside the effect pass on output; leaves
+// that pass open again.
 void SceneRenderer::RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context) {
     vkCmdEndRendering(cmd);
-    UseTargets(cmd, {{&particles_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-    BeginPass(cmd, extent_, {{&particles_, true, {{0.0f, 0.0f, 0.0f, 1.0f}}}}, &depth_, true, false);
+    const VkExtent2D effect_extent = particles_near_.Extent();
+    UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
+                     {&near_far_depth_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                     {&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL}});
+    BeginPass(cmd, effect_extent, {{&near_far_depth_, true, {}}}, &near_far_depth_attachment_, false, true);
+    BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+    Fullscreen(cmd, vfx_depth_down_, gpu::PassPush{});
+    vkCmdEndRendering(cmd);
+    UseTargets(cmd, {{&near_far_depth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                     {&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
+                     {&particles_near_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                     {&particles_far_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
+    const VkClearColorValue clear_transmittance{{0.0f, 0.0f, 0.0f, 1.0f}};
+    BeginPass(cmd, effect_extent, {{&particles_near_, true, clear_transmittance}, {&particles_far_, true, clear_transmittance}},
+              &near_far_depth_attachment_, true, false);
     uint32_t recorded = 0;
     context.subset = kVfxOffscreen;
     context.recorded = &recorded;
+    context.extent = effect_extent;
+    context.depth_view = near_far_depth_attachment_.image.view;
+    context.near_far_depth_view = near_far_depth_.image.view;
+    // The liquids of the effect pass (the ones without the alpha test, VfxPass::DrawLayer) refract the scene as it stands under the
+    // effect buffer, as the original copies its scene buffer before them; nothing in this pass changes the scene, so one copy
+    // serves every one of them
     bool copied = false;
     context.copy_scene = nullptr;
     if (context.scene_copy_view) {
@@ -1846,9 +2046,12 @@ void SceneRenderer::RecordEffects(VkCommandBuffer cmd, RenderTarget& output, Sce
             vkCmdCopyImage(cmd, output.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hdr_copy_.image.image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             UseTargets(cmd, {{&hdr_copy_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                             {&particles_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-                             {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
-            BeginPass(cmd, extent_, {{&particles_, false, {}}}, &depth_, true, false);
+                             {&particles_near_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                             {&particles_far_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                             {&near_far_depth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                             {&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
+            BeginPass(cmd, effect_extent, {{&particles_near_, false, {}}, {&particles_far_, false, {}}},
+                      &near_far_depth_attachment_, true, false);
         };
     }
     vfx_forward(context);
@@ -1864,9 +2067,13 @@ void SceneRenderer::RecordEffects(VkCommandBuffer cmd, RenderTarget& output, Sce
                        1, &copy);
         UseTargets(cmd, {{&output, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
                          {&hdr_copy_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                         {&particles_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
+                         {&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
+                         {&near_far_depth_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                         {&particles_near_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                         {&particles_far_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
         BeginPass(cmd, extent_, {{&output, false, {}}});
         gpu::PassPush push;
+        push.f0.x = context.projection[3][2];
         Fullscreen(cmd, vfx_composite_, push);
         vkCmdEndRendering(cmd);
     }
@@ -1944,10 +2151,15 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     gpu::PassPush push;
     push.ids = glm::uvec4(view.index, 0, 0, 0);
     push.f0 = glm::vec4(plane, kFarLimit);
+    // PT_REFLECT_DEPTH_LEGACY=1: under a jittered view the march and the reflection layer interpolate the depth wherever the 2x2
+    // texels lie within 5 % of each other, as before ReflectionPlanarDepth (reflection_mix.glsl), for A/B
     static const bool depth_legacy = std::getenv("PT_REFLECT_DEPTH_LEGACY") != nullptr;
+    // PT_REFLECT_MARCH_SHIFT_FIRST=1: the per frame start shifts the first sample too, as before (A/B; reflect_make.frag)
     static const bool shift_first = std::getenv("PT_REFLECT_MARCH_SHIFT_FIRST") != nullptr;
     push.f1 = glm::vec4(kLines * aspect, kLines, depth_legacy ? 1.0f : 0.0f, shift_first ? 1.0f : 0.0f);
     push.f2 = glm::vec4(1.0f / static_cast<float>(refmap_.Extent().width), 1.0f / static_cast<float>(refmap_.Extent().height), 0.0f, 0.0f);
+    // the coarse march's per frame start (reflect_make.frag) only where reflect_temporal.frag accumulates it; PT_REFLECT_MARCH_FIXED=1
+    // keeps the original's fixed samples there too
     static const bool march_fixed = std::getenv("PT_REFLECT_MARCH_FIXED") != nullptr;
     static const bool temporal_off_march = std::getenv("PT_REFLECT_TEMPORAL_OFF") != nullptr;
     if (up_.enabled && !temporal_off_march && !march_fixed && reflect_layer_.Valid() && reflect_temporal_pipeline_ && reflect_layer_pipeline_) {
@@ -1955,8 +2167,11 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
         push.f2.w = static_cast<float>(frame_counter_ % 64u);
     }
     if (rt_reflections_) {
+        // 12.21: the map traced, with a second target for the hits off screen; the lights hidden in the camera view as bits of m
         UseTargets(cmd, {{&refmap_color_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}});
         BeginPass(cmd, refmap_.Extent(), {{&refmap_, false, {}}, {&refmap_color_, false, {}}});
+        // PT_RT_REFLECTION_DEBUG=1: the reflection shows the hits it shaded in red and those it took from the screen in green;
+        // =2: every hit shaded at full weight, to compare the shading with the screen
         static const uint32_t debug = [] {
             const char* value = std::getenv("PT_RT_REFLECTION_DEBUG");
             return value ? (std::atoi(value) == 2 ? 2u : 1u) : 0u;
@@ -1994,9 +2209,11 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     vkCmdCopyImage(cmd, hdr_.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hdr_copy_.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                    &copy);
     push.f0 = glm::vec4(plane, depth_legacy ? 1.0f : 0.0f);
+    // localParam[1] = (1, 1, scale, bias), localParam[2] = (h, edge): the floor environment's REFLECT_MAP values (12.16)
     const ScreenSettings& screen = lighting_->screen;
     push.f1 = glm::vec4(1.0f, 1.0f, screen.reflect_scale, screen.reflect_bias);
     push.f2 = glm::vec4(horizontal, screen.reflect_edge ? 1.0f : 0.0f);
+    // PC addition (12.16): with a temporal upscaler the reflection is accumulated over the frames before it is mixed in
     static const bool temporal_off = std::getenv("PT_REFLECT_TEMPORAL_OFF") != nullptr;
     if (up_.enabled && !temporal_off && reflect_layer_.Valid() && reflect_temporal_pipeline_ &&
         (rt_reflections_ ? reflect_layer_rt_ : reflect_layer_pipeline_)) {
@@ -2022,6 +2239,10 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     UseTargets(cmd, {{&hdr_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}});
 }
 
+// The reflection the upscaler cannot resolve (12.16, PC addition): reflect_layer.frag writes the blend's reflection on its own
+// (premultiplied colour and amount) with the offset to where it was last frame (its virtual image through the previous
+// unjittered view projection), and reflect_temporal.frag accumulates it there, clamped to this frame's neighbourhood, and mixes
+// it into the scene as the original blend does. The history resets with the upscaler's (camera cuts) and on any frame without it.
 void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetup& view, gpu::PassPush push) {
     const float exposure = frame_->views[view.index].exposure.x;
     const bool valid_history = reflect_history_valid_ && !up_.reset && reflect_history_frame_ + 1 == frame_counter_;
@@ -2057,6 +2278,8 @@ void SceneRenderer::RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetu
     BeginPass(cmd, extent_, {{&hdr_, false, {}}, {&reflect_history_[current], false, {}}});
     gpu::PassPush temporal;
     temporal.ids = glm::uvec4(view.index, valid_history ? 1u : 0u, gpu::kImgReflectHistoryA + previous, 0u);
+    // 0.9 of the history at rest; the neighbourhood clip keeps 1.25 standard deviations around this frame's mean
+    // the reflection goes in after the upscaler (upscale_resolve.frag) unless PT_REFLECT_PRE_UPSCALE=1
     static const bool pre_upscale = std::getenv("PT_REFLECT_PRE_UPSCALE") != nullptr;
     reflect_post_upscale_ = !pre_upscale;
     temporal.f1 = glm::vec4(exposure / std::max(reflect_history_exposure_, 1.0e-12f), 0.9f, 1.25f, reflect_post_upscale_ ? 1.0f : 0.0f);
@@ -2115,6 +2338,7 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
             EndLabel(cmd);
         }
     }
+    // the occlusion pass samples the depth over the whole target; the capture view, which renders into a corner, goes without
     const bool occlusion = toggles.occlusion && lighting_->valid && main_view;
     if (occlusion) {
         BeginLabel(cmd, "occlusion");
@@ -2130,6 +2354,7 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
     BeginLabel(cmd, main_view ? "lighting" : "mirror lighting");
     RecordLighting(cmd, view);
     EndLabel(cmd);
+    // 0x922C60 sets the SUBSURFACE_SCATTER plugin's bit in the main view's plugin mask on the ending only (rendering.md 12.26)
     static const bool sss_off = [] {
         const char* v = std::getenv("PT_SUBSURFACE");
         return v && v[0] == '0';
@@ -2158,6 +2383,7 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
     const TppAtmosphereSettings& tpp = lighting_->tpp;
     if (tpp.enabled && toggles.tpp_atmosphere) {
         push.ids.z = 1u;
+        // PT_SKY=0: the sky pixels as the composite alone leaves them (the port's former black sky behind the fog), for A/B runs
         static const bool sky_off = [] {
             const char* s = std::getenv("PT_SKY");
             return s && std::string_view(s) == "0";
@@ -2174,6 +2400,7 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
         push.f0 = glm::vec4(1.0f / (c * c), t, c, 0.0f);
     }
     Fullscreen(cmd, compose_, push);
+    // f010_dumps 1490: fox3dfw_glass and fox3dfw_constant draws write depth (DB_DEPTH_CONTROL 0x7e6), so the effects behind them are hidden
     vkCmdEndRendering(cmd);
     if (main_view && dump_requested_ && &output == &hdr_) {
         RecordDumpCopy(cmd, output, dump_compose_);
@@ -2206,11 +2433,13 @@ void SceneRenderer::RecordView(VkCommandBuffer cmd, const ViewSetup& view, Rende
         context.depth_view = depth_.image.view;
         context.exposure = exposure_;
         context.frame_index = renderer_->FrameIndex();
+        // effects stay out of the capture view
         context.mirrored = view.mirrored || !main_view;
         if (lighting_->tpp.enabled && toggles.tpp_atmosphere) {
             std::copy(std::begin(frame_->fog), std::end(frame_->fog), std::begin(context.fog));
             context.fog_mode = 1u;
         }
+        // hdr_copy_ is free here: the reflection pass fills it again after the forward pass
         context.scene_copy_view = hdr_copy_.image.view;
         if (&output == &hdr_) {
             context.copy_scene = [&] { RecordSceneCopy(cmd, output); };
@@ -2280,6 +2509,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
 
 void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt) {
     const auto cpu_start = std::chrono::steady_clock::now();
+    // VR: the screen effects stay out of the eyes for this frame (SetVrEye), the toggles come back as they were
     struct ToggleGuard {
         RenderToggles& toggles;
         RenderToggles saved;
@@ -2320,6 +2550,7 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
     }
     ev_pinned_ = lighting_->exposure.pinned;
     if (!timing_ring_.empty()) {
+        // the port's own device memory (VMA's blocks over every heap), to see growth or a burst of allocations in a timing run
         VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
         vmaGetHeapBudgets(renderer_->Context().allocator, budgets);
         const VkPhysicalDeviceMemoryProperties* memory = nullptr;
@@ -2385,10 +2616,15 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
             mirror_history_valid_ = false;
         }
         if (dump_requested_) {
+            // the capture the mirror samples: the black mirror of a camera close to the wall is either an empty
+            // capture or the material's own output, and this tells them apart
             RecordDumpCopy(cmd, mirror_, dump_mirror_);
         }
         static const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
         if (trace) {
+            // what the capture view renders: a mirror that shows the room must have geometry inside this frustum and
+            // lights that reach it (the black mirror of a camera at the wall had both and still came out at the clear
+            // value, see the mirror notes in rendering.md)
             uint32_t drawn = 0;
             for (const Draw& d : draws_) {
                 drawn += Visible(d, mirror_view_) ? 1u : 0u;
@@ -2397,6 +2633,9 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
                     "(main {:.6f} ev {:.3f})",
                     mirror_view_.index, mirror_view_.eye.x, mirror_view_.eye.y, mirror_view_.eye.z, mirror_view_.projection[3][2],
                     mirror_view_.area.width, drawn, draws_.size(), light_count_, frame_->views[mirror_view_.index].exposure.x, exposure_, ev_);
+            // What the capture view's own passes produced, read back before the main view overwrites the shared targets:
+            // the mirror's pixels come out at the clear value while these hold radiance, so the loss is in the compose or
+            // the forward pass and one of these three is the term that is missing. PT_MIRROR_PROBE=0 turns it off.
             static const bool probe_capture = [] {
                 const char* value = std::getenv("PT_MIRROR_PROBE");
                 return value && std::atoi(value) != 0;

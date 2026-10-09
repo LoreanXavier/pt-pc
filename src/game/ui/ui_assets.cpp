@@ -70,6 +70,7 @@ void UiAssets::UploadDecodedPreviews() {
     }
     for (DecodedPreview& decoded : done) {
         std::erase(preview_pending_, decoded.path);
+        // a picture that failed to decode is decoded again on demand (LocalPreview)
         if (!decoded.rgba.empty()) UploadImage(decoded.path, decoded.width, decoded.height, true, decoded.rgba);
     }
 }

@@ -73,6 +73,9 @@ NVSDK_NGX_PerfQuality_Value QualityValue(UpscaleQuality quality) {
     }
 }
 
+// the model is the NGX render preset of every quality mode; Default lets NGX pick per mode (K for DLAA, quality and balanced, M for
+// performance, L for ultra performance in SDK 310.9.1). L and M are the second generation transformer (FP8), about twice the
+// cost of K on RTX 20 and 30 GPUs, which have no FP8 (upscaling.md)
 uint32_t PresetValue(DlssModel model) {
     switch (model) {
     case DlssModel::K: return NVSDK_NGX_DLSS_Hint_Render_Preset_K;
@@ -184,6 +187,9 @@ public:
         p.Feature.InPerfQualityValue = QualityValue(create.quality);
         p.InFeatureCreateFlags =
             NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted;
+        // DLSS's own exposure (guide 3.9/3.10: MidGray / (AverageLuma * (1 - MidGray)) over the frame) instead of the game's eye
+        // adaptation, which leaves P.T.'s dark frames far below mid grey: with it model K trails the handy light's spot over a still
+        // wall less (upscaling.md, Flashlight); PT_DLSS_AUTO_EXPOSURE=0 passes the game's value as before
         static const bool auto_exposure = [] {
             const char* e = std::getenv("PT_DLSS_AUTO_EXPOSURE");
             return !e || std::atoi(e) != 0;
@@ -204,6 +210,7 @@ public:
                 DlssModelKey(create.dlss_model), preset);
         return true;
     }
+
 
     bool Dispatch(const UpscaleDispatch& d) override {
         if (!feature_) {

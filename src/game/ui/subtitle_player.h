@@ -28,7 +28,7 @@ struct SubtitleView {
 
 class SubtitlePlayer {
 public:
-    static constexpr int kLanguageCount = 13;
+    static constexpr int kLanguageCount = 14;
 
     void Init(Vfs& vfs) { vfs_ = &vfs; }
     void SetLanguage(int language);
@@ -36,12 +36,15 @@ public:
 
     bool Play(std::string_view subtitle_id, float offset_seconds, std::optional<glm::vec3> source = std::nullopt, uint32_t sound = 0);
     bool PlayKey(uint32_t key, float offset_seconds, std::optional<glm::vec3> source = std::nullopt, uint32_t sound = 0);
+    // ends the subtitles whose sound (the playing id whose marker started them) is no longer playing
     void EndStopped(const std::function<bool(uint32_t)>& alive);
     bool Seek(uint32_t key, float time);
     void Update(float dt);
     void Clear() { active_.clear(); }
     void SetListener(const glm::vec3& position) { listener_ = position; }
     bool Current(std::string_view hidden_id, SubtitleView& out) const;
+    // every line of a subtitle in a language (English where that language lacks it), with its start and end: the Archive's
+    // transcripts (main.cpp)
     struct TranscriptLine {
         float start = 0.0f;
         float end = 0.0f;

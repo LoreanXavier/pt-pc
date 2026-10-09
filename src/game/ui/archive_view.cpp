@@ -19,6 +19,7 @@
 namespace pt::game {
 namespace {
 
+// the hallway's data set, where the frame on the wall holds the photo pieces (gameplay.md 6.4)
 constexpr const char* kHallwayData = "/Assets/sh/level/promotion/pt_2014/hallway/pt14_hallway.fpkd";
 constexpr std::string_view kNazoGroup = "pt14_hallway_nazo|shsb_labl001_mapc";
 
@@ -79,6 +80,8 @@ bool ArchiveView::LoadPiece(UiAssets& assets, const std::string& model, const gl
     return true;
 }
 
+// a piece alone (its model's own plane), or "complete": the pieces the frame holds, placed as the hallway's data places them, in
+// the plane of the frame's first piece
 const ArchiveView::Photo& ArchiveView::LoadPhoto(UiAssets& assets, const std::string& name) {
     Photo& photo = photos_[name];
     if (photo.loaded) return photo;
@@ -95,6 +98,7 @@ const ArchiveView::Photo& ArchiveView::LoadPhoto(UiAssets& assets, const std::st
             if (!file->Load(entry.path, data)) continue;
             const auto stage = BuildStageData(file, kHallwayData);
             for (const StaticModelPlacement& m : stage->static_models) {
+                // the frame's pieces: the two it starts with and the six the player brings (mapc003 to mapc008, "_frame")
                 const size_t at = m.name.find(kNazoGroup);
                 if (at == std::string::npos) continue;
                 if (m.name.ends_with("_frame") || m.name.ends_with("mapc001_0000") || m.name.ends_with("mapc002_0000")) {
@@ -156,6 +160,8 @@ bool ArchiveView::DrawPicture(ui::UiBatch& batch, UiAssets& assets, const PcPane
     glm::vec2 origin;
     const glm::vec2 shown = Fit(size, lo, hi, origin);
     if (panel.string) {
+        // the subliminal service's string pass draws the texture's alpha in a tenth of the colour (ShadeString), dark text over the
+        // picture; here over black, at ten times the colour, so it reads white
         ui::UiDrawParams params = ui::UiDrawParams::Plain(texture);
         params.extra = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         batch.Quad(origin, origin + shown, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(10.0f, 10.0f, 10.0f, 1.0f), params, ui::UiShade::String,
@@ -191,6 +197,7 @@ void ArchiveView::DrawLine(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets&
     UiFont* font = assets.Font(UiFontType::PcSystem, language);
     if (!font || text.empty()) return;
     ui::TextLayout layout = ui::LayoutText(text, PanelStyle(*font, size), hi.x - lo.x);
+    // what does not fit the box keeps its first lines (a long name in a small plaque)
     const int fit = std::max(1, static_cast<int>((hi.y - lo.y) / std::max(layout.line_pitch, 1.0f)));
     if (static_cast<int>(layout.lines.size()) > fit) layout.lines.resize(static_cast<size_t>(fit));
     ui::PlaceText(layout, lo, hi, align, align, ui::TextAlign::Center, true);
@@ -202,6 +209,7 @@ void ArchiveView::DrawFrame(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
     const auto solid = [&](glm::vec2 a, glm::vec2 b, glm::vec4 color) {
         batch.Quad(a, b, glm::vec2(0.0f), glm::vec2(1.0f), color, ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid, ui::UiBlend::Alpha);
     };
+    // the picture's own shape inside the cell, or the whole cell when there is none
     glm::vec2 a = canvas.ToTarget(lo + glm::vec2(inset));
     glm::vec2 b = canvas.ToTarget(hi - glm::vec2(inset));
     glm::vec2 pa = a;
@@ -213,15 +221,18 @@ void ArchiveView::DrawFrame(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
     }
     const float line = std::max(1.0f, std::round((selected ? 2.0f : 1.0f) * canvas.scale));
     const float edge = selected ? 0.95f : locked ? 0.16f : 0.38f;
+    // the mat: black behind a picture (a string reads white on it), the wall's dark behind an empty frame
     solid(a, b, glm::vec4(0.0f, 0.0f, 0.0f, picture ? 0.9f : 0.55f));
     solid({a.x - line, a.y - line}, {b.x + line, a.y}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
     solid({a.x - line, b.y}, {b.x + line, b.y + line}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
     solid({a.x - line, a.y}, {a.x, b.y}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
     solid({b.x, a.y}, {b.x + line, b.y}, glm::vec4(1.0f, 1.0f, 1.0f, edge));
+    // a theater shot is lit as an exhibit is, the hallway's dark lifted; one not decoded yet leaves the name in the frame
     const bool drawn = picture && DrawPicture(batch, assets, panel, pa, pb, panel.lift);
     if (drawn) {
         if (!selected) solid(pa, pb, glm::vec4(0.0f, 0.0f, 0.0f, 0.22f));
     } else if (!locked && !name.empty()) {
+        // no picture yet (its capture still running, or its file still being decoded): the name in the frame
         DrawLine(batch, canvas, assets, name, 15.0f, lo + glm::vec2(inset + 8.0f), hi - glm::vec2(inset + 8.0f), ui::TextAlign::Center,
                  selected ? 0.8f : 0.45f, language);
     }
@@ -242,6 +253,7 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
                 const PcPanel panel = page.PanelOf(i);
                 DrawFrame(batch, canvas, assets, panel, PcText(row->label, language), picture.lo, picture.hi, 4.0f, selected, !row->enabled || panel.locked,
                           language);
+                // the plaque: the hall's name, and how many of its exhibits are open
                 const L::Cell cell = L::HallCell(i);
                 const float alpha = row->enabled ? (selected ? 1.0f : 0.7f) : 0.35f;
                 DrawLine(batch, canvas, assets, PcText(row->label, language), 17.0f, {cell.lo.x + 4.0f, picture.hi.y + 4.0f},
@@ -260,6 +272,7 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
         }
         return;
     }
+    // the wall: the strip (a short one centred on its own frames), then the spotlight and its plaque
     const int slots = std::min(n, page.WallVisible());
     const int visible = std::min(n - page.First(), slots);
     for (int slot = 0; slot < visible; ++slot) {
@@ -275,12 +288,14 @@ void ArchiveView::DrawMuseum(ui::UiBatch& batch, const UiCanvas& canvas, UiAsset
         const PcPanel panel = page.PanelOf(index);
         DrawFrame(batch, canvas, assets, panel, row->label, cell.lo, cell.hi, 3.0f, selected, !row->enabled || panel.locked, language);
     }
+    // the back button keeps the last exhibit in the spotlight
     const int shown = std::min(cursor, n - 1);
     const PcSettingRow* current = page.RowAtIndex(shown);
     if (!current) return;
     const PcPanel panel = page.PanelOf(shown);
     const bool locked = !current->enabled || panel.locked;
     if (!panel.lines.empty() && !locked) {
+        // a voice: its transcript on a sheet in the frame, the spoken line lit
         const glm::vec2 a = canvas.ToTarget(L::kSpotlight.lo);
         const glm::vec2 b = canvas.ToTarget(L::kSpotlight.hi);
         PcPanel sheet;
@@ -311,6 +326,7 @@ void ArchiveView::DrawLines(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
         layouts.push_back(ui::LayoutText(line, style, width));
         heights.push_back(std::max(1, static_cast<int>(layouts.back().lines.size())) * layouts.back().line_pitch + 8.0f);
     }
+    // the spoken line stays in view: the window starts so that it and the lines before it fit
     size_t first = 0;
     const int current = std::clamp(panel.current_line, 0, static_cast<int>(panel.lines.size()) - 1);
     float above = 0.0f;
@@ -337,6 +353,7 @@ void ArchiveView::DrawPanel(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets
     const glm::vec2 a = canvas.ToTarget(lo);
     const glm::vec2 b = canvas.ToTarget(hi);
     if (!panel.texture.empty() || !panel.photo.empty()) {
+        // a backdrop the pictures read on (a string is drawn white, an overlay sprite is black where it covers)
         const glm::vec4 ground = panel.string ? glm::vec4(0.0f, 0.0f, 0.0f, 0.85f) : glm::vec4(0.16f, 0.16f, 0.16f, 0.9f);
         batch.Quad(a, b, glm::vec2(0.0f), glm::vec2(1.0f), ground, ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid,
                    ui::UiBlend::Alpha);
@@ -356,6 +373,7 @@ void ArchiveView::DrawFullScreen(ui::UiBatch& batch, const UiCanvas& canvas, UiA
     const glm::vec4 ground = panel.string ? glm::vec4(0.0f, 0.0f, 0.0f, 1.0f) : glm::vec4(0.08f, 0.08f, 0.08f, 1.0f);
     batch.Quad(glm::vec2(0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), ground,
                ui::UiDrawParams::Plain(TextureManager::kWhite), ui::UiShade::Solid, ui::UiBlend::Alpha);
+    // a subliminal string spans the original's 16:9 frame (GameUi::DrawSubliminal); other pictures keep their own shape
     const glm::vec2 lo = canvas.ToTarget({40.0f, 60.0f});
     const glm::vec2 hi = canvas.ToTarget({UiCanvas::kWidth - 40.0f, UiCanvas::kHeight - 70.0f});
     DrawPicture(batch, assets, panel, panel.string ? canvas.ToTarget({0.0f, 0.0f}) : lo,

@@ -12,6 +12,7 @@ enum class LogLevel { Debug, Info, Warn, Error };
 
 void LogWrite(LogLevel level, std::string_view text);
 void LogSetFile(const std::filesystem::path& path);
+// The main loop's frame; with PT_LOG_TICKS=1 every line carries it ("#2444" after the level), for timing events against captures
 void LogSetTick(uint64_t tick);
 
 template <typename... Args>

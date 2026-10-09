@@ -1,6 +1,8 @@
 #pragma once
 #include <string_view>
 
+// Spanish (Latin American, as the game's own) for the port's own menus (PC settings, extras, photo mode, loop browser, notes and prompts) and the added
+// languages' names on the option screen. The options screen's other texts and the subtitles are the game's own.
 namespace pt::spanish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
@@ -48,6 +50,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Ruso"},
     {"op_sub_ukrainian","Ucraniano"},
     {"op_sub_czech","Checo"},
+    {"op_sub_polish","Polaco"},
     {"pc_loop_browser","Selector de bucles"},
     {"pc_note_loop_browser_entry","Inicia cualquier bucle sin reemplazar tu partida guardada."},
     {"pc_loop_choose","Elige un bucle"},

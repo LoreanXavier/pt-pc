@@ -1,3 +1,5 @@
+// The probe pass (rendering.md 5 and 12.6): probe.frag, and probe_ao.frag with PT_RT_AO (the ray traced ambient occlusion of
+// 12.21 multiplies each probe's light, so the blended ambient, by rt_ao.comp's result at the pixel)
 #include "common.glsl"
 #ifdef PT_RT_AO
 layout(set = 2, binding = 7, r32f) uniform readonly image2D rt_ao;
@@ -21,6 +23,8 @@ vec3 EvaluateSh(Probe p, vec3 n) {
     return e;
 }
 
+// SH_SphereMap (rendering.md 5): an atlas texel at cell coordinate t in [-1, 1]^2 holds E at the view direction of a Lambert
+// azimuthal equal area map around -z
 vec3 SphereMapDirection(vec2 t) {
     float len2 = dot(t, t);
     float z = min(1.0, 2.0 * len2 - 1.0);
@@ -29,12 +33,17 @@ vec3 SphereMapDirection(vec2 t) {
 }
 
 vec3 SphereMapTexel(Probe p, View v, ivec2 texel) {
+    // the 16x16 cell's texel centre; the vertex shader flips v (inTexcoord.y = 1 - 2 v)
     vec2 s = (vec2(texel) + 0.5) / 16.0;
     vec3 d = SphereMapDirection(vec2(2.0 * s.x - 1.0, 1.0 - 2.0 * s.y));
     vec3 w = mat3(v.inv_view) * d;
     return EvaluateSh(p, vec3(-w.x, -w.z, w.y));
 }
 
+// SSLighting2_SH_MultiBlend reads the atlas at r = 0.40625 sqrt(0.5 N.z + 0.5) from the cell centre along -normalize(N.xy),
+// linearly filtered: the sample stays 13 of the cell's 16 texels wide, so it looks the irradiance up at the view direction of
+// z = 0.66 (N.z + 1) - 1, not at N (a wall seen edge on, N.z = 0, takes the irradiance 20 degrees toward the camera), between
+// the 16x16 texels of the map. The port evaluates the four texels the original filters.
 vec3 SphereMapLookup(Probe p, View v, vec3 n_view) {
     float r = 0.40625 * sqrt(max(0.0, 0.5 * n_view.z + 0.5));
     float len = length(n_view.xy);
@@ -53,6 +62,8 @@ vec3 SphereMapLookup(Probe p, View v, vec3 n_view) {
 void main() {
     View v = frame.views[pass.ids.x];
     Probe p = frame.probes[pass.ids.y];
+    // pass.ids.z: the half resolution accumulation (isShrinkSHBuffer): texel (i, j) stands for the full resolution pixel
+    // (2i, 2j), whose depth BilateralUpscale2x2 compares with
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec2 frag = gl_FragCoord.xy;
     if (pass.ids.z != 0u) {

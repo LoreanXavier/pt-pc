@@ -26,7 +26,7 @@ int main(){
     SDL_Event mouse_motion{};mouse_motion.type=SDL_EVENT_MOUSE_MOTION;mouse_motion.motion.xrel=20;input.ProcessEvent(mouse_motion);
     poll(pt::MouseUse::Look);
     check(input.Prompts().device==pt::PromptDevice::Steam,"mouse-look motion does not replace controller prompts during play");
-    pads.SetButton(0,"south",true);poll();
+    pads.SetButton(0,"south",true);poll(); // process the controller press before the newer key press
     input.InjectKey(SDL_SCANCODE_W,true);const pt::InputState mixed=poll();
     check(input.Prompts().device==pt::PromptDevice::Keyboard&&mixed.left_stick.y>0.5f&&(mixed.raw_held&pt::kRawCross),"keyboard and Steam controller input work together while prompts follow the key press");
     input.InjectKey(SDL_SCANCODE_W,false);pads.SetButton(0,"south",false);poll();pads.Detach(0);poll();
@@ -44,6 +44,7 @@ int main(){
     check(!voice_key.Consume(),"held key repeat does not retrigger");
     key_event.key.repeat=false;voice_key.ProcessEvent(key_event,SDL_SCANCODE_J);voice_key.Discard();
     check(!voice_key.Consume(),"hidden or frozen frame discards queued key press before resume");
+    // Jack's controller fallback is the two triggers together. Exercise the SDL gamepad axes, not a synthetic InputState.
     for(const char* kind:{"xbox","ps5","switch"}){
         check(pads.Attach(0,kind),"virtual controller for voice chord attaches");poll();
         pads.SetAxis(0,"r2",0.49f);pads.SetAxis(0,"l2",1.0f);
@@ -67,16 +68,19 @@ int main(){
         check(poll().voice_keyword_pressed,"release after resume rearms the chord");
         pads.Detach(0);check(!poll().voice_keyword_pressed,"disconnecting a held chord clears its edge state");
     }
+    // The chord must come from one physical controller, regardless of the order of connected pads.
     check(pads.Attach(0,"xbox")&&pads.Attach(1,"ps5"),"two virtual controllers attach");poll();
     pads.SetAxis(0,"r2",1.0f);poll();pads.SetAxis(1,"l2",1.0f);
     check(!poll().voice_keyword_pressed,"triggers on separate controllers do not form a chord");
     pads.SetAxis(0,"r2",0.0f);pads.SetAxis(1,"l2",0.0f);poll();
     pads.DetachAll();poll();
     input.InjectKey(SDL_SCANCODE_X,true);check((poll().pressed&pt::kPadGouge)!=0,"keyboard X gouges");check((poll().pressed&pt::kPadGouge)==0,"holding X does not repeat");input.InjectKey(SDL_SCANCODE_X,false);poll();
+    // the original gouges with its interact button (`Action`, TrapSystem::GougePressed reads kPadGouge or kPadAction): the Act keys press that bit
     input.InjectMouseButton(SDL_BUTTON_LEFT,true);check((poll().pressed&pt::kPadAction)!=0,"left mouse is the action, which gouges");input.InjectMouseButton(SDL_BUTTON_LEFT,false);poll();
     for(const SDL_Scancode act:{SDL_SCANCODE_E,SDL_SCANCODE_RETURN,SDL_SCANCODE_SPACE}){
         input.InjectKey(act,true);const uint32_t pressed=poll().pressed;check((pressed&pt::kPadAction)!=0&&(pressed&pt::kPadGouge)==0,"an Act key is the action, not the X key");input.InjectKey(act,false);poll();
     }
+    // the gouge is X on every device: PlayStation cross (south), Xbox X (west), Switch X (north); every other face button is not
     const std::pair<const char*,const char*> kinds[]={{"ps5","cross"},{"xbox","square"},{"switch","triangle"}};
     for(const auto& [kind,gouge]:kinds){
         check(pads.Attach(0,kind),"virtual pad attaches");poll();

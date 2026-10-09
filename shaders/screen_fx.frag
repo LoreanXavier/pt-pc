@@ -15,6 +15,8 @@ layout(location = 0) out vec4 out_color;
 vec3 SampleScreen(uint source, vec2 uv) {
     vec3 color;
     if (pass.f0.x > 0.0) {
+        // the lens of the original's 1920x1080 frame: the radius is measured across its 16:9 frame (a wider window reaches past
+        // it at the sides, where the curve has saturated), and the fringe offsets are in its pixels at any output size
         vec2 size = ImgSize(source);
         float across = (size.x / size.y) / (16.0 / 9.0);
         vec2 texel = vec2(1.0 / (1080.0 * size.x / size.y), 1.0 / 1080.0);
@@ -37,6 +39,7 @@ vec3 SampleScreen(uint source, vec2 uv) {
 void main() {
     uint source=pass.ids.x;
     vec3 color=SampleScreen(source,in_uv);
+    // Opt-in local-contrast sharpening; the native/original path remains unchanged at zero.
     if(pass.f1.x>0.0) {
         vec2 texel=1.0/ImgSize(source);
         vec3 a=SampleScreen(source,in_uv+vec2(-texel.x,0));
@@ -55,6 +58,7 @@ void main() {
         out_color = vec4(SrgbDecode(max(color, vec3(0.0))), 1.0);
         return;
     }
+    // Stable sub-LSB dither at the final 8-bit scene conversion prevents coherent halo contours.
     vec3 seed = fract(vec3(gl_FragCoord.xyx) * vec3(0.1031, 0.1030, 0.0973));
     seed += dot(seed, seed.yxz + 33.33);
     float noise = fract((seed.x + seed.y) * seed.z) - 0.5;

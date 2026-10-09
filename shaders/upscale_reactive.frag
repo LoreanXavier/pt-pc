@@ -28,6 +28,15 @@ void main() {
     float delta = max(d.r, max(d.g, d.b));
     float reactive = min(pass.f0.y, delta * pass.f0.x);
 
+    // The handy light sweeping a still surface: the wall's motion vectors are zero while its illumination moves, so the
+    // temporal filter would keep reprojecting history that no longer matches the beam. The comparison above cannot see it:
+    // the opaque target is copied after the lighting and forward passes (upscaling.md, Frame 4), so both images carry the same
+    // light and the delta is 0 on the beam. pass.f2 carries the light's cone (xyz direction, w the falloff
+    // 1 / (cos penumbra - cos umbra)), so the mask is built from the light itself: it rises with the cone the frame shows,
+    // which is where the stale history has to go, and stays out of the pixels the beam does not reach.
+    // A constant mask over the whole cone kept the history from settling anywhere in the beam (shimmer on still walls), so the
+    // mask follows the change instead: the beam of this frame against the beam of the last (pass.m columns 0 and 1), which is
+    // the trail the history still carries when the light moves, and the whole cone the frame it turns on or off.
     if ((pass.f1.w > -1.0 || pass.m[0].w > -1.0) && pass.f0.z > 0.0) {
         float depth = ImgFetch(IMG_DEPTH, pixel).x;
         if (depth > 0.0) {
@@ -41,5 +50,6 @@ void main() {
         }
     }
 
+    // PT_REACTIVE_ALL=1 (ids.x): the whole frame fully reactive, to see whether the upscaler takes the mask at all
     out_reactive = vec4(pass.ids.x != 0u ? 1.0 : reactive, 0.0, 0.0, 0.0);
 }

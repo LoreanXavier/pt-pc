@@ -30,6 +30,7 @@ void main() {
     vec3 color = texture(scene_color, in_uv).rgb;
     if (params.mode > 0.5) {
         if (params.grain.x > 0.0) {
+            // Draw2D_ShFilmGrain, Draw2D layer 200 (0x9398E0)
             float y = abs(dot(color, vec3(0.299, 0.587, 0.114)));
             float strength = params.grain.z;
             float alpha;
@@ -39,6 +40,10 @@ void main() {
                 float p = pow(y, 0.7);
                 alpha = clamp(p * (p * -strength * 0.45 + strength * 0.45), 0.0, 1.0);
             }
+            // the noise texture has 8 mip levels and Draw2D_ShFilmGrain filters between them (f010_grain_ops 1705, op 1181); 3 tiles of
+            // 512 texels down the 1080 rows of the PS4's frame put its level at log2(1536 / 1080), which the port keeps at any size.
+            // The tiles span the original's 16:9 frame: a wider window (grain_offset.z, its width in 16:9 frames) shows more of
+            // them across instead of stretching them
             float across = params.grain_offset.z > 0.0 ? params.grain_offset.z : 1.0;
             vec2 grain_uv = vec2((in_uv.x - 0.5) * across + 0.5, in_uv.y);
             vec3 noise = clamp(textureLod(grain_noise, 3.0 * (params.grain_offset.xy + grain_uv), log2(1536.0 / 1080.0)).rgb, 0.0, 1.0);

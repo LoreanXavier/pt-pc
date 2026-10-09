@@ -9,6 +9,10 @@
 namespace pt::lightcull {
 namespace {
 
+// the outcode bits of a clip space point, as 0xD2A100 builds them from the compares w < c and w < -c of each component
+// with the masks at 0x145F270 to 0x145F2E0 (read from the eboot): w < x 0x80, w < y 0x40, w < z 0x20, w < -x 0x08,
+// w < -y 0x04, w < -z 0x02; the w lane and the bits 0x10 and 0x01 are unused. With a reverse-Z projection w < z is a point
+// nearer than the near plane or behind the eye; that is the bit the clip drops.
 constexpr uint8_t kRight = 0x80;
 constexpr uint8_t kTop = 0x40;
 constexpr uint8_t kNear = 0x20;
@@ -27,12 +31,13 @@ uint8_t Outcode(const glm::vec4& c) {
     return code;
 }
 
+// 0xD2A100 rejects a polygon whose points all share a bit of 0xEE, which is every bit in use
 constexpr uint8_t kRejectMask = 0xEE;
 
 /* Buffer sizes copied from the original's culling core (0xD53AC0), so an overfull view overflows at the same count it did on PS4. */
-constexpr uint32_t kMaxEntries = 0x80;
-constexpr uint32_t kMaxPoints = 0x100;
-constexpr uint32_t kMaxPlanes = 0x100;
+constexpr uint32_t kMaxEntries = 0x80;  // 0xD53AC0: 0x800 bytes of 16-byte records
+constexpr uint32_t kMaxPoints = 0x100;  // 0x1000 bytes of points
+constexpr uint32_t kMaxPlanes = 0x100;  // 0x1000 bytes of planes
 
 struct Entry {
     OccluderVolume volume;
@@ -42,6 +47,7 @@ struct Entry {
     bool selected = false;
 };
 
+// the squared distance from p to the segment a..b (0xD2A100's edge loop: the parameter clamped to [0, |b - a|^2])
 float SegmentDistance2(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b) {
     const glm::vec3 e = b - a;
     const float len2 = glm::dot(e, e);
@@ -51,7 +57,7 @@ float SegmentDistance2(const glm::vec3& p, const glm::vec3& a, const glm::vec3& 
     return glm::dot(d, d);
 }
 
-}
+}  // namespace
 
 const char* VerdictName(OccluderVerdict v) {
     switch (v) {
@@ -81,11 +87,14 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
                                  const OccluderLimits& limits) {
     OccluderSet out;
     out.verdicts.assign(occluders.size(), OccluderVerdict::Kept);
+    // 0xD29E90 +0x50: the inverse of the view projection applied to (0, 0, 0, 1), the clip point at x = y = z = 0 with
+    // w = 1; for a reverse-Z infinite projection that is the view direction (w = 0)
     const glm::vec4 axis = glm::inverse(view_projection) * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     std::vector<Entry> entries;
     uint32_t points_used = 0;
     uint32_t planes_used = 0;
 
+    // 0xD2A100, once per occluder
     for (uint32_t index = 0; index < occluders.size(); ++index) {
         const SceneOccluder& o = occluders[index];
         const uint32_t n = std::min<uint32_t>(o.count, 7);
@@ -111,6 +120,9 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
             out.verdicts[index] = OccluderVerdict::OutsideView;
             continue;
         }
+        // the points with the near bit are dropped and an edge that crosses gets the point where it meets w = 0,
+        // (cur.w * prev - prev.w * cur) / (prev.w - cur.w), with its w replaced by its z, so it projects to (x / z, y / z)
+        // (with reverse-Z z is the near distance there)
         std::array<glm::vec4, 14> poly{};
         uint32_t m = 0;
         if (any_near) {
@@ -135,6 +147,7 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
                 poly[m++] = clip[i];
             }
         }
+        // the fan of the projected polygon: the sum of |cross| (twice the area)
         float fan = 0.0f;
         glm::vec2 last(0.0f);
         glm::vec2 before_last(0.0f);
@@ -149,6 +162,7 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
                 const glm::vec2 a = before_last - first;
                 const glm::vec2 b = last - first;
                 const float c = a.x * b.y - a.y * b.x;
+                // 0xD2A100 counts a triangle only when its squared cross passes FLT_MIN (0x145F2F0)
                 if (c * c > std::numeric_limits<float>::min()) {
                     fan += std::abs(c);
                 }
@@ -158,16 +172,23 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
             out.verdicts[index] = OccluderVerdict::SmallArea;
             continue;
         }
+        // one sided: 0xD2A100 skips the occluder when the last fan triangle turns counterclockwise on the screen (x right,
+        // y up), which is the eye on the side of the polygon's right handed normal (the points wound clockwise seen from
+        // the front, as Direct3D's front faces). Tested in the world, so the port's flipped clip y does not matter.
         const glm::vec3 normal_rh = glm::cross(o.points[1] - o.points[0], o.points[2] - o.points[1]);
         if (o.one_sided && glm::dot(normal_rh, eye - o.points[0]) > 0.0f) {
             out.verdicts[index] = OccluderVerdict::BackFacing;
             continue;
         }
+        // the eye's distance to the polygon: to its plane when the eye's foot lies inside every edge, else to the
+        // nearest edge
         const float normal_len = glm::length(normal_rh);
         if (!(normal_len > 0.0f)) {
             out.verdicts[index] = OccluderVerdict::SmallArea;
             continue;
         }
+        // 0xD2A100 takes the normal (p2 - p1) x (p1 - p0) here, for which the inside of the polygon gives
+        // dot(n, (foot - prev) x (cur - prev)) >= 0
         const glm::vec3 nl = -normal_rh / normal_len;
         const float plane_offset = glm::dot(o.points[0] - eye, nl);
         const glm::vec3 foot = eye + nl * plane_offset;
@@ -191,6 +212,9 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
             out.verdicts[index] = OccluderVerdict::TooFar;
             continue;
         }
+        // the planes: the polygon's own, turned so that the eye is not on its positive side, then one through the eye and
+        // each edge with the same turn; an edge whose ends share an outcode bit (outside the view) leaves its plane out
+        // when the view axis point lies on its positive side
         Entry e;
         e.flag4 = flag4;
         e.point_count = n;
@@ -220,6 +244,8 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
         entries.push_back(e);
     }
 
+    // 0xD2AC10: the flag 4 volumes by distance (the `nearest` nearest), then the others by area (largest first) up to
+    // 32 in all
     std::vector<uint32_t> near_order;
     std::vector<uint32_t> area_order;
     for (uint32_t i = 0; i < entries.size(); ++i) {
@@ -242,6 +268,8 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
     for (uint32_t k = area_keep; k < area_order.size(); ++k) {
         out.verdicts[entries[area_order[k]].volume.source] = OccluderVerdict::OverLimit;
     }
+    // a kept volume of area 0.4 or more drops every other kept occluder whose points all lie inside it (in the order of
+    // the input; a dropped one drops no other)
     for (uint32_t a = 0; a < entries.size(); ++a) {
         if (!entries[a].selected || entries[a].volume.area < 0.4f) {
             continue;
@@ -262,6 +290,7 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
             }
         }
     }
+    // then every remaining flag 4 volume, and of the others the largest up to `total` in all
     uint32_t near_count = 0;
     std::vector<uint32_t> rest;
     for (uint32_t i = 0; i < entries.size(); ++i) {
@@ -287,6 +316,7 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
             out.verdicts[entries[rest[k]].volume.source] = OccluderVerdict::OverLimit;
         }
     }
+    // the kept volumes in the input order (0xD2AC10 compacts them in place)
     for (const Entry& e : entries) {
         if (e.selected) {
             out.volumes.push_back(e.volume);
@@ -298,6 +328,7 @@ OccluderSet BuildOccluderVolumes(std::span<const SceneOccluder> occluders, const
 bool BoxInVolume(const glm::vec3& lo, const glm::vec3& hi, const OccluderVolume& volume) {
     for (uint32_t i = 0; i < volume.plane_count; ++i) {
         const glm::vec4& p = volume.planes[i];
+        // the box corner least inside this plane
         const glm::vec3 worst(p.x > 0.0f ? lo.x : hi.x, p.y > 0.0f ? lo.y : hi.y, p.z > 0.0f ? lo.z : hi.z);
         if (!(glm::dot(glm::vec3(p), worst) + p.w > 0.0f)) {
             return false;
@@ -358,4 +389,4 @@ bool GridBoxInFrustum(const glm::vec3& lo, const glm::vec3& hi, const glm::mat4&
     return true;
 }
 
-}
+}  // namespace pt::lightcull

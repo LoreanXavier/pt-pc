@@ -1,4 +1,6 @@
 #version 460
+// Remove the smooth flashlight beam before temporal reconstruction. Shadow visibility stays in
+// the input so the upscaler can accumulate soft-ray noise and shadow-map tap changes.
 #include "common.glsl"
 #include "lighting.glsl"
 
@@ -19,6 +21,11 @@ void main() {
     vec4 hdr = ImgFetch(IMG_HDR, pixel);
     float factor = 1.0;
     float depth = ImgFetch(IMG_DEPTH, pixel).x;
+    // hdr.a >= 1: an opaque effect replaced the surface here (vfx_pass.cpp BlendState: the alpha tested liquids, the Freezer's
+    // view blood fx_sh_viwbld01_s0 refracting another part of the view). F belongs to the G-buffer surface under it, so dividing
+    // the effect's colour by F and multiplying the upscaled colour by it again left F's edges (the fridge's ropes and creases)
+    // as faint white lines over the blood; such a pixel keeps F = 1. Scene colour alone reaches 1 only at a luma of 32
+    // (compose.frag BloomAlpha), far past white, where the handy light's share is nil anyway
     if (depth > 0.0 && hdr.a < 1.0 && pass.ids.y != 0xFFFFFFFFu) {
         View v = frame.views[pass.ids.x];
         Light l = frame.lights[pass.ids.y];
@@ -29,6 +36,8 @@ void main() {
         s.roughness = g_material.x;
         s.specular = g_material.y;
         s.material_u = g_material.z;
+        // Only the beam's incident radiance belongs in this factor. Surface normals and
+        // shadow samples introduce edges and frame noise that must stay inside the upscaler.
         vec3 to_light = (v.view * vec4(l.position.xyz, 1.0)).xyz - s.P;
         s.N = to_light / max(length(to_light), 1.0e-6);
         s.translucency = 0.0;

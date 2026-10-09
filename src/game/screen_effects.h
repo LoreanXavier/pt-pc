@@ -12,6 +12,9 @@ struct ScreenEffects {
 
     glm::vec4 fade_color{0.0f, 0.0f, 0.0f, 1.0f};
     glm::vec4 fade_current{0.0f, 0.0f, 0.0f, 1.0f};
+    // the fade on screen: FadeIo starts a fade at the frame clock (0x474A80), so the 30 Hz frame of the call shows the value it starts
+    // from and the next frame its first step (explore_boot_rb 2914 and 2915); the port holds the start value for the tick of the call
+    // and the next one, the second tick of that frame
     glm::vec4 fade_shown{0.0f, 0.0f, 0.0f, 1.0f};
     float fade_shown_hold = 0.0f;
     bool fade_shown_called = false;
@@ -34,13 +37,17 @@ struct ScreenEffects {
     bool ev_pinned = false;
     float pinned_ev = 0.0f;
     bool screen_distortion = true;
+    // GrPluginReflectMap +0x68 strength scale, +0x6C bias, +0x70 edge flag (constructor 0x12F8430: 1, 0, 0); the floor environment
+    // (0x922C60) sets 2, 0, 0 on every floor and 3, 0.05, 1 on the ending
     float reflect_scale = 1.0f;
     float reflect_bias = 0.0f;
     bool reflect_edge = false;
+    // the SUBSURFACE_SCATTER plugin's bit in the main view's plugin mask, set by the floor environment on the ending only
     bool subsurface_scatter = false;
     glm::vec3 handy_light_color{1.0f};
     bool handy_light_color_fade = false;
     bool mirror_capture = false;
+    // the main view's byte +0x5D4 (0xCAF440): set by the floor environment on f110, read by the light selection 0xD3F0C0
     bool maze_viewport = false;
     bool subtitles_enabled = false;
     bool subtitles_visible = true;

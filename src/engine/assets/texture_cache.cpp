@@ -9,7 +9,7 @@
 
 namespace pt {
 namespace {
-constexpr uint32_t kMagic = 0x31585450;
+constexpr uint32_t kMagic = 0x31585450; // PTX1
 constexpr uint32_t kMaxSide = 4096;
 uint32_t Levels(uint32_t w, uint32_t h) {
     uint32_t n = 1;
@@ -92,6 +92,7 @@ bool WriteTextureCache(const std::filesystem::path& path, uint64_t source, const
     file.close();
     std::error_code ec;
     if (!ok) { std::filesystem::remove(temp, ec); return false; }
+    // Windows rename does not replace an existing destination. An invalid cache may be regenerated.
     std::filesystem::remove(path, ec);
     ec.clear(); std::filesystem::rename(temp, path, ec);
     if (ec) { std::filesystem::remove(temp, ec); return false; }

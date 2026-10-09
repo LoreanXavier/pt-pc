@@ -7,6 +7,11 @@
 
 namespace pt::game {
 
+// The Museum's layout (archive_view.h draws it, pc_settings_page.cpp moves the cursor and hit tests the pointer over it), in
+// virtual pixels of the 1280 x 720 canvas. The halls page is a grid of six doorways (three columns, two rows), a picture with the
+// hall's name on a plaque under it. A hall's wall is the exhibit in the spotlight, centred, its plaque under it, and a strip of
+// framed thumbnails along the bottom, scrolled so the cursor's frame is in view; on a wide screen the strip takes the width the
+// screen has (WallVisible), the rest of the page keeps the canvas.
 struct MuseumLayout {
     struct Cell {
         glm::vec2 lo{0.0f};
@@ -21,6 +26,7 @@ struct MuseumLayout {
     static constexpr float kHallPlaque = 44.0f;
     static constexpr float kHallTop = 158.0f;
     static constexpr float kHallRowGap = 18.0f;
+    // the text rows under the grid (the lock row), one line each
     static constexpr float kHallTextY = 564.0f;
     static constexpr float kHallTextHeight = 22.0f;
 
@@ -30,10 +36,12 @@ struct MuseumLayout {
     static constexpr float kStripTop = 503.0f;
     static constexpr float kCanvasWidth = 1280.0f;
     static constexpr float kCanvasHeight = 720.0f;
+    // the exhibit in the spotlight (16:9, a picture of another shape is fitted inside) and its plaque
     static constexpr Cell kSpotlight{{391.0f, 156.0f}, {889.0f, 436.0f}};
     static constexpr float kPlaqueTitleY = 446.0f;
     static constexpr float kPlaqueCaptionY = 472.0f;
 
+    // the cell of hall i (the picture and its plaque)
     static Cell HallCell(int i) {
         const int column = i % kHallColumns;
         const int row = i / kHallColumns;
@@ -46,15 +54,19 @@ struct MuseumLayout {
         cell.hi.y = cell.lo.y + kHallPicture;
         return cell;
     }
+    // a text row under the grid (index 0 first)
     static Cell HallText(int index) {
         const float y = kHallTextY + index * kHallTextHeight;
         return {{kCanvasWidth * 0.5f - 300.0f, y - kHallTextHeight * 0.5f}, {kCanvasWidth * 0.5f + 300.0f, y + kHallTextHeight * 0.5f}};
     }
 
+    // the frames that fit the strip: `width` is the screen's width in canvas pixels (the canvas's own on 16:9, more on a wider
+    // screen)
     static int WallVisible(float width) {
         const float room = std::max(width, kCanvasWidth) - 180.0f;
         return std::clamp(static_cast<int>(std::floor((room + kThumbGap) / (kThumbWidth + kThumbGap))), 4, 16);
     }
+    // the frame of strip slot `slot` of `visible`, centred on the canvas
     static Cell WallCell(int slot, int visible) {
         const float total = visible * kThumbWidth + (visible - 1) * kThumbGap;
         const float x = kCanvasWidth * 0.5f - total * 0.5f + slot * (kThumbWidth + kThumbGap);

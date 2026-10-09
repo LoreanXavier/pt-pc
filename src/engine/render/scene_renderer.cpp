@@ -26,6 +26,7 @@ constexpr VkFormat kHdrFormat = SceneRenderer::kHdrTargetFormat;
 constexpr VkFormat kAoFormat = VK_FORMAT_R8_UNORM;
 constexpr VkFormat kRefMapFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kPostFormat = SceneRenderer::kPostTargetFormat;
+// 0xDD0D40's bloom chain renders 8-bit sRGB targets and samples them through sRGB textures (liquid_trace_f010 ops 925-985)
 constexpr VkFormat kBloomFormat = VK_FORMAT_R8G8B8A8_SRGB;
 constexpr uint32_t kShadowAtlasSize = SceneRenderer::kShadowAtlasSize;
 
@@ -185,11 +186,13 @@ bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
             if (!reflect_make_rt_ || !reflect_blend_rt_) {
                 LogError("ray tracing: cannot create the ray traced reflection passes, that option stays off");
             }
+            // the layer for the temporal accumulation with an upscaler (12.16); without it the traced reflection blends as before
             reflect.fragment = "reflect_layer_rt.frag";
             reflect.colors = {kHdrFormat, kHdrFormat};
             reflect_layer_rt_ = CreateGraphicsPipeline(device_, reflect);
             rt_ao_trace_ = CreateComputePipeline(device_, rt_->Layout(), "rt_ao.comp");
             rt_ao_filter_ = CreateComputePipeline(device_, rt_->Layout(), "rt_ao_filter.comp");
+            // the probe pass's pipeline (CreatePipelines) with probe_ao.frag
             PipelineDesc probe;
             probe.layout = rt_->Layout();
             probe.vertex = "volume.vert";
@@ -274,6 +277,7 @@ bool SceneRenderer::CreatePipelines() {
     desc.depth_write = false;
     desc.depth_bias = true;
     desc.blend = BlendMode::Alpha;
+    // Fox's decal pass changes RGB and roughness/specular, preserving reflection and material identity.
     constexpr uint32_t rgb = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
     desc.write_masks = {rgb, rgb, VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT};
     decal_ = CreateGraphicsPipeline(device_, desc);
@@ -293,6 +297,8 @@ bool SceneRenderer::CreatePipelines() {
     volume.layout = layout_;
     volume.vertex = "volume.vert";
     volume.fragment = "probe.frag";
+    // the probes accumulate into probe_acc_ (rendering.md 5, the SH resolve), at half resolution without an upscaler; no depth
+    // attachment there: each fragment reconstructs its position from the depth target and is dropped outside the probe's box
     volume.colors = {kLightFormat};
     volume.blend = BlendMode::ProbeAccumulate;
     probe_ = CreateGraphicsPipeline(device_, volume);
@@ -358,6 +364,7 @@ bool SceneRenderer::CreatePipelines() {
     post.blend = BlendMode::Additive;
     bloom_add_ = CreateGraphicsPipeline(device_, post);
     post.blend = BlendMode::None;
+    // the second Kawase pass of a bloom iteration with the add to the sum (scene_post.cpp)
     post.colors = {kBloomFormat, kBloomFormat};
     post.blends = {BlendMode::None, BlendMode::Additive};
     post.fragment = "kawase_sum.frag";
@@ -371,6 +378,7 @@ bool SceneRenderer::CreatePipelines() {
     tonemap_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "fxaa.frag";
     fxaa_ = CreateGraphicsPipeline(device_, post);
+    // the mirror capture's history (mirror_temporal_) is an HDR target
     post.colors = {kHdrFormat};
     post.fragment = "mirror_temporal.frag";
     mirror_temporal_pipeline_ = CreateGraphicsPipeline(device_, post);
@@ -427,11 +435,18 @@ bool SceneRenderer::CreatePipelines() {
     post.colors = {kHdrFormat};
     post.fragment = "vfx_composite.frag";
     vfx_composite_ = CreateGraphicsPipeline(device_, post);
+    post.fragment = "vfx_depth_down.frag";
+    post.colors = {kNearFarDepthFormat};
+    post.depth = kDepthFormat;
+    post.depth_test = true;
+    post.depth_write = true;
+    post.depth_compare = VK_COMPARE_OP_ALWAYS;
+    vfx_depth_down_ = CreateGraphicsPipeline(device_, post);
 
     const VkPipeline all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
                               reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
                               mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
-                              debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, mirror_temporal_pipeline_,
+                              debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
                               reflect_layer_pipeline_, reflect_temporal_pipeline_};
     for (VkPipeline p : all) {
         if (!p) {
@@ -446,7 +461,7 @@ void SceneRenderer::DestroyPipelines() {
     VkPipeline* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &luminance_, &bright_,
                          &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
                          &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &velocity_pipeline_, &fsblur_,
-                         &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_,
+                         &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_, &vfx_depth_down_,
                          &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_};
     for (VkPipeline* p : all) {
         if (*p) {
@@ -495,6 +510,7 @@ void SceneRenderer::Shutdown() {
                 "gbuffer {:.3f}, lighting {:.3f}, compose {:.3f}, post {:.3f}",
                 n, extent_.width, extent_.height, output_extent_.width, output_extent_.height, gpu / n, lo, hi, pass[0] / n, pass[1] / n,
                 pass[2] / n, pass[3] / n, pass[4] / n, pass[5] / n);
+        // PT_TIMING_CSV=<file>: the frames themselves, oldest first (medians are robust to other processes sharing the GPU)
         if (const char* csv = std::getenv("PT_TIMING_CSV")) {
             if (FILE* f = std::fopen(csv, "w")) {
                 std::fprintf(f, "gpu,shadows,mirror,gbuffer,lighting,compose,post,forward,effects,upscale_inputs,reflections,upscaler,bloom,"
@@ -576,7 +592,8 @@ bool SceneRenderer::CreateTarget(RenderTarget& target, VkFormat format, VkExtent
 void SceneRenderer::DestroyTargets() {
     vk::Context& ctx = renderer_->Context();
     RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &diffuse_, &specular_, &probe_acc_, &hdr_, &bloom_[0], &bloom_[1], &bloom_[2],
-                               &flare_, &ldr_[0], &ldr_[1], &history_, &mirror_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_, &dof_half_,
+                               &flare_, &ldr_[0], &ldr_[1], &history_, &mirror_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_,
+                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &dof_half_,
                                &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_,
                                &mb_tile_[0], &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_,
                                &mb_blur_[0], &mb_blur_[1], &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_,
@@ -611,9 +628,12 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     }
     vkDeviceWaitIdle(device_);
     DestroyTargets();
+    // the new mirror_ target holds no capture
     mirror_stale_.valid = false;
     const VkImageUsageFlags color = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    // the G-buffer and light targets can be copied out for PT_TARGET_DUMP
     const VkImageUsageFlags dumped = color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    // 0xDD0D40: the 480x270 chain of a 1080p frame, 270 rows at any output size
     const uint32_t bloom_width = std::max(1u, static_cast<uint32_t>(std::lround(270.0 * output.width / std::max(output.height, 1u))));
     const VkExtent2D quarter{bloom_width, 270u};
     const VkImageAspectFlags c = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -626,7 +646,13 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
               CreateTarget(probe_acc_, kLightFormat, extent, dumped, c) &&
               CreateTarget(hdr_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
               CreateTarget(hdr_copy_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
-              CreateTarget(particles_, kHdrFormat, extent, color, c) &&
+              CreateTarget(particles_, kHdrFormat, extent, dumped, c) &&
+              CreateTarget(particles_near_, kHdrFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
+              CreateTarget(particles_far_, kHdrFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
+              CreateTarget(near_far_depth_, kNearFarDepthFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2}, dumped, c) &&
+              CreateTarget(near_far_depth_attachment_, kDepthFormat, {(extent.width + 1) / 2, (extent.height + 1) / 2},
+                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                           VK_IMAGE_ASPECT_DEPTH_BIT) &&
               CreateTarget(refmap_, kRefMapFormat, extent, color, c) &&
               CreateTarget(mirror_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
               CreateTarget(bloom_[0], kBloomFormat, quarter, color, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, color, c) &&
@@ -656,6 +682,7 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
                  CreateTarget(reflect_layer_, kHdrFormat, extent, color, c) && CreateTarget(reflect_offset_, kHdrFormat, extent, color, c) &&
                  CreateTarget(reflect_history_[0], kHdrFormat, extent, color, c) &&
                  CreateTarget(reflect_history_[1], kHdrFormat, extent, color, c)));
+    // ray traced reflections only exist on a device created with ray queries
     ok = ok && (!rt_ || CreateTarget(refmap_color_, kRefMapFormat, extent, color, c));
     ok = ok && (!sss_ready_ || sss_.CreateTargets(extent));
     if (!ok) {
@@ -664,7 +691,8 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
     }
     renderer_->Context().Submit([&](VkCommandBuffer cmd) {
         RenderTarget* colors[] = {&albedo_, &normal_, &material_, &diffuse_, &specular_, &probe_acc_, &hdr_, &mirror_, &bloom_[0], &bloom_[1], &bloom_[2],
-                                  &flare_, &ldr_[0], &ldr_[1], &history_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_, &dof_half_,
+                                  &flare_, &ldr_[0], &ldr_[1], &history_, &ao_[0], &ao_[1], &refmap_, &hdr_copy_, &particles_,
+                                  &particles_near_, &particles_far_, &near_far_depth_, &dof_half_,
                                   &dof_quarter_[0], &dof_quarter_[1], &dof_eighth_[0], &dof_eighth_[1], &velocity_, &object_velocity_, &mb_tile_[0],
                                   &mb_tile_[1], &mb_tile_[2], &mb_tile_[3], &mb_tile_[4], &mb_neighbour_, &mb_bake_, &mb_blur_[0],
                                   &mb_blur_[1]};
@@ -678,6 +706,10 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
         BeginPass(cmd, extent, {}, &depth_, false, true);
         vkCmdEndRendering(cmd);
         UseTargets(cmd, {{&depth_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
+        UseTargets(cmd, {{&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL}});
+        BeginPass(cmd, near_far_depth_attachment_.Extent(), {}, &near_far_depth_attachment_, false, true);
+        vkCmdEndRendering(cmd);
+        UseTargets(cmd, {{&near_far_depth_attachment_, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL}});
         RenderTarget* upscale_colors[] = {&motion_, &reactive_, &opaque_, &post_hdr_, &post_depth_, &post_object_velocity_, &refmap_color_,
                                          &mirror_history_, &mirror_temporal_, &reflect_layer_, &reflect_offset_, &reflect_history_[0],
                                          &reflect_history_[1]};
@@ -764,11 +796,15 @@ void SceneRenderer::WriteImageDescriptors() {
     set_target(gpu::kImgAo, ao_[0]);
     set_target(gpu::kImgAoBlur, ao_[1]);
     set_target(gpu::kImgRefMap, refmap_);
+    // the traced reflections' colour goes through the ray tracing set (binding 2), the image slots being taken
     if (rt_ && refmap_color_.Valid()) {
         rt_->SetReflectionImage(refmap_color_.image.view, samplers_[gpu::kSmpLinearWrap]);
     }
     set_target(gpu::kImgHdrCopy, hdr_copy_);
     set_target(gpu::kImgParticles, particles_);
+    set_target(gpu::kImgParticlesNear, particles_near_);
+    set_target(gpu::kImgParticlesFar, particles_far_);
+    set_target(gpu::kImgNearFarDepth, near_far_depth_);
     set_target(gpu::kImgFlare, flare_);
     set_image(gpu::kResLut1, lut1_);
     set_image(gpu::kResMaterial, material_tex_);
@@ -937,6 +973,11 @@ void SceneRenderer::CreateBuiltinResources() {
     static const int kBayer[8][8] = {{0, 32, 8, 40, 2, 34, 10, 42},  {48, 16, 56, 24, 50, 18, 58, 26}, {12, 44, 4, 36, 14, 46, 6, 38},
                                      {60, 28, 52, 20, 62, 30, 54, 22}, {3, 35, 11, 43, 1, 33, 9, 41},   {51, 19, 59, 27, 49, 17, 57, 25},
                                      {15, 47, 7, 39, 13, 45, 5, 37},   {63, 31, 55, 23, 61, 29, 53, 21}};
+    // g_tex_mesh as 0xD43430 builds it from the Bayer table at 0x13D6680 (bytes B, G, R, A per texel, likely, so the
+    // shaders read R for the fade and A for the alpha reference): R = 4b + 2 in both textures, A = 2b + 1 in the one
+    // 0xD81690 binds for alpha mode 4 and 64 in the one for every other mode. x holds R, y and z the two alpha
+    // references; the forward glass and mirror shaders read z, the alpha of the texture their draws bind (28c406c00, A = 64
+    // in every texel: lantern_trace_f040 op 1735, f010_dumps op 567)
     std::vector<uint8_t> dither(8 * 8 * 4);
     for (int y = 0; y < 8; ++y) {
         for (int x = 0; x < 8; ++x) {
@@ -984,6 +1025,7 @@ bool SceneRenderer::LoadResources(Vfs& vfs) {
         return ok;
     };
     load("/Assets/fox/effect/gr_pic/materials_alp_rgba32_nomip_nrt", material_tex_, true);
+    // Draw2D_ShFilmGrain samples its noise with mipmaps (f010_grain_ops 1705, op 1181: the BC1 512x512 texture with its 8 levels)
     {
         FtexTexture ftex;
         const char* path = "/Assets/sh/effect/vfx_pic/view/fx_viwfilnis01_iy";
@@ -1103,6 +1145,7 @@ std::unique_ptr<GpuMesh> SceneRenderer::Upload(const MeshData& data) {
     if (vertex_bytes == 0 || index_bytes == 0) {
         return nullptr;
     }
+    // on a device with ray queries the meshes are also acceleration structure inputs, read by address (ray traced shadows)
     const VkBufferUsageFlags rt_usage =
         ctx.ray_query ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0;
     ctx.CreateBuffer(mesh->vertices, vertex_bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | rt_usage, false);
@@ -1179,6 +1222,7 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
         ReadTimestamps(slot);
     }
     if (slot.reflection_sampled) {
+        // the slot's fence has passed: what RecordReflectionSample wrote kFramesInFlight frames ago, without a wait
         vmaInvalidateAllocation(renderer_->Context().allocator, slot.luminance.allocation, 0, VK_WHOLE_SIZE);
         const glm::vec2* entries = static_cast<const glm::vec2*>(slot.luminance.mapped);
         const glm::vec2 rg = entries[gpu::kReflectionReadback];
@@ -1209,6 +1253,8 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
     if (!adaptation_valid_ || !toggles.adaptation || !lighting_ || !lighting_->valid) {
         return;
     }
+    // 0xDA9B00 clamps the current EV into the floor's range before it steps (view +0x4CC against the min and max EV), so
+    // a range that moves (a new floor's lighting row) takes the EV with it at once instead of easing in from outside it
     ev_ = std::clamp(ev_, settings.min_ev, settings.max_ev);
     const float raw = measured / std::max(slot.exposure_used, 1.0e-12f);
     const float adapted = raw * std::exp2(ev_);
@@ -1236,7 +1282,7 @@ uint32_t DumpTexelBytes(VkFormat format) {
     }
 }
 
-}
+}  // namespace
 
 void SceneRenderer::RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer) {
     vk::Context& ctx = renderer_->Context();
@@ -1268,10 +1314,14 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
         out.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
         index << name << " " << e.width << " " << e.height << " " << static_cast<int>(format) << "\n";
     };
+    // particles: RecordForward's full-resolution buffer; particles_near/far and near_far_depth are the original half-resolution
+    // Prim_* layers and DownSampleDepth_NearFar range that NearFarUpScale2x2 reads; refmap: the floor reflections' map of this frame
+    // (reflect_make.frag), reflection: the reflection layer under an upscaler (reflect_layer.frag), hdr: the scene target at the end
+    // of the frame (after the floor reflections)
     RenderTarget* targets[] = {&albedo_, &normal_, &material_, &depth_, &diffuse_, &specular_, &reactive_, &motion_, &ao_[1], &particles_,
-                               &refmap_, &reflect_layer_, &hdr_};
+                               &particles_near_, &particles_far_, &near_far_depth_, &near_far_depth_attachment_, &refmap_, &reflect_layer_, &hdr_};
     const char* names[] = {"albedo", "normal", "material", "depth", "diffuse", "specular", "reactive", "motion", "occlusion", "particles",
-                           "refmap", "reflection", "hdr"};
+                           "particles_near", "particles_far", "near_far_depth", "near_far_depth_attachment", "refmap", "reflection", "hdr"};
     for (size_t i = 0; i < std::size(targets); ++i) {
         RenderTarget& target = *targets[i];
         if (!target.Valid()) {
@@ -1298,8 +1348,10 @@ bool SceneRenderer::DumpTargets(const std::string& prefix) {
         }
     }
     if (dump_mirror_.mapped && mirror_.Valid()) {
+        // the capture the mirror view rendered, at its own square extent
         vmaInvalidateAllocation(ctx.allocator, dump_mirror_.allocation, 0, VK_WHOLE_SIZE);
         write("mirror", dump_mirror_.mapped, mirror_.image.extent, mirror_.image.format);
+        // and the same square as the 8-bit image a viewer can open: what the capture saw, before the mirror's material
         const VkExtent3D e = mirror_.image.extent;
         const uint32_t size = mirror_view_.area.width;
         const float* src = static_cast<const float*>(dump_mirror_.mapped);

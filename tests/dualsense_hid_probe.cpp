@@ -7,6 +7,9 @@
 #include <cstring>
 #include <string>
 
+// Bounded hardware diagnostic: report counters only, no microphone recording or game window.
+// Protocol references: docs/dualsense-bluetooth-audio-haptics.md in hbashton/DS4Windows,
+// and awalol/DS5Dongle's Bluetooth audio report documentation.
 int main(int argc, char** argv) {
     const bool enable = argc == 2 && std::strcmp(argv[1], "--enable-mic") == 0;
     if (enable) {
@@ -43,6 +46,7 @@ int main(int argc, char** argv) {
         report[2] = 0x91; report[3] = 7; report[4] = on ? 0xff : 0xfe;
         for (int i = 5; i <= 9; ++i) report[i] = 16;
         report[10] = sequence; report[11] = 0x90; report[12] = 63;
+        // Apply microphone gain/power only; preserve unrelated lightbar, triggers and rumble.
         report[13] = 0x40; report[14] = 0x02; report[19] = 0xff; report[22] = 0;
         report[76] = 0x92; report[77] = 64;
         const uint8_t prefix = 0xa2;
@@ -60,6 +64,7 @@ int main(int argc, char** argv) {
         CloseHandle(operation.hEvent);
         if (!writes || !on || !ok) std::printf("microphone %s raw control: %lu bytes, error %lu\n", on ? "enable" : "disable", bytes, error);
         ++writes;
+        // The Bluetooth HID driver reports the collection's maximum length even for a shorter report.
         return ok && bytes >= report.size();
     };
     if (enable && !control(true)) { control(false); CloseHandle(writer); SDL_hid_close(device); SDL_hid_exit(); return 3; }

@@ -14,6 +14,8 @@ public:
     enum class State { Idle, Running, Ready, Failed, Cancelled };
     struct Status { State state = State::Idle; uint32_t done = 0; uint32_t total = 0; std::string note; };
     ~EnhancedTextureJob();
+    // max_output: the largest side of a generated texture; the upscaler's 2x result of a larger source is reduced to it
+    // (0: no cap, a 2048 source becomes 4096)
     bool Start(const std::filesystem::path& game, const std::filesystem::path& cache,
                const std::filesystem::path& runtime, uint32_t limit = 0, uint32_t max_output = 0);
     void Cancel();

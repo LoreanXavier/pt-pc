@@ -1,3 +1,6 @@
+// The Unicode fonts outside Windows: the same bundled Noto fonts as unicode_font.cpp, shaped with HarfBuzz and rasterised
+// with stb_truetype. It mirrors the GDI version: a 48 px em, glyphs keyed 0x100000 + glyph index, the character codes as
+// aliases, every glyph of the Arabic font (contextual forms have no code point), and a line laid out in visual order.
 #ifndef _WIN32
 #include "engine/ui/ffnt.h"
 #include "engine/core/resource_path.h"
@@ -41,6 +44,7 @@ const char* FontFile(std::string_view family) {
     return nullptr;
 }
 uint16_t Be16(const unsigned char* p) { return uint16_t((p[0] << 8) | p[1]); }
+// GDI's tmAscent and tmHeight come from the OS/2 table's usWinAscent and usWinDescent
 bool WinMetrics(const UnicodeFontState& s, int& ascent, int& descent) {
     const uint32_t os2 = stbtt__find_table(const_cast<unsigned char*>(s.data.data()), uint32_t(s.info.fontstart), "OS/2");
     if (!os2 || os2 + 78 > s.data.size()) return false;
@@ -55,8 +59,10 @@ bool StrongLtr(uint32_t c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= 0xC0 && c < 0x0590 && c != 0xD7 && c != 0xF7);
 }
 struct Run { size_t begin, end; bool rtl; };
+// A small bidi pass for one line: strong characters keep their direction, neutrals between two left-to-right runs join
+// them, other neutrals take the paragraph's direction. Runs come back in visual order.
 std::vector<Run> VisualRuns(std::span<const uint32_t> codes, bool paragraph_rtl) {
-    std::vector<int> dir(codes.size());
+    std::vector<int> dir(codes.size());  // 1 rtl, 0 ltr, -1 neutral
     for (size_t i = 0; i < codes.size(); ++i) dir[i] = StrongRtl(codes[i]) ? 1 : StrongLtr(codes[i]) ? 0 : -1;
     for (size_t i = 0; i < codes.size(); ++i) {
         if (dir[i] != -1) continue;
@@ -143,6 +149,7 @@ bool FfntFont::LoadUnicodeFont(std::string_view family, std::string_view charact
     for (const auto& run : VisualRuns(decoded, rtl))
         for (const auto& g : ShapeRun(*state, std::span<const uint32_t>(decoded).subspan(run.begin, run.end - run.begin), run.rtl)) ids.insert(g.glyph);
     if (rtl) {
+        // Arabic contextual forms and ligatures have glyph IDs without standalone Unicode code points.
         for (int i = 0; i < state->info.numGlyphs; ++i) ids.insert(uint32_t(i));
     }
     glyphs_.clear(); bitmap_.clear(); composed_.clear(); em_size_ = kEm; pad_ = 0;

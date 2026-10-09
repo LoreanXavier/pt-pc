@@ -65,14 +65,21 @@ struct SceneVfxContext {
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
     VkImageView depth_view = VK_NULL_HANDLE;
+    // the RG half-resolution min/max reverse-Z depth range sampled by the effects pass
+    VkImageView near_far_depth_view = VK_NULL_HANDLE;
     float exposure = 1.0f;
     uint32_t frame_index = 0;
     bool mirrored = false;
+    // copies the HDR target into scene_copy_view within the forward pass (it ends and resumes the pass), for the liquid materials
     VkImageView scene_copy_view = VK_NULL_HANDLE;
     std::function<void()> copy_scene;
+    // the frame's TPP fog block (FrameData::fog) and mode (bit 0 fog, bit 2 area fog), 0 without fog
     glm::vec4 fog[8]{};
     uint32_t fog_mode = 0;
+    // which world draws to record: kVfxAll, kVfxScene (liquids, multiply, min and opaque draws, which stay on the scene target) or
+    // kVfxOffscreen (alpha, additive and subtractive draws, into the effect buffer: sRGB encoded, premultiplied, transmittance in alpha)
     uint32_t subset = 0;
+    // incremented by the number of draws recorded
     uint32_t* recorded = nullptr;
 };
 
@@ -88,6 +95,7 @@ struct SceneFilterContext {
     VkImageView depth_view = VK_NULL_HANDLE;
     float exposure = 1.0f;
     uint32_t frame_index = 0;
+    // the effect layers to draw: bit 0 the lens flares, bit 1 the screen sprites
     uint32_t layers = 3;
 };
 
@@ -98,11 +106,20 @@ struct DrawItem {
     int32_t material_override = -1;
     std::span<const glm::mat4> skin;
     MeshMask hidden_meshes;
+    // Views the model is hidden in, bit n for the views of index n: a model instance's mask (+0x1AC) is tested against
+    // 1 << the view's index (+0x51C, 0xD5F1E0); index 0 is the camera view, 1 the MirrorCapture views (0x959070)
     uint8_t hidden_views = 0;
     bool character_shadow = false;
+    // the object the draw belongs to (a level model's placement, a demo's model), 0 when not known: the frame's motion history
+    // and the window's blend between ticks pair a draw with the last one of the same source and mesh (DrawPairKeys)
     uint64_t source = 0;
 };
 
+// Keys pairing each draw with its draw of the previous frame or tick: the source and mesh, and the occurrence among the draws
+// of that source and mesh (draws without a source pair by mesh and occurrence among those). Pairing by mesh and occurrence
+// alone handed one model's transform to another when a model of the same mesh appeared earlier in the list: on a first start
+// the hallway's door (shsb_hous001_door001_hallway_in) turns visible while gc_p00_160's door, the same mesh, swings open
+// behind the player, and the window's blend drew the hallway door half way to the swinging door's pose for one frame
 class DrawPairKeys {
 public:
     uint64_t Next(const DrawItem& item) {
@@ -132,9 +149,11 @@ struct RenderToggles {
     bool occlusion = true;
     bool local_reflections = true;
     bool motion_blur = true;
+    // PT_SUBSURFACE=0 turns the ending's subsurface scattering off (comparisons)
     bool subsurface_scatter = true;
 };
 
+// a light's box in the scene grid (SceneRenderer's LightGridBox)
 struct LightBox {
     glm::vec3 lo{0.0f};
     glm::vec3 hi{0.0f};
@@ -151,8 +170,12 @@ struct RenderStats {
     float gpu_ms = 0.0f;
     float cpu_ms = 0.0f;
     float pass_ms[6] = {};
+    // finer splits of the passes above: forward draws (of compose), effects (of compose), upscale inputs, reflections, upscaler,
+    // bloom (of post)
     float part_ms[6] = {};
+    // the port's device memory (VMA blocks) when the frame was recorded, in MiB
     float device_mb = 0.0f;
+    // the flashlight reflection's colour (SceneRenderer::RecordReflectionSample) and how many have come back
     glm::vec3 reflection_readback{0.0f};
     uint64_t reflection_readbacks = 0;
 };
@@ -181,6 +204,8 @@ public:
     void DrawDebugUi();
     void ResetExposure() { adaptation_valid_ = false; }
     void SetMotionReference(const Camera& previous, float interval, bool history);
+    // the time of one pass of the main loop, rendered or not: the dominant light search (UpdateDominantLight) runs once a game
+    // frame in the original, so its fade advances by the time since the last render (headless runs render only their shots)
     void AdvanceTime(float seconds) {
         pending_time_ += seconds;
         timed_ = true;
@@ -192,6 +217,10 @@ public:
     static constexpr VkFormat kHdrTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthTargetFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kPostTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    static constexpr VkFormat kNearFarDepthFormat = VK_FORMAT_R16G16_SFLOAT;
+    // Shadow atlas tiles: the original renders every spot shadow into its 2048x2048 target and every point shadow into the
+    // 4096x2048 paraboloid target (shadow_f010 1706), one light at a time; the atlas holds 4x4 tiles of 2048, room for the
+    // view's 8 shadowed lights (12.5) even when all are points
     static constexpr uint32_t kShadowTile = 2048;
     static constexpr uint32_t kShadowAtlasSize = 8192;
     std::function<void(const SceneVfxContext&)> vfx_forward;
@@ -200,11 +229,19 @@ public:
     UpscaleSettings upscale;
     const UpscaleStats& UpscaleStatistics() const { return upscale_stats_; }
     bool UpscalerAvailable(UpscalerKind kind, std::string& reason);
+    // PT_TARGET_DUMP (a tool for comparisons with the capture's render target dumps): the next rendered frame keeps raw
+    // copies of the main view's HDR image after the composition, the forward draws and the effects; DumpTargets then
+    // writes those and the G-buffer and light accumulation targets as <prefix>.<name>.bin with <prefix>.targets.txt
     void RequestTargetDump() { dump_requested_ = true; }
     bool DumpTargets(const std::string& prefix);
+    // PC option (rendering.md 12.21): applies at once when the device was created with ray queries, else at the next start
     RayTracingSettings raytracing;
     bool RayTracingReady() const { return rt_ != nullptr; }
     bool RayTracingSupported(std::string& reason) const;
+    // VR (docs/vr.md): the eye the next Render draws, 0 or 1, -1 without VR. Both eyes leave out the screen effects that do not
+    // belong to a view per eye (depth of field, motion blur, film grain, lens distortion, the full screen blur and its history,
+    // the lens flares and the screen sprites); the second eye repeats the first eye's frame (the frame counter, which drives the
+    // time, the temporal patterns and the ray tracing structures, does not advance)
     void SetVrEye(int eye) { vr_eye_ = eye; }
 
 private:
@@ -266,6 +303,7 @@ private:
         glm::mat4 projection{1.0f};
         glm::vec3 eye{0.0f};
         uint8_t view_bit = 1;
+        // the render area, from the top left of the targets (zero: the whole extent)
         VkExtent2D area{0, 0};
     };
 
@@ -306,6 +344,7 @@ private:
     void RecordPost(VkCommandBuffer cmd, const SceneLighting& lighting, float dt);
     void RecordReflectionSample(VkCommandBuffer cmd, const SceneLighting& lighting);
     void RecordReflections(VkCommandBuffer cmd, const ViewSetup& view);
+    // the local reflections' layer, its temporal accumulation and the mix into the scene, with a temporal upscaler (12.16)
     void RecordReflectionTemporal(VkCommandBuffer cmd, const ViewSetup& view, gpu::PassPush push);
     void RecordMirrorTemporal(VkCommandBuffer cmd);
     bool RecordDepthOfField(VkCommandBuffer cmd, const ScreenSettings& screen, int& current);
@@ -346,6 +385,8 @@ private:
     void RecordUpscale(VkCommandBuffer cmd, float dt);
     void ReadUpscaleTimestamps(FrameSlot& slot);
 
+    // 0 start, 1 shadows, 2 mirror, 3 G-buffer, 4 lighting, 5 compose, forward and effects, 6 end; within them 7 the forward draws,
+    // 8 the upscale inputs, 9 the reflections, 10 the upscaler, 11 the bloom (written on every frame, in place when a pass is off)
     static constexpr uint32_t kTimestamps = 12;
     static constexpr uint32_t kReflectMapSize = 512;
     static constexpr float kCameraCutDistance = 3.0f;
@@ -355,6 +396,7 @@ private:
     TextureManager* textures_ = nullptr;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     glm::vec3 last_eye_{0.0f};
+    // DominantLightSearch (ShEffet, 0x8D12A0): the camera view's g_psSystem.m_dominantLightDir in world space (w the fade)
     DominantLightState dominant_;
     float pending_time_ = 0.0f;
     bool timed_ = false;
@@ -392,6 +434,7 @@ private:
     RenderTarget mirror_;
     RenderTarget mirror_history_;
     RenderTarget mirror_temporal_;
+    // with upscaling (12.16, PC): the reflection layer (premultiplied colour, amount), where its history lies, and its history
     RenderTarget reflect_layer_;
     RenderTarget reflect_offset_;
     RenderTarget reflect_history_[2];
@@ -399,12 +442,20 @@ private:
     RenderTarget ao_[2];
     RenderTarget refmap_;
     RenderTarget hdr_copy_;
+    // RecordForward's full-resolution encoded blend target, plus the original half-resolution near/far effect layers and their
+    // downsampled depth range / min-depth attachment (DownSampleDepth_NearFar, NearFarUpScale2x2).
     RenderTarget particles_;
+    RenderTarget particles_near_;
+    RenderTarget particles_far_;
+    RenderTarget near_far_depth_;
+    RenderTarget near_far_depth_attachment_;
     RenderTarget motion_;
     RenderTarget reactive_;
+    // the handy light's cone of the last reactive pass (position, cos outer; direction, cone range), w -2 when it was off
     glm::vec4 previous_handy_[2] = {glm::vec4(0.0f, 0.0f, 0.0f, -2.0f), glm::vec4(0.0f)};
     RenderTarget opaque_;
     RenderTarget handy_factor_;
+    // this frame's upscaler colour is the handy light demodulated copy in opaque_ (upscale_demod.frag)
     bool handy_demod_ = false;
     RenderTarget exposure_image_;
     RenderTarget upscaled_;
@@ -416,6 +467,7 @@ private:
     vk::Buffer dump_compose_;
     vk::Buffer dump_forward_;
     vk::Buffer dump_scene_;
+    // the mirror view's own target: the capture the mirror material samples
     vk::Buffer dump_mirror_;
     VkExtent2D output_extent_{0, 0};
     bool targets_upscaled_ = false;
@@ -475,39 +527,52 @@ private:
     VkPipeline reflect_blend_ = VK_NULL_HANDLE;
     VkPipeline reflect_layer_pipeline_ = VK_NULL_HANDLE;
     VkPipeline reflect_temporal_pipeline_ = VK_NULL_HANDLE;
+    // this frame's accumulated floor reflection is mixed in after the upscaler (upscale_resolve.frag), not into hdr_
     bool reflect_post_upscale_ = false;
+    // the main view's shadow limit last logged (BuildShadowViews: 3 or, with the view byte +0x5D4 on f110, 10)
     uint32_t shown_shadow_limit_ = 3;
     VkPipeline vfx_composite_ = VK_NULL_HANDLE;
+    VkPipeline vfx_depth_down_ = VK_NULL_HANDLE;
     VkPipeline up_motion_ = VK_NULL_HANDLE;
     VkPipeline up_object_motion_ = VK_NULL_HANDLE;
     VkPipeline up_reactive_ = VK_NULL_HANDLE;
     VkPipeline up_resolve_ = VK_NULL_HANDLE;
     VkPipeline up_demod_ = VK_NULL_HANDLE;
 
+    // ray traced shadows: created only on a device with ray queries (vk::Context::ray_query)
     std::unique_ptr<RayTracing> rt_;
+    // the SUBSURFACE_SCATTER plugin (rendering.md 12.26), only on the ending
     SubsurfacePass sss_;
     bool sss_ready_ = false;
     VkPipeline light_rt_ = VK_NULL_HANDLE;
     bool rt_active_ = false;
+    // ray traced local reflections (12.21): the reflection map traced against the TLAS, off screen hits shaded there
     bool rt_reflections_ = false;
     VkPipeline reflect_make_rt_ = VK_NULL_HANDLE;
     VkPipeline reflect_blend_rt_ = VK_NULL_HANDLE;
     VkPipeline reflect_layer_rt_ = VK_NULL_HANDLE;
     RenderTarget refmap_color_;
     uint32_t rt_cull_ = 0x10;
+    // rays per lit pixel and shadowed light for soft shadows (rt_shadow.glsl)
     static constexpr uint32_t kRtSoftSamples = 4;
     uint64_t rt_built_frame_ = ~0ull;
     std::vector<RtCaster> rt_casters_;
+    // ray traced contact shadows (12.21): light_contact.frag (the maps and the contact rays) unless light_rt.frag runs
     bool rt_contact_active_ = false;
     VkPipeline light_contact_ = VK_NULL_HANDLE;
     float rt_contact_reach_ = 0.35f;
+    // PT_CONTACT_LEGACY=1: the contact shadows' first form (lighting.glsl), full strength whatever the light's shadow, for A/B
     bool rt_contact_legacy_ = false;
+    // ray traced ambient occlusion (12.21): rt_ao.comp, rt_ao_filter.comp and probe_ao.frag; the storage images (raw, two
+    // histories, blur, result, at the render size, GENERAL layout) are made when the option is first on
     bool rt_ao_active_ = false;
+    // the main view's lighting pass reads the result this frame
     bool rt_ao_ready_ = false;
     VkPipeline rt_ao_trace_ = VK_NULL_HANDLE;
     VkPipeline rt_ao_filter_ = VK_NULL_HANDLE;
     VkPipeline probe_ao_ = VK_NULL_HANDLE;
     RenderTarget rt_ao_images_[RayTracing::kAoImages];
+    // the history written last frame (0 or 1), and the view projection it was made with
     uint32_t rt_ao_written_ = 0;
     bool rt_ao_history_ = false;
     glm::mat4 rt_ao_previous_{1.0f};
@@ -540,11 +605,16 @@ private:
     glm::mat4 mirror_previous_view_projection_{1.0f};
     glm::vec3 mirror_history_origin_{0.0f};
     float mirror_history_exposure_ = 1.0f;
+    // the local reflections' history (RecordReflectionTemporal): which of reflect_history_ holds it, the frame that wrote it and
+    // the exposure it was rendered with; PT_REFLECT_TEMPORAL_OFF=1 keeps the original blend with an upscaler too
     bool reflect_history_valid_ = false;
     uint32_t reflect_history_index_ = 0;
     uint32_t reflect_history_frame_ = 0;
     float reflect_history_exposure_ = 1.0f;
     std::vector<const SceneMirror*> mirrors_;
+    // The last capture. 0x95B650 sets the mirror's texture (0x958390) and its ProjViewCol (0x958790 with the capture view's
+    // +0x270 and +0x230) only in the frames a capture runs (0x959FD0), and the capture texture is the mirror's own, so with the
+    // capture off the mirror goes on showing the reflection it was last given, frozen, not black.
     struct MirrorStale {
         bool valid = false;
         const GpuMesh* mesh = nullptr;
@@ -610,15 +680,19 @@ private:
     uint32_t upscale_samples_ = 0;
     uint32_t gpu_samples_ = 0;
     uint32_t cpu_samples_ = 0;
+    // PT_TIMING_LAST=<n>: the GPU time and the passes of the last n timed frames, logged at shutdown (timing runs)
     struct FrameTiming {
         float gpu_ms = 0.0f;
         float pass_ms[6] = {};
         float part_ms[6] = {};
         float device_mb = 0.0f;
+        // the renderer's frame count when the frame was recorded (the parts trace's row in main.cpp)
         uint64_t frame = 0;
     };
     std::vector<FrameTiming> timing_ring_;
     uint64_t timing_count_ = 0;
+    // PT_FRAME_CSV=<file>: per rendered frame, the renderer's CPU time and the wall time since the previous frame started
+    // (a stutter is a long interval), written at shutdown
     struct FrameTrace {
         float cpu_ms = 0.0f;
         float interval_ms = 0.0f;
@@ -627,14 +701,24 @@ private:
         uint32_t draws = 0;
     };
     std::vector<FrameTrace> frame_trace_;
+    // PT_LIGHT_CHANGES: the previous frame's lights, whether each had a shadow and its diffuse scale
     std::map<std::string, std::pair<bool, float>> light_change_state_;
+    // the lights the main view shadowed last frame (BuildShadowViews' hysteresis, a port rule kept only for
+    // PT_LIGHT_CULL_LEGACY=1)
     std::set<std::string> previous_shadowed_;
+    // the occluder volumes of the main and mirror views this frame (the occluder stage of 0xD53AC0, light_cull.h); empty
+    // with PT_LIGHT_CULL_LEGACY=1, which tests every OccluderEx as before
     lightcull::OccluderSet main_occluders_;
     lightcull::OccluderSet mirror_occluders_;
+    // PT_LIGHT_CULL_LEGACY=1 (PrepareFrame)
     bool legacy_light_cull_ = false;
+    // the camera view's unjittered view projection, the matrix of its culling query
     glm::mat4 main_cull_view_projection_{1.0f};
+    // the view's culling query keeps the box (the grid test with PT_LIGHT_GRID, else the four side planes)
     bool BoxInCullView(const ViewSetup& view, const LightBox& box) const;
+    // PT_LIGHT_CHANGES: why each light this frame dropped was dropped
     std::map<std::string, std::string> cull_reasons_;
+    // and why a light that is in the frame has no shadow (BuildShadowViews)
     std::map<std::string, std::string> shadow_reasons_;
     std::chrono::steady_clock::time_point previous_frame_start_{};
     int vr_eye_ = -1;

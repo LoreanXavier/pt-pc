@@ -8,6 +8,7 @@
 
 namespace pt::audio {
 
+// Wwise Motion Generator, 0x5E2950 0x5E2F60 0x5E31D0
 struct MotionGeneratorParams {
     float period = 1.0f;
     float period_multiplier = 1.0f;

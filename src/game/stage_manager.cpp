@@ -137,6 +137,7 @@ StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_p
                 parsed.models.emplace(placement.model_file, std::move(model));
             }
         }
+        // the geoms after the models: a new geom's line checks are over its model's positions
         std::unordered_map<std::string, std::shared_ptr<FmdlModel>> position_models;
         for (const auto& file : stage->files) {
             for (const auto& placement : file->static_models) {
@@ -153,6 +154,7 @@ StageManager::ParsedStage StageManager::Parse(Vfs& vfs, const std::string& fpk_p
                     geom.reset();
                 }
                 if (geom && !known->geoms.contains(placement.geom_file)) {
+                    // the model as ModelCache::Get gives it: the prefetch's parse, else the file (the cache holds it)
                     const FmdlModel* model = nullptr;
                     if (auto it = parsed.models.find(placement.model_file); it != parsed.models.end()) {
                         model = it->second.get();
@@ -253,6 +255,7 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
             stage->Body(placement.entity);
         }
     }
+    // the prefetch's unpacked textures, for LoadFox to take while the new models load
     std::vector<std::string> adopted;
     for (auto& [path, ftex] : parsed.textures) {
         if (models_.Textures().AdoptDecoded(path, std::move(ftex))) {
@@ -272,6 +275,11 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
             const auto model_done = clock::now();
             models_ms += ms(model_started, model_done);
             if (model) {
+                // Every placement is drawn. A dedup rule was tried here - skip a placement whose mesh is already queued
+                // within a millimetre - and it is **not** justified: with PT_STAGE_DUP_DRAWS=1 the f040 route shows 17
+                // meshes drawn more than once, and the closest pair of any of them is 0.653 m apart, so **no two copies
+                // are stacked** and the rule only changed behaviour without removing a duplicate
+                // (scratch/dedup/stacked_meshes.py, scratch/dedup/FINDINGS.md).
                 stage->draws.push_back({file.get(), placement.entity, model->mesh.get(), placement.world, placement.color});
             }
             if (!placement.geom_file.empty()) {
@@ -281,6 +289,7 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
                 piece.geom_file = placement.geom_file;
                 piece.model_file = placement.model_file;
                 if (const auto pre = parsed.geoms.find(placement.geom_file); pre != parsed.geoms.end()) {
+                    // read and unpacked by the prefetch (nullptr: the file is missing or bad, as the read below would find)
                     if (pre->second) {
                         if (pre->second->derived) {
                             surface_cache_.try_emplace(placement.geom_file, pre->second->surfaces);
@@ -304,6 +313,8 @@ std::unique_ptr<Stage> StageManager::Load(const std::string& fpk_path, const std
         }
     }
     models_.Textures().DropDecoded(adopted);
+    // the main thread's share of a stage load (the hitch at the clock when the loaded package is new): the parse unless the
+    // prefetch had it, the models with their textures, the collision pieces
     const double total_ms = ms(started, clock::now());
     if (total_ms > 5.0) {
         LogInfo("stage: {} loaded in {:.1f} ms main thread (parse {:.1f}{}, models {:.1f}, {} new: tex read {:.1f}, tex upload {:.1f}; "
@@ -446,6 +457,7 @@ Stage* StageManager::LoadStage(const std::string& fpk_path, const std::string& l
         return nullptr;
     }
     const glm::mat4 local = glm::inverse(stage->file_root) * it->second;
+    // nothing else changed since the last build and no stage is replaced: the worlds may be built on a worker
     const bool clean = collision_generation_ == built_generation_ && !stages_.contains(label);
     Place(*stage, base_world * FacingTurn() * glm::inverse(local));
     if (auto old = stages_.find(label); old != stages_.end()) {
@@ -459,6 +471,9 @@ Stage* StageManager::LoadStage(const std::string& fpk_path, const std::string& l
         on_loaded(*raw);
     }
     collision_deferrable_ = clean && !raw->active;
+    // the package this stage's clock trap loads next (its ShTrapExecLoadStage targetFpk: another hallway copy, or maze C after
+    // maze B), else the same package: parse it now, off the main thread, for the next load. PrefetchMazeFor replaces it when the
+    // floor makes the trap load its targetMazeFpk.
     if (prefetch_allowed_) {
         std::string next = fpk_path;
         for (const auto& data : raw->files) {
@@ -470,6 +485,8 @@ Stage* StageManager::LoadStage(const std::string& fpk_path, const std::string& l
                 }
             }
         }
+        // started once the collision worker this load starts is taken (StageManager::Update): run beside it, the prefetch's
+        // reads slowed it past its 30 tick deadline on a busy machine, and the main thread waited for it
         deferred_prefetch_ = std::move(next);
     }
     LogInfo("stage: {} loaded as {} (id {}) at {}:{} (connector {})", fpk_path, label, raw->id, base_label, base_connector, connector);
@@ -482,6 +499,12 @@ bool StageManager::ActivateStage(const std::string& label) {
         LogWarn("stage: ActivateStage({}) without such stage", label);
         return false;
     }
+    // REVERTED: deactivating every other active stage here fixed the duplicate draws but cost the frame most of its
+    // lights. On the f100 route the frame carried 19 to 21 lights and 6 to 7 shadow views before this line existed and
+    // 8 to 9 lights with 2 shadow views after it, at the same player position (feet -8.32 0.00 26.06) - the neighbouring
+    // stage keeps contributing light after the next one activates, which the original's own stage block allows
+    // (scratch/reach-f100/ and scratch/shadow-bias/FINDINGS.md). The duplicate draw needs a narrower fix than "one
+    // active stage", measured against the light count, and until then the original behaviour stands.
     stage->active = true;
     MarkVisualsDirty();
     LogInfo("stage: {} (id {}) activated", label, stage->id);
@@ -514,6 +537,8 @@ bool StageManager::ChangeStageId(const std::string& from, const std::string& to)
     stage->label = to;
     stages_[to] = std::move(stage);
     MarkVisualsDirty();
+    // the collision worlds list the stages in label order: the next update rebuilds them in the new order, as the next rebuild
+    // after a rename always did
     MarkCollisionDirty();
     LogInfo("stage: {} renamed to {}", from, to);
     return true;
@@ -585,6 +610,8 @@ void StageManager::ForEachStage(const std::function<void(Stage&)>& fn, bool incl
 
 void StageManager::CollectDraws(std::vector<DrawItem>& out) const {
     for (const auto& [label, stage] : stages_) {
+        // A loaded but inactive block (slot state 2) has no models in the scene: in menu_trace_rb frame 1180 (start room,
+        // hallway loaded as next and not yet activated) every G-buffer and shadow draw is a start room mesh
         if (!stage->active) {
             continue;
         }
@@ -652,6 +679,10 @@ std::shared_ptr<const std::vector<GeomTriangle>> StageManager::BuildSurfaces(Vfs
     return surfaces->empty() ? nullptr : std::shared_ptr<const std::vector<GeomTriangle>>(std::move(surfaces));
 }
 
+// The camera's line checks (the focus ray 0x127AB20 casts with mask 0x700, as the player's spawn drop does) hit the shapes whose
+// tags have bit 8, 9 or 10: the detailed surfaces of node 1 (0x0080000000842DC2 and relatives), most of them polygons over the
+// model's own vertices (shape flag 0x800), and not the movement hull of node 0 (0x006000008000003C, 0x94)
+// Keep reflection candidates (0x80 and 0x10) here too; BuildCollision separates the two query worlds.
 std::shared_ptr<const std::vector<GeomTriangle>> StageManager::LineChecks(const std::string& geom_file, std::span<const uint8_t> geom, const ModelEntry* model) {
     if (auto it = line_cache_.find(geom_file); it != line_cache_.end()) {
         return it->second;
@@ -679,6 +710,7 @@ void StageManager::PrepareWalkSurfaces(Stage& stage, std::vector<GeomTriangle> b
     size_t triangles = 0;
     for (Stage::CollisionPiece& piece : stage.collision) {
         const StageData* file = piece.entity ? stage.FileOf(piece.entity) : nullptr;
+        // the fallen leaves are flat decals over the road; their shapes only add steps
         if (!piece.entity || piece.walk || (file && file->file->EntityName(*piece.entity).starts_with("shsb_leaf"))) {
             continue;
         }
@@ -751,6 +783,8 @@ void StageManager::BuildWorlds(const std::vector<CollisionEntry>& entries, Colli
     for (const CollisionEntry& entry : entries) {
         triangles += entry.piece->triangles.size() + (entry.piece->lines ? entry.piece->lines->size() : 0);
     }
+    // The world space triangles of a piece are kept for the transform they were made with (CollisionWorld::MakeTriangle, what
+    // AddTriangles made here on every rebuild); a new or moved stage's pieces are made over several threads, each piece on its own
     ParallelChunks(entries.size(), ParallelChunkCount(triangles, 32768), [&](size_t, size_t begin, size_t end) {
         for (size_t e = begin; e < end; ++e) {
             const Stage::CollisionPiece& piece = *entries[e].piece;
@@ -771,6 +805,7 @@ void StageManager::BuildWorlds(const std::vector<CollisionEntry>& entries, Colli
                     cache.world.push_back(c);
                 }
             }
+            // the street walk's ground: the node 1 surfaces (PrepareWalkSurfaces)
             if (piece.walk && entries[e].stage->walk_detail_surfaces) {
                 for (const GeomTriangle& t : *piece.walk) {
                     if (t.node == 1 && CollisionWorld::MakeTriangle(t, transform, c)) {
@@ -783,6 +818,7 @@ void StageManager::BuildWorlds(const std::vector<CollisionEntry>& entries, Colli
                     if ((t.tags & 0x700u) && CollisionWorld::MakeTriangle(t, transform, c)) {
                         cache.lines.push_back(c);
                     }
+                    // 9359D0 initializes include=0x80 and additional include=0x10. C0C9E0 applies both to candidate tags.
                     if ((t.tags & 0x90u) == 0x90u && CollisionWorld::MakeTriangle(t, transform, c)) {
                         cache.reflections.push_back(c);
                     }

@@ -1,1 +1,1 @@
-{ "name": "Event Logger", "version": "1.0", "description": "Writes every FloorEnter, StepChange, Message and every 600th Tick to pt.log." }
+{"name":"Event Logger","version":"1.0","author":"P.T. PC Port","enabled":true}

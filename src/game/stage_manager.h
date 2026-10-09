@@ -68,11 +68,16 @@ struct Stage {
         const fox2::Entity* entity = nullptr;
         std::vector<GeomTriangle> triangles;
         std::shared_ptr<const std::vector<GeomTriangle>> surfaces;
+        // the triangles the camera's line checks see (tags & 0x700, StageManager::LineChecks)
         std::shared_ptr<const std::vector<GeomTriangle>> lines;
+        // every detailed shape over the model's positions, for the street walk (StageManager::PrepareWalkSurfaces)
         std::shared_ptr<const std::vector<GeomTriangle>> walk;
         std::string geom_file;
         std::string model_file;
         glm::mat4 file_transform{1.0f};
+        // StageManager::BuildCollision's world space copies of the above for the transform they were made with: a rebuild after a
+        // geom toggle or a stage move only copies them, where it transformed every triangle of every stage (a loop change in
+        // the hallway rebuilt up to 380,000 triangles several times within a few frames)
         struct Cache {
             bool valid = false;
             glm::mat4 transform{1.0f};
@@ -86,6 +91,9 @@ struct Stage {
         mutable Cache cache;
     };
     std::vector<CollisionPiece> collision;
+    // the ending street walk (Game::StartStreetWalk): the street has no movement hull (geom node 0), the player never walked it in
+    // the original; the detailed surfaces of node 1 are walked instead (StageManager::PrepareWalkSurfaces), inside invisible walls
+    // that come as one more collision piece without an entity
     bool walk_detail_surfaces = false;
 
     glm::mat4 ToWorld(const glm::mat4& file_space) const { return file_to_world * file_space; }
@@ -134,6 +142,7 @@ public:
 
     uint64_t Generation() const { return generation_; }
     uint64_t CollisionGeneration() const { return collision_generation_; }
+    // geom toggles only (BodyState::geom_active): UpdateCollisionActive, not a rebuild
     uint64_t GeomGeneration() const { return geom_generation_; }
     void MarkVisualsDirty() { ++generation_; }
     void MarkCollisionDirty() {
@@ -142,13 +151,23 @@ public:
     }
     void MarkGeomDirty() { ++geom_generation_; }
 
+    // the street walk: loads every shape of the stage's collision with its model's positions (node 1 included), so the detailed
+    // surfaces that have no movement hull can be walked; the stage's walk_detail_surfaces then adds them to the player's world
     void PrepareWalkSurfaces(Stage& stage, std::vector<GeomTriangle> bounds);
     void CollectDraws(std::vector<DrawItem>& out) const;
     void CollectLights(std::vector<std::pair<const Stage*, const LightPlacement*>>& out) const;
+    // `lines`, when given, gets the line check triangles of the same pieces (the focus ray, RenderSceneBuilder::FocusDistance)
+    // Every piece of every stage goes in, the pieces whose body has geom off as inactive owners (CollisionWorld::SetOwnerActive)
     void BuildCollision(CollisionWorld& world, std::vector<SurfaceTriangle>* surfaces = nullptr, CollisionWorld* lines = nullptr,
                         CollisionWorld* reflections = nullptr);
+    // After geom toggles: the owners of the last BuildCollision switched to their bodies' geom_active and the material surfaces
+    // of the active pieces collected again, in the order a rebuild gives (the stages and pieces stay the same until the next
+    // MarkCollisionDirty)
     void UpdateCollisionActive(CollisionWorld& world, std::vector<SurfaceTriangle>* surfaces = nullptr, CollisionWorld* lines = nullptr,
                                CollisionWorld* reflections = nullptr) const;
+    // True while every change since the last build is the preload of an inactive stage (LoadStage, the next hallway copy loaded at
+    // the clock): its worlds can be built on a worker (StartCollisionBuild) and taken a few ticks later (FinishCollisionBuild),
+    // while the player is still a corridor away from the new stage
     bool CollisionDeferrable() const { return collision_deferrable_; }
     void StartCollisionBuild();
     bool CollisionBuildRunning() const { return pending_collision_ != nullptr; }
@@ -159,6 +178,13 @@ public:
 
 private:
     std::unique_ptr<Stage> Load(const std::string& fpk_path, const std::string& label);
+    // The part of Load that reads the packages and parses their data sets: it touches nothing of the manager's, so the next
+    // hallway copy's is parsed on a worker after each hallway load (StartPrefetch) and Load takes it when the same package is
+    // loaded next; the parse was most of the 23 ms tick at the clock. Errors are logged by Load.
+    // A prefetch also reads ahead what Load would read on the main thread: the movement hull of every .geom, and the models the
+    // cache does not hold (`known` at the start of the prefetch) with their textures unpacked. The f100 clock's maze package
+    // brings 7 new models whose texture reads alone took 42 ms of the main thread.
+    // For a .geom new to the caches, its surfaces and line checks too (Surfaces, LineChecks).
     struct PreGeom {
         std::vector<uint8_t> bytes;
         std::vector<GeomTriangle> hull;
@@ -185,8 +211,11 @@ private:
     void StartPrefetch(const std::string& fpk_path);
 public:
     void DropPrefetch();
+    // On a floor change: the loaded copies' ShTrapExecLoadStage conditions load targetMazeFpk instead of targetFpk when the floor
+    // is their nextMazeFloor (f100 loads hallway_maze_A at its clock), so that package is parsed ahead instead of another hallway
     void PrefetchMazeFor(std::string_view floor);
     uint32_t LoadCount() const { return load_count_; }
+    // false while the machine is low on memory (main.cpp's memory guard): no parse is kept ahead
     void SetPrefetchAllowed(bool allowed) {
         prefetch_allowed_ = allowed;
         if (!allowed) {
@@ -198,14 +227,17 @@ private:
                                                               std::span<const uint8_t> geom, const std::vector<GeomTriangle>& hull,
                                                               bool skipped_fmdl_materials);
     std::shared_ptr<const std::vector<GeomTriangle>> LineChecks(const std::string& geom_file, std::span<const uint8_t> geom, const ModelEntry* model);
+    // the uncached work of Surfaces and LineChecks, also run by a prefetch (`model`: the FMDL already parsed, else it is read)
     static std::shared_ptr<const std::vector<GeomTriangle>> BuildSurfaces(Vfs& vfs, const std::string& model_file, std::span<const uint8_t> geom,
                                                                           const std::vector<GeomTriangle>& hull, bool skipped_fmdl_materials,
                                                                           const FmdlModel* model);
     static std::shared_ptr<const std::vector<GeomTriangle>> BuildLines(std::span<const uint8_t> geom, std::span<const glm::vec3> positions);
     void Place(Stage& stage, const glm::mat4& runtime_root);
     void Unload(std::unique_ptr<Stage> stage);
+    // a worker build reads the stages: it is joined and dropped before any of them moves, goes or is renamed
     void DropCollisionBuild();
 
+    // the stage and piece of each owner in the current worlds, with the owner ids
     struct CollisionOwners {
         const Stage* stage = nullptr;
         const Stage::CollisionPiece* piece = nullptr;
@@ -246,6 +278,7 @@ private:
     uint64_t generation_ = 1;
     uint64_t collision_generation_ = 1;
     uint64_t geom_generation_ = 0;
+    // the collision generation the current or the pending worlds were built from
     uint64_t built_generation_ = 0;
     std::vector<CollisionOwners> collision_owners_;
     std::unique_ptr<PendingCollision> pending_collision_;

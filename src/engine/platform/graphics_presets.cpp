@@ -17,7 +17,9 @@ void ApplyGraphicsPreset(AppSettings& s, GraphicsPreset preset, bool rt) {
     case GraphicsPreset::Ultra:
         g.anisotropy=16;g.enhanced_textures=true;g.texture_detail=2;g.ray_quality=2;
         g.depth_of_field=true;g.motion_blur=true;g.bloom=true;g.lens_distortion=true;g.film_grain=1.0f;g.clarity=.4f;
+        // the full screen flare ghosts stay an Original (PS4) look: on PC monitors they read as a flash (rendering.md)
         g.lens_ghosts=false;
+        // everything traced: soft shadows, contact shadows, ambient occlusion and reflections. Original (PS4) keeps the maps
         if(rt) {s.ray_tracing.shadows=2;s.ray_tracing.reflections=true;s.ray_tracing.ambient_occlusion=true;s.ray_tracing.contact_shadows=true;}
         break;
     default: break;

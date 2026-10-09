@@ -1,6 +1,6 @@
 #!/bin/sh
 # Cross builds the Linux x86-64 game on Windows (Git Bash) with LLVM clang/lld and a Debian sysroot (docs/linux.md).
-#   PT_LINUX_SYSROOT=<sysroot> PT_DEPS=<a Windows build's _deps> tools/linux/cross_build.sh [target]
+#   PT_LINUX_SYSROOT=C:/Projects/pt-linux-env/sysroot PT_DEPS=C:/Projects/pt-port/build/release/_deps tools/linux/cross_build.sh [target]
 # Wayland is off in this cross build only: SDL needs the host tool wayland-scanner, which has no Windows build. A native
 # Linux build (cmake -G Ninja -B build/linux) has X11 and Wayland.
 set -e

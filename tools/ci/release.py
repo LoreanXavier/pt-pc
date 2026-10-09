@@ -1,6 +1,6 @@
-"""
+"""Builds a release on the runner PC:
 
-    python tools/ci/release.py --dest <releases folder> --out <dir> --version 1.0.0
+    python tools/ci/release.py --dest C:\\Projects\\pt-port-rt-releases --out <dir> --version 1.0.0
 
 It builds the developer build pt, the release game pt_release (PT_RELEASE_LOCKS, the loop browser locked until the game is
 finished once), its portable zip, the release setup. Update metadata comes directly from the GitHub Releases API
@@ -13,10 +13,10 @@ The updater discovers its release asset. --linux-only skips the Windows steps an
 
 The large files stay on the PC under --dest/<stamp> (or --dest/--name); --out gets a short report (release.json, release.log).
 --version is this release's version (PT_VERSION, shown by the game and the setup and compared by the update check).
-PT_SLOT names a wrapper script the builds go through.
+Builds go through the machine-wide limiter C:/Projects/pt-port/shared/ptslot.py.
 
 The installer needs the LGPL LibOrbisPkg source: --liborbis, else the first LibOrbisPkg-* folder under this repository's
-dump/ (one or two levels down). It is copied into build/, patched there
+dump/ or C:\\Projects\\pt-port-rt\\dump or C:\\Projects\\pt-port\\dump. It is copied into build/, patched there
 (tools/patch_liborbis_readers.py, net10.0) and the extraction helper is published from it (dotnet publish, win-x64).
 """
 from __future__ import annotations
@@ -58,14 +58,14 @@ if not re.fullmatch(r"\d+(\.\d+)*(-[0-9A-Za-z.]+)?", a.version):
 if a.legacy_update_manifest and a.version != "1.0.2":
     sys.exit("--legacy-update-manifest is only allowed for the 1.0.2 transition")
 os.environ["PT_VERSION"] = a.version
-SLOT = pathlib.Path(os.environ["PT_SLOT"]) if os.environ.get("PT_SLOT") else None
+PTSLOT = pathlib.Path(r"C:\Projects\pt-port\shared\ptslot.py")
 
 
 def build(target):
-    """a build, 4 jobs"""
+    """a build through the machine-wide limiter (docs: phase 2 rules), 4 jobs"""
     argv = ["cmd", "/c", r"tools\build_pt.bat", "release", "release", target]
     env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL="4", NUMBER_OF_PROCESSORS="4")
-    return [sys.executable, str(SLOT), "build", "--", *argv] if SLOT and SLOT.exists() else argv, env
+    return [sys.executable, str(PTSLOT), "build", "--", *argv] if PTSLOT.exists() else argv, env
 
 
 a.out.mkdir(parents=True, exist_ok=True)
@@ -105,7 +105,7 @@ def build_linux(target):
     # forward slashes: the sysroot path reaches pkg-config's output, which CMake parses (a backslash is an escape there)
     deps = pathlib.Path(os.environ.get("PT_DEPS") or BUILD / "_deps").as_posix()
     env = dict(os.environ, PT_LINUX_SYSROOT=a.linux_sysroot.as_posix(), PT_DEPS=deps)
-    return [sys.executable, str(SLOT), "build", "--", *argv] if SLOT and SLOT.exists() else argv, env
+    return [sys.executable, str(PTSLOT), "build", "--", *argv] if PTSLOT.exists() else argv, env
 
 
 def rezip(root: pathlib.Path) -> pathlib.Path:
@@ -124,7 +124,7 @@ def liborbis_source() -> pathlib.Path:
     """a private copy of the LGPL LibOrbisPkg source, patched: the source elsewhere is never changed"""
     liborbis = a.liborbis
     if not liborbis:
-        for root in (REPO / "dump",):
+        for root in (REPO / "dump", pathlib.Path(r"C:\Projects\pt-port-rt\dump"), pathlib.Path(r"C:\Projects\pt-port\dump")):
             hits = sorted(root.glob("*/LibOrbisPkg*/LibOrbisPkg/PFS/PFSCReader.cs")) + sorted(root.glob("LibOrbisPkg*/LibOrbisPkg/PFS/PFSCReader.cs")) \
                 if root.exists() else []
             if hits:

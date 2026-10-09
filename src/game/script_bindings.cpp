@@ -208,6 +208,7 @@ int ControllerVisibleControlSubtitle(lua_State* L) {
     return 0;
 }
 
+
 int ControllerStartFullScreenBlur(lua_State* L) {
     G(L).Effects().full_screen_blur = true;
     return 0;

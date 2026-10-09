@@ -598,6 +598,10 @@ int RunDemoStream(const Options& options) {
     const auto decoded = media->DecodeAll();
     const uint32_t channels = media->Channels();
     const float c = 0.70710678f;
+    // the eboot's chain: voice volume, make-up gain and output bus volume 0 dB (FUN_005a0fc0, 0x59F978), bus -6 dB and master +3 dB
+    // (0x59D1E0), each through its fast 10^x, and the master limiter's gain below its threshold (0x5AE4B0), the same 10^x at 0; no
+    // state transition has run here (in game the stream bus's splash_screen to in_game transition leaves -0.0238 dB on its volume
+    // and bus volume)
     const float gain =
         FastPow10(0.0f) * FastPow10(0.0f) * FastPow10(0.0f) * FastPow10(-6.0f * 0.05f) * FastPow10(3.0f * 0.05f) * FastPow10(0.0f);
     const size_t lookahead = 480;

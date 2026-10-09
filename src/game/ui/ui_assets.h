@@ -58,8 +58,8 @@ struct UiFont {
 
 class UiAssets {
 public:
-    static constexpr int kLanguageCount = 13;
-    static constexpr const char* kLanguageCodes[kLanguageCount] = {"eng", "fra", "deu", "spa", "jpn", "ita", "por", "tur", "zhs", "ara", "rus", "ukr", "ces"};
+    static constexpr int kLanguageCount = 14;
+    static constexpr const char* kLanguageCodes[kLanguageCount] = {"eng", "fra", "deu", "spa", "jpn", "ita", "por", "tur", "zhs", "ara", "rus", "ukr", "ces", "pol"};
 
     UiAssets() = default;
     UiAssets(const UiAssets&) = delete;
@@ -72,14 +72,20 @@ public:
     const UiFontStyle* FontStyle(std::string_view name, int language) const;
     const UiFontStyle* FontStyleByHash(uint64_t hash, int language) const;
     const ui::LangFile* Options(int language);
+    // SYSTEM.lng: the save and load messages, prompts and notices (sys_load_failed_2, sys_save_failed_4, ...)
     const ui::LangFile* System(int language);
     const SubtitleGeneratorSettings& Generator() const { return generator_; }
     uint32_t Texture(std::string_view path);
+    // a picture file of the disk (the loop browser's previews): its texture, or 0 while it is missing or still being decoded
     uint32_t LocalPreview(const std::string& path);
+    // decodes these picture files on a worker thread, in this order, so LocalPreview has them at once (the loop browser preloads
+    // its previews when it opens); files already loaded, queued or missing are skipped, a missing one is tried again next call
     void PreloadPreviews(const std::vector<std::string>& paths);
     uint32_t TextureAddressBits(uint32_t index) const;
     const ui::UifModel* Model(std::string_view path);
     bool BuildPcIcons();
+    // The picture of a button prompt for a device family (ui_icons.cpp): the data's own for PlayStation pads, generated once for the
+    // others in the style of the data's (the white disc with its shadow and glow, black symbols, the game's font)
     PromptGlyph PromptPicture(const Prompt& prompt, const PromptStyle& style);
     Vfs& Files() { return *vfs_; }
 
@@ -93,7 +99,7 @@ private:
 
     Vfs* vfs_ = nullptr;
     TextureManager* textures_ = nullptr;
-    std::array<std::unique_ptr<UiFont>, 24> fonts_;
+    std::array<std::unique_ptr<UiFont>, 6 + (kLanguageCount - 7) * 3> fonts_;
     std::vector<UiFontStyle> styles_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> options_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> system_;
@@ -104,6 +110,7 @@ private:
     bool pc_icons_built_ = false;
     bool pc_icons_ready_ = false;
     std::shared_ptr<PromptArt> prompt_art_;
+    // PreloadPreviews: the worker's queue and its decoded pictures (RGBA), uploaded by LocalPreview on the main thread
     struct DecodedPreview {
         std::string path;
         int width = 0;

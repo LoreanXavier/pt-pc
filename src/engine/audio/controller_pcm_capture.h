@@ -14,6 +14,7 @@ struct ControllerPcmBlock {
     std::array<float, kMaxFrames * 2> stereo{};
 };
 
+// Single audio-render producer and single game-thread consumer. Overflow drops the newest block.
 class ControllerPcmQueue {
 public:
     static constexpr size_t kCapacity = 8;

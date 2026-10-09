@@ -30,6 +30,11 @@ constexpr uint32_t kBlockFrames = 256;
 constexpr uint32_t kExternalSourceEvent = 0xAE3819F7u;
 constexpr uint32_t kMasterAudioBus = 3803692087u;
 
+// A value change as the eboot's transitions make it (0x603390 sets one up, 0x603230 steps it): the time in milliseconds rounds to
+// (ms + 20) / 21 audio frames of 1024 samples, each frame takes the value of its position and the mixer ramps to it over that
+// frame, so the change ends one frame after its last step. A dB transition interpolates the gains of its ends (fast 10^x) and
+// reports the fast dB of the gain, so it ends a little off its target (0 dB ends at -0.0238 dB). A falling transition with the
+// mirror flag uses the reverse curve (8 - curve) unless it is an S curve. No time or no change sets the value at once.
 struct Ramp {
     float from = 0.0f;
     float to = 0.0f;
@@ -77,6 +82,8 @@ public:
     ~SoundEngine();
 
     PlayingId PostEvent(uint32_t event_id, GameObjectId object, std::shared_ptr<const Media> external = nullptr);
+    // the event with its random or sequence container playing these media of its playlist in this order, once (a port
+    // addition for Game+: one take of a random container, or two takes as one sound); the event's own bus, volume and positioning
     PlayingId PostEventMedia(uint32_t event_id, GameObjectId object, std::vector<uint32_t> media_ids);
     PlayingId PostDialogue(uint32_t dialogue_id, std::vector<uint32_t> arguments, GameObjectId object);
     void StopPlayingId(PlayingId id, float fade_seconds, Interp curve = Interp::Linear);
@@ -225,8 +232,10 @@ private:
         Interp first_fade_curve = Interp::Linear;
         bool first_item = true;
         int empty_items = 0;
+        // PostEventMedia: the playlist indices to play in order instead of the container's own choice
         std::vector<size_t> forced;
         size_t forced_next = 0;
+        // a Pause action holds the container's schedule: its next item waits for the Resume (Wwise pauses the playing instance)
         bool paused = false;
         uint64_t paused_at = 0;
     };
@@ -257,6 +266,7 @@ private:
         Interp fade_curve = Interp::Linear;
         bool first = true;
         std::unordered_map<uint32_t, uint32_t> sequence_tracks;
+        // a Pause action holds the playlist: the next segment waits for the Resume, by as long as the pause lasted
         bool paused = false;
         uint64_t paused_at = 0;
     };
@@ -350,6 +360,9 @@ private:
         float send_scale = 1.0f;
         float sum_scale = 1.0f;
         double pitch_ratio = 1.0;
+        // the master limiter's side chain, the voice in the eboot's 7.1 channels (FL FR FC BL BR SL SR, then the LFE): mode 0 puts
+        // its stereo bus contribution on FL and FR, mode 1 its mono signal through row 0 of sc_matrix, mode 2 each source channel
+        // (resampled apart in sc_rs, sc_split of them) through its row
         uint8_t sc_mode = 0;
         uint32_t sc_split = 0;
         std::array<std::array<float, 8>, 8> sc_matrix{};
@@ -554,6 +567,7 @@ private:
     std::vector<Timer> timers_;
     std::vector<std::unique_ptr<Voice>> voices_;
     std::vector<std::unique_ptr<Sequencer>> sequencers_;
+    // PostEventMedia's media per playing id (audio thread)
     std::unordered_map<PlayingId, std::vector<uint32_t>> forced_media_;
     std::vector<size_t> ForcedIndices(const RanSeqObject& container, PlayingId id) const;
     std::vector<std::unique_ptr<MusicPlayer>> music_;
@@ -563,6 +577,7 @@ private:
     std::vector<float> voice_left_;
     std::vector<float> voice_right_;
     ControllerPcmCapture controller_pcm_capture_;
+    // the master's 7.1 channels as the limiter detects them, a voice's split channels, the per-frame peak and weights
     std::array<std::vector<float>, 8> sc_;
     std::array<std::vector<float>, 8> sc_voice_;
     std::vector<float> sc_peak_;

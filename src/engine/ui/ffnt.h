@@ -38,6 +38,7 @@ public:
     int Pad() const { return pad_; }
     float LineFactor() const;
     float Advance(const FfntGlyph& glyph) const;
+    // whether a pixel of a glyph's box is set in its bit plane (false outside the box)
     bool Bit(const FfntGlyph& glyph, int x, int y) const;
     const std::vector<FfntGlyph>& Glyphs() const { return glyphs_; }
 

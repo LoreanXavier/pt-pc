@@ -70,6 +70,7 @@ void NazoManager::RegisterStage(Stage& stage) {
             LogInfo("nazo: NazoManageData of stage {} ({}) registered", stage.id, stage.label);
         }
     }
+    // A hallway data set can register after floor relocation (or a save restore); reapply its persistent picture states then.
     const uint32_t xmark = word_[Index(NazoId::XMark)];
     if (xmark != 0) {
         ApplyVisuals(NazoId::XMark);
@@ -80,6 +81,9 @@ void NazoManager::RegisterStage(Stage& stage) {
         ApplyVisuals(NazoId::Photo);
         LogInfo("nazo: Photo state {:#x} applied to the registered stage {}", photo, stage.id);
     }
+    // A hallway copy whose data sets are parsed on a worker can register after the floor change already set the Hello state
+    // (prepared on f070/f080, active on f090, force-cleared on f100). Its letters then kept the data's defaults and the wall
+    // stayed empty for that pass. The copy takes the state the other copies already show.
     const uint32_t hello = word_[Index(NazoId::Hello)];
     const bool hello_floor = game_.Floor().IsCurrentFloorName("f070") || game_.Floor().IsCurrentFloorName("f080") ||
                              game_.Floor().IsCurrentFloorName("f090") || game_.Floor().IsCurrentFloorName("f100");
@@ -110,6 +114,7 @@ void NazoManager::RestoreCompletedPeephole(Stage& stage) {
         return;
     }
     /* Load order: the save restores the word before maze B exists, so its scene effects are applied here, once the maze's message scripts have registered. */
+    // Save loading restores the word before maze B exists. Restore its scene effects after its message scripts register.
     ApplyVisuals(NazoId::Peephole);
     game_.SendControllerMessage("f110_GoNextFloor");
     LogInfo("nazo: restored completed peephole in stage {} ({})", stage.id, stage.label);
@@ -450,6 +455,7 @@ void NazoManager::SetCondition(std::string_view c, const glm::vec3& target) {
             w[3] |= 0x100;
             game_.NoteArchive("photo:PhotoOption");
             SetAssetEnable("FrameOption", true);
+            // 0x1265190: subliminal service +0x10(1, 1, 0), the flag adds the second short noise burst
             game_.Effects().ShowSubliminalImage(1, true, false);
             Sound2D(kSoundPhoto);
         }
@@ -496,6 +502,7 @@ void NazoManager::Commit() {
             if (p.bit == armed_flag_) {
                 SetAssetEnable(p.name, false);
                 SetAssetEnable(p.frame, true);
+                // 0x12676F0: subliminal service +0x10(image, 1, 0) with the second noise burst
                 game_.Effects().ShowSubliminalImage(p.image, true, false);
                 Sound2D(kSoundPhoto);
                 word_[3] |= p.bit;
@@ -520,6 +527,8 @@ void NazoManager::UpdatePeephole(float dt) {
         peephole_timer_ += dt;
     }
     if ((w & 8) && peephole_timer_ > 0.3f) {
+        // a theater sound that never started (PostSound gave no id: the event missing or the sound not ready) holds the
+        // view to the limit instead of ending it at once, which marked the peephole cleared after one frame of the overlay
         const bool playing = peephole_sound_ == 0 || game_.IsSoundPlaying(peephole_sound_);
         if (!(playing && peephole_timer_ <= kPeepholeHoldLimit)) {
             w = 0x10;
@@ -552,6 +561,10 @@ void NazoManager::UpdatePeephole(float dt) {
     }
 }
 
+// 0x1267390: while the Peephole is active and not finished, a falling zoom ends the look: MirrorCapture viewport bit 1
+// off, FullScreenBlur started again (+0x10), ResetState(2) (0x1265AF0: word and cleared byte 0, every nazo timer,
+// the armed action, the step counter and the pending clear sound cleared; the state stays active, so the hole can be
+// looked through again), the overlay removed on the next update, Stop_Peephole_Theater and Set_state_none
 void NazoManager::AbortPeephole() {
     if (!IsActive(NazoId::Peephole) || (word_[2] & 0x10)) {
         return;
@@ -633,6 +646,7 @@ void NazoManager::UpdateTrueEnd(float dt) {
 }
 
 void NazoManager::Update(float dt) {
+    // 0x1267390 marks the overlay for removal (+0x46) and the nazo update of the next game frame removes it
     if (hide_effect_next_frame_) {
         ++hide_ticks_;
     }
@@ -657,6 +671,9 @@ void NazoManager::Update(float dt) {
         active_mask_ &= ~2u;
     }
     UpdatePeephole(dt);
+    // 0x1264B90 tests word3 == 0x1F8 exactly, but Activate (0x1265B70) sets bit 4 and nothing clears it, so with five pieces and
+    // the option frame the word is 0x1FC and Photo stays active (the original never completes it). The Archive's entry is the
+    // port's own: it tests the piece and option bits only.
     if ((word_[3] & 0x1F8) == 0x1F8) {
         game_.NoteArchive("photo:complete");
     }

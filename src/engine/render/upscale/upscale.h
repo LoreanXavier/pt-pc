@@ -15,8 +15,12 @@ namespace pt {
 
 class FrameGeneration;
 
+// Fsr is AMD FSR 3.1 (pt.ini fsr3, or fsr from older builds); Fsr4 is listed for the FidelityFX Vulkan DLL that would carry an
+// FSR 4 upscaler (none does yet: upscaling.md, AMD FSR 4)
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, Count = 6 };
+// the DLSS Super Resolution model (NGX render preset): Auto takes NVIDIA's default for each quality mode
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
+// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp) or NVIDIA DLSS Frame Generation (Streamline)
 enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Count = 3 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
 
@@ -39,12 +43,24 @@ bool ParseUpscaleQuality(const std::string& text, UpscaleQuality& out);
 const char* DlssModelKey(DlssModel model);
 bool ParseDlssModel(const std::string& text, DlssModel& out);
 const char* FrameGenKey(FrameGenKind kind);
+// pt.ini frame_generation: off, fsr3, dlss; 0 and 1 (and the other bool spellings) from the builds before DLSS Frame
+// Generation read as off and fsr3
 bool ParseFrameGen(const std::string& text, FrameGenKind& out);
 
+// AMD FSR 3 frame generation needs an RDNA GPU (Radeon RX 5000 series or newer; AMD lists the RX 5700 as its minimum). A GCN
+// part (Polaris, Vega: the RX 400, 500 and Vega series) is below that, and on an RX 580 2048SP the interpolation lost the device
+// at frame submit (upscaling.md, FSR 3 frame generation on GCN). GCN runs wave 64 only, RDNA wave 32 and 64, so an AMD GPU whose
+// subgroup size range is 64 to 64 (VkPhysicalDeviceVulkan13Properties) is GCN. The device IDs are not listed: AMD's are not
+// ordered by generation.
 constexpr uint32_t kAmdVendor = 0x1002;
 bool AmdGcnGpu(uint32_t vendor_id, uint32_t min_subgroup_size, uint32_t max_subgroup_size);
+// the hardware check of FSR 3 frame generation: false with the reason (the page's text key is pc_note_fsr_fg_gpu) on a GPU
+// below AMD's minimum. PT_FSR_FG_ALLOW_UNSUPPORTED=1 (a developer test override, never set by the game) skips it.
 bool FsrFrameGenHardware(VkPhysicalDevice physical, const VkPhysicalDeviceProperties& properties, std::string& reason);
 
+// What NVIDIA DLSS Frame Generation needs on this machine (upscaling.md, DLSS Frame Generation): NGX's requirement query of
+// the FrameGeneration feature (an RTX 40 or later GPU and a driver that has it), hardware-accelerated GPU scheduling, and
+// a build with Streamline. note is the PC settings page's text key for the first requirement that fails.
 struct DlssFrameGenSupport {
     bool checked = false;
     bool hardware = false;
@@ -129,10 +145,13 @@ public:
     void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family, std::vector<VkDeviceQueueCreateInfo>& queues) override;
     void DeviceCreated(vk::Context& ctx) override;
     FrameGeneration* FrameGen();
+    // NVIDIA DLSS Frame Generation (streamline.cpp), only while Streamline is loaded
     FrameGeneration* DlssFrameGenImpl();
     const DlssFrameGenSupport& DlssFrameGen() const { return dlss_fg_; }
+    // a menu or the paused game is up (main.cpp): DLSS Frame Generation stays off there (Streamline's guide, section 6.4)
     void SetMenuOpen(bool open) { menu_open_ = open; }
     bool MenuOpen() const { return menu_open_; }
+    // the start that should have loaded Streamline found its crash marker (main.cpp): DLSS Frame Generation reads as failed
     void SetDlssFrameGenFailed(bool failed) {
         dlss_fg_failed_ = failed;
         if (ctx_) {
@@ -185,13 +204,17 @@ private:
 
 std::unique_ptr<UpscaleBackend> CreateFsrBackend(vk::Context& ctx, int generation);
 std::unique_ptr<UpscaleBackend> CreateDlssBackend(vk::Context& ctx);
+// DLSS Super Resolution through Streamline's sl.dlss (streamline.cpp), used instead while Streamline is loaded
 std::unique_ptr<UpscaleBackend> CreateStreamlineDlssBackend(vk::Context& ctx);
+// the NGX render preset hint for a model and whether DLSS runs in auto exposure (dlss_backend.cpp), shared by both DLSS paths
 uint32_t DlssPresetHint(DlssModel model);
 bool DlssAutoExposure();
 std::unique_ptr<UpscaleBackend> CreateXessBackend(vk::Context& ctx);
 void XessDeviceRequirements(bool query, VkInstance instance, VkPhysicalDevice physical, DeviceFeatureSet& out);
 void DlssInstanceExtensions(bool query, std::vector<std::string>& out);
 void DlssDeviceExtensions(bool query, VkInstance instance, VkPhysicalDevice physical, std::vector<std::string>& out);
+// NGX's support query for DLSS Frame Generation (NVSDK_NGX_VULKAN_GetFeatureRequirements, no NGX initialisation): false
+// when the query itself fails; unsupported holds NVSDK_NGX_Feature_Support_Result bits, 0 when supported
 bool DlssFrameGenRequirements(VkInstance instance, VkPhysicalDevice physical, uint32_t& unsupported, std::string& detail);
 
 }

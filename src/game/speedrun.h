@@ -12,6 +12,8 @@ class LiveSplitClient;
 
 namespace pt::game {
 
+// One segment of a run: the floor and pass played (the loop the original counts, FloorLevel's loop count), its times and the run's
+// times when it ended
 struct SpeedrunSplit {
     std::string floor;
     int pass = 1;
@@ -22,22 +24,35 @@ struct SpeedrunSplit {
     std::string Key() const;
 };
 
+// The speedrun timer (PC extra, Extras > Speedrun timer, pt.ini [extras] speedrun; docs/gameplay.md, speedrun mode). Off by
+// default; when off nothing here runs and nothing is written.
+// - A run starts when the player gets control (controller step 14, StartGame) and no run is going, ends when the ending starts
+//   (step 21, GotoEnding), and splits at every NextFloor (each loop the original counts, a repeated pass included).
+// - Two clocks are kept: real time (wall clock from the start, everything included: the pause menu, loads, demos) and game time
+//   (the game's 60 Hz ticks of unpaused play outside the controller's load steps 0 to 5 and 16 to 20, so the pause menu, a
+//   paused unfocused window and the stage unload and load after a game over do not count). The overlay shows the one picked.
+// - A run is "full" when it starts on f000 with no puzzle solved; only full runs set records. A loop browser pick, a progress
+//   reset or turning the timer off abandons a run.
 class SpeedrunTimer {
 public:
     enum class State { Idle, Running, Finished };
 
+    // 0 off, 1 the overlay and records show real time, 2 game time
     void SetMode(int mode);
     int Mode() const { return mode_; }
     bool Enabled() const { return mode_ != 0; }
     bool ShowsGameTime() const { return mode_ == 2; }
+    // where the records go (the user data folder): speedrun.ini, speedrun_history.txt, speedrun_pb.lss; empty writes nothing
     void SetRecordDirectory(const std::filesystem::path& directory);
     void SetLiveSplit(LiveSplitClient* client) { livesplit_ = client; }
 
+    // a game tick of unpaused play (Game::Update); `loading` excludes it from game time
     void Tick(float dt, bool loading);
     void Start(std::string_view floor, bool full);
     void Split(std::string_view floor, int pass);
     void Finish(std::string_view floor, int pass);
     void Abandon(std::string_view why);
+    // once per frame: LiveSplit's game time
     void Poll();
 
     State GetState() const { return state_; }
@@ -51,15 +66,23 @@ public:
     const std::string& Floor() const { return floor_; }
     int Pass() const { return pass_; }
     const std::vector<SpeedrunSplit>& Splits() const { return splits_; }
+    // the record of the shown clock before this run finished (0: none), and whether the finished run beat it
     double PreviousBest() const { return previous_best_; }
     bool NewBest() const { return new_best_; }
     double BestTotal() const;
+    // the last split against the record run's time at the same split (shown clock); false when there is nothing to compare
     bool LastSplitDelta(double& delta) const;
+    // real seconds since the last split or the finish
     double SinceSplit() const;
+    // the run as text for the log and the history file
     std::string Describe() const;
 
+    // m:ss.cc, or h:mm:ss.cc from an hour
     static std::string Format(double seconds);
+    // the loop browser's numbering of a floor and pass: 0 the start room, 1 to 15 the loops (f050's passes 1 and 2 are 7 and 8);
+    // `repeat` is the pass when the floor was played again past that (f160's second pass: 15, 2), else 0; -1 for an unknown floor
     static int LoopNumber(std::string_view floor, int pass, int& repeat);
+    // "Start room", "Loop 7", "Loop 15 (2)" in a menu language (pc_speedrun_start_room, pc_speedrun_loop)
     static std::string SplitName(const SpeedrunSplit& split, int language);
     static std::string FloorName(std::string_view floor, int pass, int language);
 
@@ -91,6 +114,7 @@ private:
     bool records_loaded_ = false;
     Record best_real_;
     Record best_game_;
+    // best segment time per split key, real and game
     std::vector<std::pair<std::string, double>> gold_real_;
     std::vector<std::pair<std::string, double>> gold_game_;
     int attempts_ = 0;

@@ -28,9 +28,14 @@ struct Stage;
 struct StageData;
 struct DemoLight;
 
+// The handy light's flash point and direction for a camera and the light's eased look target (the arm pose of AddHandyLight;
+// pickup_hold: the weight of the hand's pose after the flashlight pickup, Game::HandyPickupHold; demo_pose: the weight of the
+// pose under a demo camera, Game::HandyDemoPose)
 void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pickup_hold, float demo_pose, glm::vec3& position,
                     glm::vec3& direction, glm::vec3* right_out = nullptr, glm::vec3* up_out = nullptr);
 
+// The moving light sources as they were before the last game tick (main.cpp takes them with the draws): a frame drawn between
+// ticks places them at t between that state and the current one, as the camera and the models
 struct TickBlend {
     float t = 1.0f;
     glm::vec3 handy_aim{0.0f};
@@ -44,6 +49,7 @@ class RenderSceneBuilder {
 public:
     void Build(Game& game, const Camera& camera, float dt, SceneLighting& out, const TickBlend* blend = nullptr);
     void BuildFromStage(const StageData& stage, Vfs& vfs, SceneLighting& out);
+    // set for the frame of a screenshot: the next Build logs the lens and screen blur state it hands the renderer
     bool log_lens_next = false;
 
 private:
@@ -80,6 +86,8 @@ private:
     float FocusDistance(Game& game, const Camera& camera, float dt);
 
     std::unordered_map<std::string, ProbeFile> probe_files_;
+    // Build's static data: per data set file its probe and occluder entities, and per stage placement and entity the built
+    // probe or occluder with the stage's file_to_world it was built for
     struct StaticEntities {
         std::vector<const fox2::Entity*> probes;
         std::vector<const fox2::Entity*> occluders;
@@ -87,6 +95,7 @@ private:
     std::unordered_map<const fox2::DataSetFile*, StaticEntities> static_entities_;
     std::unordered_map<uint64_t, std::pair<glm::mat4, std::optional<SceneProbe>>> probe_cache_;
     std::unordered_map<uint64_t, std::pair<glm::mat4, std::optional<SceneOccluder>>> occluder_cache_;
+    // the stage ids and data set files the caches were built for
     std::vector<std::pair<uint32_t, const void*>> loaded_stage_files_;
     ResidentSettings resident_;
     glm::vec3 handy_color_{1.0f};

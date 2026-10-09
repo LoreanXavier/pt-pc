@@ -32,6 +32,8 @@ struct MotionBlock {
     std::vector<uint32_t> offsets;
     bool has_offset_vector = false;
     glm::vec3 offset_vector{0.0f};
+    // 0xA93970 stores a packet's vector (+0x180 of the stream state) only when the packet has one; the channels add +0x180 when
+    // they are evaluated (0xA933A0 -> 0xAAABC0), so a packet without a vector uses the last one an earlier packet set
     bool has_applied_offset = false;
     glm::vec3 applied_offset{0.0f};
     std::vector<uint16_t> track_flags;

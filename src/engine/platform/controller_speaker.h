@@ -28,6 +28,8 @@ struct ControllerSpeakerEndpointName {
     int channels = 0;
 };
 
+// The native platform adapter first narrows endpoint candidates by the HID device's PnP container ID. This helper then
+// requires one exact, unique friendly-name match to SDL's physical playback-device list.
 std::optional<uint32_t> MatchUniqueControllerAudioEndpoint(std::span<const ControllerSpeakerEndpointName> endpoints,
                                                             std::span<const ControllerAudioEndpointName> sdl_devices,
                                                             int expected_channels);
@@ -48,6 +50,7 @@ public:
     ControllerSpeakerOutput(const ControllerSpeakerOutput&) = delete;
     ControllerSpeakerOutput& operator=(const ControllerSpeakerOutput&) = delete;
 
+    // Opens only a wired Sony pad's render endpoint after resolving its exact PnP container. No system-default device is used.
     bool OpenForGamepad(SDL_Gamepad* gamepad, std::string* reason = nullptr);
     void Close();
     void ClearPending();
@@ -55,6 +58,8 @@ public:
     ControllerPcmRoute Route() const { return route_; }
     const std::string& DeviceName() const { return device_name_; }
 
+    // DS4: mono speaker PCM. DualSense: stereo speaker PCM in channels 1-2 and authored actuator PCM in channels 3-4.
+    // Speaker PCM is required so opening the shared DualSense endpoint cannot mute its intended speaker/headphone audio.
     bool WriteMono(const float* speaker_mono, uint32_t frames);
     bool WriteDualSense(const float* speaker_stereo, const float* actuator_stereo, uint32_t frames);
     bool WriteCapturedBlock(const audio::ControllerPcmBlock& block, bool speaker_enabled, bool dualsense_haptics_enabled,

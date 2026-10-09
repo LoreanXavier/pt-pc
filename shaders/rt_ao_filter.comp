@@ -1,10 +1,19 @@
 #version 460
 #include "common.glsl"
 
+// Ray traced ambient occlusion (rendering.md 12.21), the passes after rt_ao.comp. ids.z picks the pass:
+// 0 accumulates the raw value over frames: the previous frame's history (rt_ao_history0 or 1, ids.w the one written last frame,
+// bit 1 of ids.w set when there is none) is read where the pixel's world point was (pass.m, the previous frame's view
+// projection), its bilinear taps kept where their stored view depth matches the point's within 4 %, and the raw value is
+// blended in with weight 1 / count, count capped at f0.y frames; it writes (occlusion, view depth, count) into the other history.
+// 1 and 2 blur that horizontally then vertically (9 taps, weighted by distance, depth and normal) into rt_ao_blur and rt_ao.
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(push_constant) uniform PassPush {
+    // x the view, z the pass, w the history written last frame (0 or 1) + 2 when it is invalid
     uvec4 ids;
+    // y the frames accumulated at most
     vec4 f0;
     vec4 f1;
     vec4 f2;
@@ -88,6 +97,7 @@ void Blur(View v, ivec2 pixel, ivec2 size, bool vertical) {
     }
     float z = ViewZ(v, depth);
     vec3 n = DecodeNormal(ImgFetch(IMG_NORMAL, pixel).xyz);
+    // the history this frame wrote
     bool written_second = (pass.ids.w & 1u) == 0u;
     ivec2 step = vertical ? ivec2(0, 1) : ivec2(1, 0);
     float sum = 0.0;

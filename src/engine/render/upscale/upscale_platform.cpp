@@ -1,5 +1,6 @@
 #include "engine/render/upscale/upscale_platform.h"
 
+// only the Windows upscaler SDKs (FSR, XeSS, DLSS) report wide text; they are not built elsewhere (cmake/Upscalers.cmake)
 #ifdef _WIN32
 
 #include <windows.h>
@@ -23,6 +24,7 @@ std::string NarrowText(const wchar_t* text) {
 
 namespace {
 
+// the d3dkmthk.h structures used here (shared/d3dkmthk.h, d3dkmdt.h of the Windows SDK), loaded from gdi32.dll at run time
 struct KmtOpenAdapterFromLuid {
     LUID luid;
     UINT adapter;
@@ -36,7 +38,7 @@ struct KmtQueryAdapterInfo {
 struct KmtCloseAdapter {
     UINT adapter;
 };
-constexpr int kKmtWddm27Caps = 70;
+constexpr int kKmtWddm27Caps = 70;  // KMTQAITYPE_WDDM_2_7_CAPS: HwSchSupported bit 0, HwSchEnabled bit 1
 using KmtOpen = LONG(APIENTRY*)(KmtOpenAdapterFromLuid*);
 using KmtQuery = LONG(APIENTRY*)(const KmtQueryAdapterInfo*);
 using KmtClose = LONG(APIENTRY*)(const KmtCloseAdapter*);

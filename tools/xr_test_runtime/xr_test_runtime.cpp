@@ -1,3 +1,28 @@
+// A headless OpenXR runtime for testing the port's VR mode without a headset (docs/vr.md, "Testing without a headset").
+//
+// It is selected per process with XR_RUNTIME_JSON=<build>/xr_test_runtime/pt_xr_test_runtime.json and changes nothing on the
+// machine: no registry key, no service, no window. It implements OpenXR 1.0 with XR_KHR_vulkan_enable2 for one simulated
+// head-mounted display (two views) and one simulated Oculus Touch controller pair (khr/simple_controller as the fallback):
+// the Vulkan instance and device are the application's, created through the runtime as the extension requires; the swapchain
+// images are plain VkImages on the application's device; frames are not paced (xrWaitFrame returns at once with display times
+// one period apart), so a test runs as fast as the application renders.
+//
+// It also checks what the application does against the rules it can see (call order, handles, the frame loop, swapchain
+// acquire/wait/release, the layers of xrEndFrame, binding paths) and logs every violation as a "VIOLATION" line, and it can
+// write what the application submitted as PNG files. Settings, all optional, from the environment:
+//   PT_XRTEST_LOG=<file>         the log (default: stderr)
+//   PT_XRTEST_OUT=<dir>          where layer dumps go
+//   PT_XRTEST_VIEW=<w>x<h>       recommended view size (default 1024x1104)
+//   PT_XRTEST_IPD=<metres>       eye distance (default 0.064)
+//   PT_XRTEST_FORMATS=<list>     swapchain formats offered, in order: rgba_srgb,bgra_srgb,rgba_unorm,bgra_unorm,rgba16f
+//   PT_XRTEST_SCRIPT=<text>      or PT_XRTEST_SCRIPT_FILE=<file>: a script of entries separated by ';' or new lines, frame
+//                                numbers counting xrWaitFrame calls from 0:
+//       head F yaw pitch roll [x y z]       head pose keyframe (degrees, metres, LOCAL space), linear in between
+//       hand left|right F x y z yaw pitch roll   controller (grip and aim) pose keyframe
+//       input F1 F2 <path> v [v2]           an input's value for frames F1 to F2-1, e.g. input 10 40 /user/hand/left/input/thumbstick 0 1
+//       event F focus_lost|focus_gained|exit|stop|profile_none
+//       dump F                              write the layers of the frame waited as F (one PNG per view and quad layer)
+//       dumpevery N                         write every Nth frame's layers
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #define XR_USE_GRAPHICS_API_VULKAN
@@ -40,6 +65,8 @@
 
 namespace {
 
+// ---------------------------------------------------------------------------------------------------------------- logging
+
 std::mutex g_mutex;
 FILE* g_log = nullptr;
 int g_violations = 0;
@@ -69,6 +96,8 @@ XrResult Violation(XrResult result, const char* format, ...) {
     Log("VIOLATION %s", text);
     return result;
 }
+
+// --------------------------------------------------------------------------------------------------------------- math
 
 struct Quat {
     float x = 0, y = 0, z = 0, w = 1;
@@ -102,6 +131,7 @@ Quat AxisAngle(float x, float y, float z, float radians) {
     const float s = std::sin(radians * 0.5f);
     return {x * s, y * s, z * s, std::cos(radians * 0.5f)};
 }
+// yaw about +Y (to the left), then pitch about +X (up), then roll about -Z (the view axis; positive tilts the top to the left)
 Quat FromYawPitchRoll(float yaw_deg, float pitch_deg, float roll_deg) {
     const float k = 3.14159265358979f / 180.0f;
     return Mul(Mul(AxisAngle(0, 1, 0, yaw_deg * k), AxisAngle(1, 0, 0, pitch_deg * k)), AxisAngle(0, 0, 1, roll_deg * k));
@@ -117,6 +147,8 @@ bool Normalized(const XrQuaternionf& q) {
     const float n = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
     return std::abs(n - 1.0f) < 1.0e-3f;
 }
+
+// ------------------------------------------------------------------------------------------------------------- script
 
 struct Keyframe {
     int frame = 0;
@@ -227,6 +259,8 @@ void Sample(const std::vector<Keyframe>& keys, int frame, float out[6]) {
     std::copy(keys.back().v, keys.back().v + 6, out);
 }
 
+// ------------------------------------------------------------------------------------------------------------- objects
+
 constexpr uint64_t kMagicInstance = 0x7074785249ull, kMagicSession = 0x7074785253ull, kMagicSpace = 0x7074785250ull,
                    kMagicSwapchain = 0x7074785357ull, kMagicActionSet = 0x7074784153ull, kMagicAction = 0x7074784143ull;
 
@@ -277,8 +311,8 @@ struct Swapchain : Object {
     Session* session = nullptr;
     XrSwapchainCreateInfo info{};
     std::vector<SwapchainImage> images;
-    std::deque<uint32_t> acquired;
-    bool waited = false;
+    std::deque<uint32_t> acquired;  // acquired, not yet released, in order
+    bool waited = false;            // the oldest acquired image was waited for
     uint32_t next = 0;
     int last_released = -1;
     bool released_since_end = false;
@@ -306,7 +340,9 @@ struct Action : Object {
     std::string name;
     XrActionType type = XR_ACTION_TYPE_BOOLEAN_INPUT;
     std::vector<XrPath> subactions;
+    // per profile, the bound input paths
     std::map<XrPath, std::vector<XrPath>> bindings;
+    // state per subaction (index 0 = no subaction filter, 1 = left, 2 = right)
     struct State {
         float x = 0, y = 0;
         bool active = false;
@@ -332,12 +368,13 @@ struct Session : Object {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     std::set<Swapchain*> swapchains;
     std::set<Space*> spaces;
-    int64_t waited = 0;
-    int64_t begun = 0;
-    int64_t ended = 0;
-    bool frame_begun = false;
+    // the frame loop
+    int64_t waited = 0;        // xrWaitFrame calls returned
+    int64_t begun = 0;         // xrBeginFrame calls that succeeded
+    int64_t ended = 0;         // xrEndFrame calls that succeeded
+    bool frame_begun = false;  // between xrBeginFrame and xrEndFrame
     XrTime last_predicted = 0;
-    std::set<XrTime> predicted;
+    std::set<XrTime> predicted;  // display times handed out and not yet ended
     int frames_without_layers = 0;
     std::vector<ActionSet*> attached;
     XrPath profile = XR_NULL_PATH;
@@ -356,7 +393,7 @@ struct Instance : Object {
     std::deque<std::vector<uint8_t>> events;
     std::set<Session*> sessions;
     std::set<ActionSet*> action_sets;
-    std::map<XrPath, std::set<XrPath>> suggested;
+    std::map<XrPath, std::set<XrPath>> suggested;  // profile -> bound paths
     bool system_got = false;
     bool requirements_checked = false;
     VkInstance created_vk_instance = VK_NULL_HANDLE;
@@ -368,8 +405,8 @@ struct Instance : Object {
     std::string out_dir;
 };
 
-constexpr XrSystemId kSystemId = 0x5054;
-constexpr XrDuration kPeriod = 11111111;
+constexpr XrSystemId kSystemId = 0x5054;  // "PT"
+constexpr XrDuration kPeriod = 11111111;  // 90 Hz
 constexpr XrTime kStartTime = 1000000000;
 
 Instance* g_instance = nullptr;
@@ -425,11 +462,13 @@ void SetState(Session* s, XrSessionState state) {
 
 int CurrentFrame(Session* s) { return static_cast<int>(std::max<int64_t>(0, s->waited - 1)); }
 
+// ---------------------------------------------------------------------------------------------- interaction profiles
+
 struct Profile {
     const char* path;
-    std::vector<const char*> both;
-    std::vector<const char*> left;
-    std::vector<const char*> right;
+    std::vector<const char*> both;   // component paths under /user/hand/<side>
+    std::vector<const char*> left;   // left only
+    std::vector<const char*> right;  // right only
 };
 
 const std::vector<Profile>& Profiles() {
@@ -483,6 +522,8 @@ bool ValidBindingPath(const Profile& profile, const std::string& binding) {
             if (component == c) return true;
         for (const char* c : side == 0 ? profile.left : profile.right)
             if (component == c) return true;
+        // a parent path whose identifier has a single obvious component is also accepted by the specification (for example
+        // .../input/trigger for .../input/trigger/value); the runtime accepts an identifier that has a /value, /click or a vector
         for (const char* c : profile.both) {
             const std::string full = c;
             if (full.rfind(component + "/", 0) == 0) return true;
@@ -495,9 +536,12 @@ bool ValidBindingPath(const Profile& profile, const std::string& binding) {
     return false;
 }
 
+// The simulated controller's value of an input path this frame (thumbsticks, buttons, triggers) from the script, with the
+// simple controller's select mapped to the trigger and menu to the menu button
 void InputValue(Instance* inst, int frame, const std::string& path, float& x, float& y) {
     x = y = 0.0f;
     std::string wanted = path;
+    // map the simple controller's paths to the simulated touch controller's
     auto replace = [&](const char* from, const char* to) {
         const size_t at = wanted.find(from);
         if (at != std::string::npos) wanted.replace(at, std::strlen(from), to);
@@ -515,6 +559,7 @@ void InputValue(Instance* inst, int frame, const std::string& path, float& x, fl
                 y = r.y;
             }
         } else if (p.size() > wanted.size() && p.rfind(wanted + "/", 0) == 0) {
+            // the script names .../trigger/value and the binding .../trigger
             x = r.x;
         }
     }
@@ -528,6 +573,7 @@ Pose HeadPose(Instance* inst, int frame) {
 
 Pose HandPose(Instance* inst, int side, int frame) {
     if (inst->script.hands[side].empty()) {
+        // default: hands at the hips, 0.2 m to the side, pointing forward
         const Pose head = HeadPose(inst, frame);
         return {Quat{}, {head.p.x + (side == 0 ? -0.2f : 0.2f), head.p.y - 0.5f, head.p.z - 0.3f}};
     }
@@ -536,11 +582,13 @@ Pose HandPose(Instance* inst, int side, int frame) {
     return {FromYawPitchRoll(v[3], v[4], v[5]), {v[0], v[1], v[2]}};
 }
 
+// The pose of a space in LOCAL space at a frame; false when it cannot be located (an inactive action)
 bool SpaceInLocal(Space* space, int frame, Pose& out) {
     Instance* inst = space->session->instance;
     Pose base;
     if (space->action) {
         if (!space->action_ptr || !space->action_ptr->set->attached) return false;
+        // the action must be bound in the current profile
         Session* s = space->session;
         if (s->profile == XR_NULL_PATH) return false;
         auto it = space->action_ptr->bindings.find(s->profile);
@@ -567,6 +615,8 @@ bool SpaceInLocal(Space* space, int frame, Pose& out) {
     out = Compose(base, space->offset);
     return true;
 }
+
+// ----------------------------------------------------------------------------------------------------- vulkan helpers
 
 template <typename T>
 void LoadInstanceFn(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, T& fn, const char* name) {
@@ -617,6 +667,8 @@ uint32_t MemoryType(Session* s, uint32_t bits, VkMemoryPropertyFlags flags) {
     return UINT32_MAX;
 }
 
+// one command buffer on the session's queue, waited for at once (the application must not use the queue meanwhile, as the
+// extension asks of it during the calls that take it)
 template <typename F>
 bool RunCommands(Session* s, F&& record) {
     if (!s->pool) {
@@ -679,6 +731,8 @@ float HalfToFloat(uint16_t h) {
     return f;
 }
 
+// Writes one swapchain image (the last one released) as an 8-bit sRGB-encoded PNG: SRGB formats as stored, UNORM and float
+// formats (which the runtime reads as linear) encoded
 bool DumpImage(Session* s, Swapchain* sc, uint32_t index, uint32_t layer, const std::string& path, const XrRect2Di* rect) {
     const uint32_t w = sc->info.width;
     const uint32_t h = sc->info.height;
@@ -777,6 +831,8 @@ std::string FormatName(int64_t f) {
     default: return std::to_string(f);
     }
 }
+
+// ------------------------------------------------------------------------------------------------------------ entry points
 
 #define PT_CHECK_STRUCT(ptr, xrtype)                                                                                     \
     do {                                                                                                                 \
@@ -1007,6 +1063,8 @@ XRAPI_ATTR XrResult XRAPI_CALL EnumerateViewConfigurationViews(XrInstance h, XrS
     return XR_SUCCESS;
 }
 
+// ---- XR_KHR_vulkan_enable2
+
 XRAPI_ATTR XrResult XRAPI_CALL GetVulkanGraphicsRequirements2(XrInstance h, XrSystemId id, XrGraphicsRequirementsVulkanKHR* req) {
     Instance* inst = GetInstance(h);
     if (!inst) return Violation(XR_ERROR_HANDLE_INVALID, "xrGetVulkanGraphicsRequirements2KHR: invalid instance");
@@ -1053,6 +1111,7 @@ XRAPI_ATTR XrResult XRAPI_CALL GetVulkanGraphicsDevice2(XrInstance h, const XrVu
     enumerate(info->vulkanInstance, &count, nullptr);
     std::vector<VkPhysicalDevice> devices(count);
     enumerate(info->vulkanInstance, &count, devices.data());
+    // the headset's GPU: the first discrete one (PT_XRTEST_GPU=<index> picks another)
     VkPhysicalDevice chosen = devices.empty() ? VK_NULL_HANDLE : devices[0];
     for (VkPhysicalDevice d : devices) {
         VkPhysicalDeviceProperties p{};
@@ -1089,6 +1148,8 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateVulkanDevice(XrInstance h, const XrVulkanDe
         info->vulkanCreateInfo->queueCreateInfoCount);
     return XR_SUCCESS;
 }
+
+// ---- sessions
 
 XRAPI_ATTR XrResult XRAPI_CALL CreateSession(XrInstance h, const XrSessionCreateInfo* info, XrSession* out) {
     std::lock_guard lock(g_mutex);
@@ -1215,6 +1276,8 @@ void ScriptEvents(Session* s, int frame) {
     }
 }
 
+// ---- frame loop
+
 XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* info, XrFrameState* state) {
     std::lock_guard lock(g_mutex);
     Session* s = GetSession(h);
@@ -1222,6 +1285,8 @@ XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* inf
     if (info && info->type != XR_TYPE_FRAME_WAIT_INFO) return Violation(XR_ERROR_VALIDATION_FAILURE, "xrWaitFrame: info type");
     PT_CHECK_STRUCT(state, XR_TYPE_FRAME_STATE);
     if (!s->running) return Violation(XR_ERROR_SESSION_NOT_RUNNING, "xrWaitFrame on a session that is not running");
+    // the frame loop allows one xrWaitFrame ahead of the frame being drawn: waiting again before xrBeginFrame of the
+    // previous wait would block forever on a real runtime
     if (s->waited > s->begun) return Violation(XR_ERROR_CALL_ORDER_INVALID, "xrWaitFrame twice without xrBeginFrame");
     const int frame = static_cast<int>(s->waited);
     ScriptEvents(s, frame);
@@ -1231,6 +1296,7 @@ XRAPI_ATTR XrResult XRAPI_CALL WaitFrame(XrSession h, const XrFrameWaitInfo* inf
     state->predictedDisplayTime = s->last_predicted;
     state->predictedDisplayPeriod = kPeriod;
     state->shouldRender = (s->state == XR_SESSION_STATE_VISIBLE || s->state == XR_SESSION_STATE_FOCUSED) ? XR_TRUE : XR_FALSE;
+    // the first frame takes the session to synchronized, a few more to visible and focused, as compositors do
     if (s->state == XR_SESSION_STATE_READY && s->waited >= 1) SetState(s, XR_SESSION_STATE_SYNCHRONIZED);
     if (s->state == XR_SESSION_STATE_SYNCHRONIZED && s->waited >= 3 && !s->exit_requested) {
         SetState(s, XR_SESSION_STATE_VISIBLE);
@@ -1248,6 +1314,7 @@ XRAPI_ATTR XrResult XRAPI_CALL BeginFrame(XrSession h, const XrFrameBeginInfo* i
     if (s->begun >= s->waited) return Violation(XR_ERROR_CALL_ORDER_INVALID, "xrBeginFrame without a matching xrWaitFrame");
     XrResult result = XR_SUCCESS;
     if (s->frame_begun) {
+        // the previous frame is discarded
         result = XR_FRAME_DISCARDED;
         Log("frame %lld discarded (xrBeginFrame again without xrEndFrame)", static_cast<long long>(s->begun));
     }
@@ -1348,6 +1415,7 @@ XRAPI_ATTR XrResult XRAPI_CALL EndFrame(XrSession h, const XrFrameEndInfo* info)
     if (dump) Log("frame %d: %u layers", frame, info->layerCount);
     s->frames_without_layers = info->layerCount == 0 ? s->frames_without_layers + 1 : 0;
     s->predicted.erase(info->displayTime);
+    // display times are handed out in order; older ones can no longer be ended
     s->predicted.erase(s->predicted.begin(), s->predicted.lower_bound(info->displayTime));
     s->frame_begun = false;
     ++s->ended;
@@ -1375,6 +1443,7 @@ XRAPI_ATTR XrResult XRAPI_CALL LocateViews(XrSession h, const XrViewLocateInfo* 
         return XR_SUCCESS;
     }
     const Pose head = HeadPose(s->instance, std::max(0, frame));
+    // a symmetric headset: the left eye's field reaches further out (to the left) than in, the right eye mirrors it
     const XrFovf left_fov{-0.9425f, 0.7330f, 0.8203f, -0.8901f};
     for (uint32_t v = 0; v < 2; ++v) {
         if (views[v].type != XR_TYPE_VIEW) Violation(XR_ERROR_VALIDATION_FAILURE, "xrLocateViews: views[%u].type", v);
@@ -1387,6 +1456,8 @@ XRAPI_ATTR XrResult XRAPI_CALL LocateViews(XrSession h, const XrViewLocateInfo* 
                             XR_VIEW_STATE_POSITION_TRACKED_BIT;
     return XR_SUCCESS;
 }
+
+// ---- spaces
 
 XRAPI_ATTR XrResult XRAPI_CALL EnumerateReferenceSpaces(XrSession h, uint32_t capacity, uint32_t* count, XrReferenceSpaceType* spaces) {
     if (!GetSession(h)) return Violation(XR_ERROR_HANDLE_INVALID, "xrEnumerateReferenceSpaces: invalid session");
@@ -1477,6 +1548,8 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace h) {
     return XR_SUCCESS;
 }
 
+// ---- swapchains
+
 XRAPI_ATTR XrResult XRAPI_CALL EnumerateSwapchainFormats(XrSession h, uint32_t capacity, uint32_t* count, int64_t* formats) {
     Session* s = GetSession(h);
     if (!s) return Violation(XR_ERROR_HANDLE_INVALID, "xrEnumerateSwapchainFormats: invalid session");
@@ -1539,6 +1612,7 @@ XRAPI_ATTR XrResult XRAPI_CALL CreateSwapchain(XrSession h, const XrSwapchainCre
         }
         s->vk.BindImageMemory(s->vk_device, image.image, image.memory, 0);
     }
+    // the images are handed out in the layout the extension promises: colour attachment (depth: depth attachment)
     RunCommands(s, [&](VkCommandBuffer cmd) {
         for (SwapchainImage& image : sc->images) {
             VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -1628,6 +1702,8 @@ XRAPI_ATTR XrResult XRAPI_CALL ReleaseSwapchainImage(XrSwapchain h, const XrSwap
     return XR_SUCCESS;
 }
 
+// ---- paths and actions
+
 XRAPI_ATTR XrResult XRAPI_CALL StringToPath(XrInstance h, const char* text, XrPath* out) {
     std::lock_guard lock(g_mutex);
     Instance* inst = GetInstance(h);
@@ -1686,6 +1762,7 @@ XRAPI_ATTR XrResult XRAPI_CALL DestroyActionSet(XrActionSet h) {
     std::lock_guard lock(g_mutex);
     ActionSet* set = GetActionSet(h);
     if (!set) return Violation(XR_ERROR_HANDLE_INVALID, "xrDestroyActionSet: invalid action set");
+    // the actions go with the set; action spaces keep working per the specification, so they are kept until the instance goes
     for (Action* a : set->actions) a->magic = 0;
     set->magic = 0;
     return XR_SUCCESS;
@@ -1735,6 +1812,7 @@ XRAPI_ATTR XrResult XRAPI_CALL SuggestInteractionProfileBindings(XrInstance h, c
     const std::string profile_name = NameOf(inst, info->interactionProfile);
     const Profile* profile = FindProfile(profile_name);
     if (!profile) {
+        // an interaction profile this runtime does not know: allowed, the suggestion is ignored (extensions' profiles)
         Log("bindings for unknown profile %s ignored", profile_name.c_str());
         return XR_SUCCESS;
     }
@@ -1755,6 +1833,7 @@ XRAPI_ATTR XrResult XRAPI_CALL SuggestInteractionProfileBindings(XrInstance h, c
         }
         bindings[a].push_back(b.binding);
     }
+    // a new suggestion for the profile replaces the old one
     for (ActionSet* set : inst->action_sets)
         for (Action* a : set->actions) a->bindings.erase(info->interactionProfile);
     for (auto& [a, paths] : bindings) a->bindings[info->interactionProfile] = paths;
@@ -1775,6 +1854,7 @@ XRAPI_ATTR XrResult XRAPI_CALL AttachSessionActionSets(XrSession h, const XrSess
         set->attached = true;
         s->attached.push_back(set);
     }
+    // the simulated controller is a Touch controller; without bindings for it the simple controller's are used
     Instance* inst = s->instance;
     const XrPath touch = PathOf(inst, "/interaction_profiles/oculus/touch_controller");
     const XrPath simple = PathOf(inst, "/interaction_profiles/khr/simple_controller");
@@ -1901,6 +1981,7 @@ XRAPI_ATTR XrResult XRAPI_CALL SyncActions(XrSession h, const XrActionsSyncInfo*
                         next.active = true;
                         float x = 0, y = 0;
                         InputValue(inst, frame, path, x, y);
+                        // several bindings: the largest magnitude wins (vectors), any pressed (booleans)
                         if (std::abs(x) + std::abs(y) > std::abs(next.x) + std::abs(next.y)) {
                             next.x = x;
                             next.y = y;
@@ -2054,6 +2135,7 @@ XRAPI_ATTR XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance instance, const ch
     for (const Entry& e : kEntries) {
         if (std::strcmp(e.name, name) == 0) {
             if (e.needs_instance && !GetInstance(instance)) return XR_ERROR_HANDLE_INVALID;
+            // extension functions only when the extension is enabled
             if (std::strstr(name, "Vulkan") && !g_instance->extensions.count(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) return XR_ERROR_FUNCTION_UNSUPPORTED;
             *function = e.fn;
             return XR_SUCCESS;
@@ -2062,7 +2144,7 @@ XRAPI_ATTR XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance instance, const ch
     return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 
-}
+}  // namespace
 
 PT_XR_EXPORT XrResult XRAPI_CALL xrNegotiateLoaderRuntimeInterface(const XrNegotiateLoaderInfo* loader, XrNegotiateRuntimeRequest* request) {
     if (!loader || !request || loader->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||

@@ -311,12 +311,13 @@ def ipa(code, word='Jack'):
 # vowel, a devoiced onset, a clipped word without its k, very slow, very fast, whispered or shouted
 ACCENT_POSITIVE = {
     'ac_zhak': ipa('\u0292\u00e6k'), 'ac_zhak_a': ipa('\u0292ak'), 'ac_dzak_open': ipa('d\u0292\u0251k'),
-    'ac_jakku': ipa('d\u0292\u00e6k\u028a'), 'ac_dzaak': ipa('d\u0292\u0251\u02d0k'),
+    'ac_jakku': ipa('d\u0292\u00e6k\u028a'), 'ac_dzaak': ipa('d\u0292\u0251\u02d0k'), 
     'ac_dzek_long': ipa('d\u0292\u025b\u02d0k'), 'ac_clip': ipa('d\u0292\u00e6'), 'ac_jaaack': 'Jaaack',
     'ac_jek_slow': "<prosody rate='x-slow'>Jek</prosody>", 'ac_slow_low': "<prosody rate='x-slow' pitch='x-low'>Jack</prosody>",
     'ac_fast': "<prosody rate='x-fast'>Jack</prosody>", 'ac_whisper': "<prosody volume='x-soft' rate='slow'>Jack</prosody>",
     'ac_shout': "<prosody volume='x-loud'>Jack!</prosody>", 'ac_plain': 'Jack', 'ac_hey': 'Hey Jack',
 }
+# what the player of C:/Users/r1otp/Downloads/pt (10).log was heard saying, and other near sounds: all must stay rejected
 ACCENT_NEGATIVE = {
     'pl_jorif_diga': 'Jorif diga', 'pl_jorith': 'Jorith', 'pl_shk_back': 'shk back', 'pl_possessed': 'Possessed, okay',
     'pl_jarus': 'JARUS!', 'pl_jourissa': 'Jourissa', 'pl_jrest': 'J r est', 'pl_james': 'James', 'pl_hey_you': 'Hey you',

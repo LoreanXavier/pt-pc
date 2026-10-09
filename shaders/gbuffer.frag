@@ -47,6 +47,10 @@ vec3 ViewReflection(vec3 albedo, vec3 n, vec3 view_dir, float specular, float re
     return albedo * keep + specular * amount * param.x * k * color.rgb * env;
 }
 
+// Game+ tier 2's torn dress (GamePlusArm): a draw with tint.a above 1.5 tears where its vertex colour's alpha (1 in the cloth,
+// falling to 0 at the cut) is under this ragged noise of the surface's texture coordinates, and a negative alpha marks her
+// surface over the cut: there it is drawn with the creature's skin material (the vertex colour's r) at its texture coordinates
+// (g and b)
 float TearHash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
@@ -72,6 +76,7 @@ void main() {
     if (draw.tint.a > 1.5 && in_color.a < 0.999) {
         float noise = 0.15 + 0.85 * TearNoise(in_uv0 * 34.0);
         creature = in_color.a < noise;
+        // the frayed edge of the cloth just before a tear, darkened
         tear_edge = creature ? 0.0 : 1.0 - smoothstep(0.0, 0.12, in_color.a - noise);
     }
     Material m = materials[creature ? uint(in_color.r + 0.5) : draw.ids.y];
@@ -85,6 +90,7 @@ void main() {
     float fade = min(draw.tint.a, 1.0);
     float alpha = base.a;
     if ((m.flags & MAT_DIRECTIVE_ALPHA) != 0u) {
+        // fox3ddf_translucent_diralp_nc: the interpolated view space normal's |z| between EndFadeDot (0) and StartFadeDot (1)
         alpha = base.a * (abs(in_normal.z) - m.extra.w) / (m.params.y - m.extra.w);
     }
     if (fade - dither.x < 0.0 || alpha - m.params.x * AlphaReference(m.flags, dither) < 0.0) {
@@ -102,10 +108,12 @@ void main() {
         vec2 nxy = vec2(nt.w, nt.y) * 2.0 - 1.0;
         float nz = sqrt(Saturate(1.0 - dot(nxy, nxy)) + 1.00016594e-4);
         if ((m.flags & MAT_NORMAL_WAVE) != 0u && !gl_FrontFacing) {
+            // fox3ddf_normal_wave_diralp (ps 7c9a7002da0ac9c6) draws both faces and negates the tangent space z on the back
             nz = -nz;
         }
         vec3 nts = vec3(nxy, nz);
         if ((m.flags & MAT_SUB_NORMAL) != 0u) {
+            // the layer materials (fox3ddf_blin_layerb_subnm_mu) weight the sub normal by the layer mask's y at the mask UV
             bool layer = (m.flags & MAT_LAYER) != 0u;
             vec4 mask = layer ? Tex(m.aux2, in_uv2) : Tex(m.aux2, uv);
             vec4 sn = Tex(m.aux1, uv * m.extra.yz);
@@ -116,8 +124,10 @@ void main() {
     }
     vec4 srm = Tex(m.specular, uv);
     if ((m.flags & MAT_NORMAL_WAVE) != 0u) {
+        // Specular_Value, Roughness_Value and no reflection; Translucent_Value below
         srm = vec4(m.extra.x, m.extra.y, 0.0, 0.0);
     } else if ((m.flags & MAT_ALBEDO_VIEW) != 0u) {
+        // fox3ddf_tempolary_albedoview: target 2 = (0.6430664, 1, 0, 0), target 1.w = 0
         srm = vec4(1.0, 0.6430664, 0.0, 0.0);
     }
     float roughness = srm.g;
@@ -137,18 +147,25 @@ void main() {
             index = m.indices.w;
         }
     }
+    // inViewDir: normalized per vertex, interpolated, normalized again (mesh.vert out_view_dir)
     vec3 view_dir = normalize(in_view_dir);
     vec3 albedo = base.rgb;
     if ((m.flags & MAT_LAYER) != 0u) {
+        // fox3ddf_blin_layer_bl_mu, fox3ddf_blin_layerb_subnm_mu: Layer_Tex at URepeat (UShift + uv1) over the decoded base by
+        // LayerMask_Tex.x (at the third UV) times the layer's alpha
         vec4 layer = Tex(m.aux0, m.albedo_factor.xy * (m.albedo_factor.zw + in_uv1));
         albedo = mix(albedo, layer.rgb, Tex(m.aux2, in_uv2).x * layer.a);
     }
     albedo *= draw.tint.rgb;
     albedo *= 1.0 - 0.75 * tear_edge;
     if (creature) {
+        // hsh0's skin texture is far darker than hers: brightened as its own draw is (GamePlusArm kSkinGain)
         albedo *= 1.5;
     }
     if ((m.flags & MAT_LIGHT_COVER) != 0u) {
+        // fox3ddf_lightcover (the NoLnm table's shader for fox3DDF_LightCover_LNM): the view reflected at the internal normal map,
+        // in world space, picks the global cube (g_ReflectionTexture, decoded), and the stored albedo is mask * (diffuse - cube) + cube
+        // with the diffuse still encoded (outColor0 = t7.x * (t2 - t6) + t6); the _vr variant decodes that before its reflection term
         vec4 it = Tex(m.aux0, uv);
         vec2 ixy = vec2(it.w, it.y) * 2.0 - 1.0;
         vec3 inner = normalize(t_geo * ixy.x + b_geo * ixy.y + n_geo * sqrt(Saturate(1.0 - dot(ixy, ixy)) + 1.00016594e-4));
@@ -164,6 +181,12 @@ void main() {
         albedo = SrgbDecode(Saturate(sphere * srm.r + mix(SrgbEncode(albedo), iris, 1.0 - pow(1.0 - h, 4.0))));
     }
     if ((m.flags & MAT_HAIR) != 0u) {
+        // fox3ddf_hair (ps 3ca1dbb1cfa11613): the tangent shifted along the bitangent by HairShiftScale x (2 Shift_Tex.x - 1)
+        // (Shift_Tex at the URepeat_UV, VRepeat_UV repeat), the light (the view's dominant light) and the view direction
+        // each taken into the frame (shifted tangent, bitangent, normal) and normalized there, h their sum; the highlight
+        // is dominant w x specular x saturate(10 |h|)^4 x (1 - (h.b / |h|)^2)^(Anistropic_Diffusion x 2^(7 - 6 gloss)) with the
+        // gloss of the material table, and it is the stored specular; Incidence_Color tints the albedo by highlight x the
+        // incidence term (alpha x (1 - n.v)^Incidence_Roughness at the interpolated normal)
         vec4 dl = frame.views[draw.ids.x].dominant_light;
         float shift = m.extra.y * (2.0 * Tex(m.aux0, uv * m.extra.zw).x - 1.0);
         vec3 ts = normalize(in_tangent + shift * in_bitangent);
@@ -193,6 +216,7 @@ void main() {
         reflection = 1.0 - (r23 - srm.b * r23);
     }
     if ((m.flags & MAT_REFLECTOR) != 0u) {
+        // fox3ddf_reflector(_vr): the specular falls with the view angle, srm.x saturate(n.v)^AnglePow, in the view reflection too
         specular *= exp2(m.params.z * log2(abs(Saturate(dot(n, view_dir)))));
     }
     if ((m.flags & MAT_VIEW_REFLECTION) != 0u) {
@@ -205,6 +229,7 @@ void main() {
         translucency = m.extra.z;
     }
     if ((m.flags & MAT_ALBEDO_VIEW) != 0u) {
+        // the interpolated vertex normal as it is, material index 0
         n = in_normal;
         index = 0.0;
     }
@@ -217,6 +242,32 @@ void main() {
         out_albedo = vec4(SrgbEncode(albedo), 1.0);
         out_normal = vec4(EncodeNormal(n), reflection);
         out_material = vec4(roughness, specular, index, translucency);
+    }
+    if ((m.flags & MAT_GBUFFER_BASE2) != 0u) {
+        // GrModelShaders GBuffersBase2 (ps ad9dce8d5b128146): outColor0 (diffuse.r, 0, 0, 1), outColor1 the normal with w 0,
+        // outColor2 (specTexture.r, g_psMaterial.m_materials[0].x (1 in the f060 capture), 0.5 + 0.5 motion x, 0.5 - 0.5 motion y)
+        // with motion = 0.0078125 x m_renderBuffer.xy x 0.5 x (current NDC - previous NDC), its direction scaled by
+        // saturate(length). Its vertex shader takes the "previous" position as m_shadowProjection2 x (m_shadowProjection x
+        // inPosition), and in the G-buffer pass m_shadowProjection is all zeros (bath_walk_rt 4001 and bath_base2 4280 cVSScene
+        // +0xC0), so that position is (0, 0, 0, 0); the pixel shader divides by its w with v_rcp (inf) and multiplies with
+        // v_mul_legacy_f32, where 0 x inf = 0. The "motion" is the pixel's own NDC: 0.4707 (byte 120) and 0.502 (128) at
+        // (952, 540) of frame 4280, as captured. The lighting reads that target as (roughness, specular, material index,
+        // translucency): only material rows 0 to 58 have a specular colour, which the cap reaches where it sits left of
+        // about 13 % from the screen centre (bath_walk_rt 4001: bytes 0 to 4), and then the wet tile's specular and normal
+        // map reflect the flashlight and the lamps in the hole, the bath hole's "eye". m_renderBuffer is the original's
+        // 1920 x 1080 whatever the port's resolution, so the region stays the same.
+        vec4 cur = frame.views[draw.ids.x].view_projection * vec4(in_world, 1.0);
+        // the port's projection flips y for Vulkan; the original's clip y points up
+        vec2 ndc = vec2(cur.x, -cur.y) / cur.w;
+        vec2 d = 0.0078125 * vec2(1920.0, 1080.0) * 0.5 * ndc;
+        float l2 = dot(d, d);
+        // at l2 = 0 v_rsq gives inf and the legacy multiplies by 0 give 0: (0.5, 0.5)
+        vec2 enc = l2 > 0.0 ? vec2(0.5 * d.x * inversesqrt(l2) * Saturate(sqrt(l2)) + 0.5,
+                                   -(d.y * inversesqrt(l2) * Saturate(sqrt(l2))) * 0.5 + 0.5)
+                            : vec2(0.5);
+        out_albedo = vec4(base.r, 0.0, 0.0, 1.0);
+        out_normal = vec4(EncodeNormal(n), 0.0);
+        out_material = vec4(srm.r, 1.0, enc);
     }
     if (debug_mode == 2u) {
         out_albedo = vec4(fract(in_uv0), 0.0, 1.0);

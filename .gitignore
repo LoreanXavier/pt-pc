@@ -1,12 +1,9 @@
-# game data and dumps never go into the repository
 /game/
 /dump/
 out/
 extracted/
 build/
 Build/
-/dist/
-/.deps/
 
 *.pkg
 *.bin
@@ -30,9 +27,29 @@ Build/
 *.bnk
 *.wem
 
+*.gpr
+*.rep/
+*.lock~
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.bndb
+
 __pycache__/
 *.pyc
+/build/
+/.deps/
 pt.log
 pt_imgui.ini
+/dist/
+scratch/*
+!scratch/*.py
+/gpu-out/
+
+# .NET build output of the installer helper and its tests (tools/ci/release.py publishes the helper itself)
 installer/*/bin/
 installer/*/obj/

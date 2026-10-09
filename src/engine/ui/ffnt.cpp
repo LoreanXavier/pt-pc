@@ -159,6 +159,7 @@ bool FfntFont::Bit(const FfntGlyph& glyph, int x, int y) const {
 }
 
 void FfntFont::AddTurkishGlyphs() {
+    // Retain the original Latin letter shapes and advances; add only missing Turkish marks.
     struct Addition { uint32_t code, base; int kind; };
     for (const auto a : {Addition{0x11e,'G',0}, {0x11f,'g',0}, {0x130,'I',1}, {0x131,'i',2}, {0x15e,'S',3}, {0x15f,'s',3}}) {
         if (Find(a.code)) continue;
@@ -180,6 +181,7 @@ void FfntFont::AddTurkishGlyphs() {
             for(int x=-3;x<=3;++x) { put(cx+x,std::abs(x)>=2 ? 1 : 2); put(cx+x,std::abs(x)>=2 ? 2 : 3); }
         } else if(a.kind==1) { put(cx,1); put(cx+1,1); put(cx,2); put(cx+1,2); }
         else if(a.kind==2) {
+            // Remove the isolated dot above the original lowercase i, stopping at its first blank row.
             bool ink=false; int gap=-1;
             for(int y=0;y<base.height;++y) {
                 bool row=false; for(int x=0;x<base.width;++x) row |= Bit(base,x,y);

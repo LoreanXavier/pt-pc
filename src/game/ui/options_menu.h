@@ -33,6 +33,7 @@ struct MenuInput {
     bool back = false;
     bool open_pc = false;
     bool switch_column = false;
+    // L1 (the menu's H key): the street walk's "Return to the house" on the original page
     bool street_return = false;
     uint32_t held_dirs = 0;
     bool pointer_valid = false;
@@ -63,12 +64,16 @@ public:
     bool FirstBoot() const { return first_boot_; }
     bool TakeClosed() { return std::exchange(just_closed_, false); }
     bool TakeResume() { return std::exchange(resume_, false); }
+    // "Return to the house" was confirmed on the original page during the street walk: the menu closes, then the walk ends
     bool TakeStreetReturn() { return std::exchange(street_return_, false); }
     int TextLanguage() const { return text_language_; }
     int Selector() const { return selector_; }
+    // the device whose buttons the prompts show (the input device's pick), and the family they last showed
     void SetPromptStyle(const PromptStyle& style) { prompt_style_ = style; }
     PromptDevice Prompts() const { return shown_prompts_; }
+    // the option screen's model (with the PC page's nodes), for the photo mode's panel drawn in its look
     const ui::UifModel* Model() const { return model_; }
+    // the selection bar's alpha this many 60 Hz frames after the cursor moved (the subtitle selection's flash)
     float SelectionFlash(float frame) const;
 
 private:
@@ -113,6 +118,7 @@ private:
     uint16_t quit_label_ = 0;
     bool quit_confirming_ = false;
     bool quit_focused_ = false;
+    // the street walk's "Return to the house" line (shown only while Game::StreetWalkActive)
     uint16_t street_label_ = 0;
     uint16_t street_icon_ = 0;
     uint16_t street_glow_ = 0;

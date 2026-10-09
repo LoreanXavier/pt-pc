@@ -38,7 +38,7 @@ uses `icon0.png` from your own copy, the icon the PS4 shows for the game. This r
 package or that image: the installer reads it from the PKG or dump you select. The eboot, modules and the rest of
 `sce_sys` are not used.
 
-Linux: `chmod +x` the setup and run it from a terminal. The game needs only glibc and the system's Vulkan driver. On a Steam Deck
+Linux: `chmod +x` the setup and run it, from a terminal or from the file manager (it uses zenity or kdialog for its windows). The game needs only glibc and the system's Vulkan driver. On a Steam Deck
 install from desktop mode and add `pt` as a non-Steam game; it runs on SteamOS as it is.
 
 macOS: download `P.T.PC.Port-macOS-arm64.zip` (M1 and later) or `P.T.PC.Port-macOS-x64.zip` (Intel), unzip `P.T. PC Port.app`,
@@ -47,15 +47,17 @@ dump folder when it asks. A fake PKG has to be extracted on Windows or Linux fir
 run the renderer on; the port was written without a Mac at hand and the Intel app has not been run on one yet. More in
 docs/macos.md.
 
-The published 1.0.1 release contains setup downloads, not a portable ZIP. The earlier README incorrectly claimed
-a ZIP was available. The setup accepts an already extracted dump folder as well as a fake PKG.
+Portable downloads: `P.T.PC.Port-portable-windows.zip` and `P.T.PC.Port-portable-linux.zip` hold the same files the
+setups install. Unpack one anywhere you can write to, then either put your extracted `CUSA01127` folder next to `pt.exe`
+(`pt` on Linux) or pick the folder when the game asks at the first start. The macOS app zips work the same way. Game
+archives are never included; the setups also accept a fake PKG, the portable zips need the extracted folder.
 
-This source tree contains the upcoming 1.0.2 changes; its new features and macOS packages are not yet published release
-downloads. On Windows and Linux, 1.0.2 stores settings, saves, logs and cache in `data/` beside the executable and migrates
-existing user data without overwriting newer files. On macOS, these stay in `~/Library/Application Support/pt-port/pt/`.
-The game checks GitHub Releases for a newer version at startup; `[network] check_updates = 0` disables that check.
+Settings, saves, logs and caches live in `data/` beside the executable on Windows and Linux, so a whole game folder can
+be moved or copied; an older profile is migrated once without overwriting newer files. On macOS they stay in
+`~/Library/Application Support/pt-port/pt/`. The game checks GitHub Releases for a newer version at startup;
+`[network] check_updates = 0` disables that check.
 
-Thanks to ahm3texe for the Apple silicon port(even though he is an easy ragebaitted dumbass), totsu0jv for Czech translation, and yewhochen for the Linux library-loading
+Thanks to ahm3texe for the Apple silicon port(even though he is an easy ragebaitted dumbass), totsu0jv for Czech translation, GrzybDev for Polish translation, and yewhochen for the Linux library-loading
 and startup-focus fixes. Their contributions are incorporated here, with platform and release changes adapted for 1.0.2.
 
 ## Playing
@@ -104,7 +106,7 @@ Extras
 
 Languages
 - The original's English, French, German, Spanish, Italian, Portuguese and Japanese, plus Turkish, Simplified Chinese,
-  Arabic, Russian, Ukrainian and Czech added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
+  Arabic, Russian, Ukrainian, Czech and Polish added by the port: menus, the PC settings and all subtitle lines. Voice audio stays the
   original English, and the word the microphone listens for is always "Jack".
 
 Mods

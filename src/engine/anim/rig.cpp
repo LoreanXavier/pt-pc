@@ -60,6 +60,7 @@ glm::quat FrameRotation(const glm::vec3& world_a, const glm::vec3& world_b, cons
     return glm::normalize(glm::quat_cast(m));
 }
 
+// 0xAC0F50 (leg), 0xAB4770 (arm): two-bone chain from start toward target, bending about axis in the plane of the pole
 void SolveTwoBone(const glm::vec3& start, const glm::vec3& target, const glm::vec3& pole, const glm::vec3& axis, const glm::vec3& upper_local,
                   const glm::vec3& lower_local, glm::quat& upper, glm::quat& lower) {
     const glm::vec3 d = target - start;
@@ -247,6 +248,7 @@ bool Rig::Parse(std::span<const uint8_t> data, std::string* error) {
     return true;
 }
 
+// channel kinds per unit type: 0xACA650, 0xAC87C0, 0xAC2610, 0xACC2B0, 0xAC7AF0, 0xAB8280, 0xABDB00, 0xAB44E0, 0xAC0BB0, 0xAB98D0, 0xAB81C0
 bool Rig::ChannelIsRotation(size_t unit, size_t channel) const {
     if (unit >= units_.size()) {
         return false;
@@ -308,6 +310,7 @@ bool SampleRigPose(const Rig& rig, const GaniMotion& motion, double frame, RigPo
     const glm::vec3 root = RigRootTranslation(rig, out);
     for (const RigUnit& unit : rig.Units()) {
         const int track = unit.Is(RigUnitType::Leg) ? unit.tracks[0] : unit.Is(RigUnitType::Arm) ? unit.tracks[1] : -1;
+        // 0xAC2BD0: IK targets are stored in motion space; the rig works in root space
         if (glm::vec4* v = Slot(out, track)) {
             *v = glm::vec4(to_root * (glm::vec3(*v) - root), 0.0f);
         }
@@ -333,6 +336,7 @@ glm::quat RigRootRotation(const Rig& rig, const RigPose& pose) {
     return kIdentity;
 }
 
+// 0xAC3E60 with a rig; per type: 0xABCA20 (7), 0xAC7FB0 (2), 0xACBAA0 (4), 0xAB7870 (11), 0xAC0F50 (3), 0xAB4770 (8); then 0xAA2BB0
 void EvaluateRig(const Rig& rig, const RigBinding& binding, const Skeleton& skeleton, const RigPose& pose, RigOutput& out) {
     Solver s(skeleton, out);
     const glm::vec3 x_axis(1.0f, 0.0f, 0.0f);
@@ -399,6 +403,7 @@ void EvaluateRig(const Rig& rig, const RigBinding& binding, const Skeleton& skel
     s.FillRest();
 }
 
+// 0xAC1E20 (leg), 0xAB5AC0 (arm): IK channels relative to the parent of the chain before layers are blended
 void MakeRigPoseRelative(const Rig& rig, const RigBinding& binding, const Skeleton& skeleton, const RigOutput& evaluated, RigPose& pose) {
     if (pose.relative) {
         return;
@@ -427,6 +432,7 @@ void MakeRigPoseRelative(const Rig& rig, const RigBinding& binding, const Skelet
     }
 }
 
+// 0xAC4440 per unit type (0xAC83A0: slerp for rotation channels); vectors are interpolated linearly
 void BlendRigPose(const Rig& rig, const RigPose& from, const RigPose& to, float weight, RigPose& out) {
     if (from.tracks.size() != to.tracks.size() || from.relative != to.relative) {
         out = to;

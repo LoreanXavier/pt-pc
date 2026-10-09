@@ -55,6 +55,8 @@ void main() {
     inner += 0.132698 * Pair(z, LinearDepth(v, in_uv + d3 * radius_a), LinearDepth(v, in_uv - d3 * radius_a), 0.75592875, pass.f1.x, pass.f1.z);
     outer += 0.132698 * Pair(z, LinearDepth(v, in_uv + d3 * radius_b), LinearDepth(v, in_uv - d3 * radius_b), 0.75592875, pass.f1.y, pass.f1.w);
     float occlusion = Saturate(Saturate(2.0 * inner - 1.0) + Saturate(2.0 * outer - 1.0));
+    // the original's gain on (m_localParam[0].zw) and fade (m_localParam[3].xy, 0xDA39F0): 0 up to gainonStart, 1 from
+    // gainonStart + gainonRange, falling over falloffRange to 0 at f2.z
     float strength = Saturate(pass.f2.x * (z - pass.f2.y)) * Saturate(pass.f2.w * (pass.f2.z - z));
     out_color = vec4(1.0 - Saturate(strength) * occlusion);
 }

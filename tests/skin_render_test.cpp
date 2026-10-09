@@ -2,6 +2,8 @@
 #include <cstdio>
 int main() {
     int failures = 0;
+    // A rotating actor root compensated by the skeleton, as in the first-person get-up.
+    // The world-space wrist is stationary: intermediate render frames must retain it.
     for (float angle : {0.2f, 0.8f, 1.6f, 3.0f}) {
         const auto from = glm::translate(glm::mat4(1), glm::vec3(.07f, 0, 8.2f));
         const auto to = from * glm::mat4_cast(glm::angleAxis(angle, glm::vec3(0,1,0)));
@@ -15,6 +17,7 @@ int main() {
             for (int c=0;c<4;++c) if (glm::length(drawn[c]-pose[c])>1e-5f) { ++failures; break; }
         }
     }
+    // A moving wrist must also follow its endpoints, without a root-space detour.
     const auto a = glm::translate(glm::mat4(1), glm::vec3(.1f,0,8));
     const auto b = a * glm::mat4_cast(glm::angleAxis(1.5f,glm::vec3(0,1,0)));
     const auto pose_a = glm::translate(glm::mat4(1),glm::vec3(.6f,.3f,8.2f));

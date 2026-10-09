@@ -123,6 +123,7 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     vkCreateSampler(ctx_.device, &sampler_info, nullptr, &linear_sampler_);
+    // the film grain noise: wrapped and filtered between its mip levels like Draw2D_ShFilmGrain's sampler
     sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -242,20 +243,29 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     set_info.bindingCount = 2;
     set_info.pBindings = bindings;
-    vkCreateDescriptorSetLayout(ctx_.device, &set_info, nullptr, &composite_set_layout_);
+    if (const VkResult r = vkCreateDescriptorSetLayout(ctx_.device, &set_info, nullptr, &composite_set_layout_); r != VK_SUCCESS) {
+        LogError("renderer: composite set layout failed ({})", static_cast<int>(r));
+        return false;
+    }
     VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = 2;
     pool_info.poolSizeCount = 1;
     pool_info.pPoolSizes = &pool_size;
-    vkCreateDescriptorPool(ctx_.device, &pool_info, nullptr, &composite_pool_);
+    if (const VkResult r = vkCreateDescriptorPool(ctx_.device, &pool_info, nullptr, &composite_pool_); r != VK_SUCCESS) {
+        LogError("renderer: composite descriptor pool failed ({})", static_cast<int>(r));
+        return false;
+    }
     const VkDescriptorSetLayout layouts[2] = {composite_set_layout_, composite_set_layout_};
     VkDescriptorSet sets[2] = {};
     VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     alloc.descriptorPool = composite_pool_;
     alloc.descriptorSetCount = 2;
     alloc.pSetLayouts = layouts;
-    vkAllocateDescriptorSets(ctx_.device, &alloc, sets);
+    if (const VkResult r = vkAllocateDescriptorSets(ctx_.device, &alloc, sets); r != VK_SUCCESS) {
+        LogError("renderer: composite descriptor sets failed ({})", static_cast<int>(r));
+        return false;
+    }
     composite_set_ = sets[0];
     final_set_ = sets[1];
     WriteCompositeSets();
@@ -370,6 +380,8 @@ void Renderer::Resize(uint32_t, uint32_t) {
 bool Renderer::BeginFrame(bool present) {
     Frame& frame = frames_[frame_index_];
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
+    // a frame generation switch (DLSS-G's swapchain and plugin) happens here, between frames: the previous frame is presented,
+    // and no command buffer or swapchain image of this one exists yet
     bool keep_current_swapchain = false;
     if (window_ && present && frame_start) {
         const FrameStartAction action = frame_start(swapchain_dirty_);
@@ -379,8 +391,10 @@ bool Renderer::BeginFrame(bool present) {
             keep_current_swapchain = true;
         }
     }
+    // Streamline (DLSS Frame Generation): a frame token per rendered frame, the Reflex sleep and the PCL markers
     streamline::BeginFrame();
     grain[0] = 0.0f;
+    // VR: the eye size, whatever the window's
     if (render_extent_.width > 0 && render_extent_.height > 0 &&
         (scene_color_.extent.width != render_extent_.width || scene_color_.extent.height != render_extent_.height)) {
         vkDeviceWaitIdle(ctx_.device);
@@ -470,6 +484,8 @@ void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, V
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_layout_, 0, 1, &set, 0, nullptr);
     const float brightness = std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    // grain_offset.z: the frame's width in 16:9 frames, so the grain's three tiles across the original's 16:9 frame keep their
+    // texel shape in a wider or narrower window (composite.frag)
     /* The grain tiles three times across the original 16:9 frame; scaling by the window's width in 16:9 frames keeps the grain texel size on ultrawide. */
     const float across = extent.height ? (static_cast<float>(extent.width) / static_cast<float>(extent.height)) / (16.0f / 9.0f) : 1.0f;
     const float push[16] = {exposure, brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
@@ -555,6 +571,7 @@ void Renderer::EndFrame(bool draw_ui) {
     if (xr) {
         RecordXr(cmd);
     }
+    // VR: the window shows the eye scaled to fit (its size is the headset's, not the window's)
     const VkExtent2D window_extent = presenting_ ? ctx_.swapchain.extent : extent;
     const bool fitted = window_extent.width != extent.width || window_extent.height != extent.height;
     if (target_image) {
@@ -743,6 +760,9 @@ bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop)
     return ok != 0;
 }
 
+// VR (docs/vr.md): the HUD image (the overlay alone, cleared to transparent) and the copies of the frame and the HUD into the
+// OpenXR swapchain images. The swapchain images come in colour attachment layout and are left in it, as XR_KHR_vulkan_enable2
+// asks; the queue's order puts these writes before the runtime's reads after xrReleaseSwapchainImage.
 /* XR_KHR_vulkan_enable2 hands the swapchain images over in colour attachment layout and wants them back the same way, hence no transitions here. */
 void Renderer::RecordXr(VkCommandBuffer cmd) {
     if (!xr_layout_) {
@@ -840,6 +860,7 @@ void Renderer::CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, xr_layout_, 0, 1, &set, 0, nullptr);
     const float brightness = std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    // the grain tiles keep the window's texel shape: the frame's width in 16:9 frames, as Composite
     const float across = target.rect.w > 0.0f && target.extent.height
                              ? (static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height)) / (16.0f / 9.0f)
                              : 1.0f;

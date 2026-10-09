@@ -45,14 +45,19 @@ public:
     uint32_t Word(NazoId id) const { return word_[Index(id)]; }
     NazoState State(NazoId id) const;
     void ResetAllStates();
+    // a new session (loop browser pick, progress reset): every state, timer and counter as at boot; the stage assets stay
     void ResetSession();
+    // the state ResetSession sets, one line (Game::DescribeSessionState)
     std::string DescribeSession() const;
     void CancelPendingClearSound() { clear_sound_pending_ = false; }
     void SetCondition(std::string_view condition, const glm::vec3& target = glm::vec3(0.0f));
     bool IsActionArmed() const { return action_armed_; }
     bool IsPeepholeTheaterActive() const { return (word_[2] & 8) != 0; }
+    // nazo service +0x60 (0x1267390), called by the camera's zoom-out branch (0x984A62) on every frame the zoom falls
     void AbortPeephole();
+    // translation of the `Peephole` control asset (GetAssetTransform 0x9125D0), the pivot of the theater camera
     bool PeepholePosition(glm::vec3& out) const { return AssetPosition("Peephole", out); }
+    // any control asset's translation (XMarkText, HELL_H, ...), for the input script's fent
     bool ControlAssetPosition(std::string_view name, glm::vec3& out) const { return AssetPosition(name, out); }
     bool PeepholeEye(glm::vec3& out) const {
         if (!peephole_eye_valid_ || !IsPeepholeTheaterActive()) return false;
@@ -99,6 +104,7 @@ private:
     float true_end_timer_ = 0.0f;
     int frames_since_hide_ = 0;
     int hide_ticks_ = 0;
+    // AbortPeephole calls that went through (the zoom-out branch, once per game frame of a falling zoom), logged per clear
     int abort_calls_ = 0;
     int armed_state_ = 0;
     uint32_t armed_flag_ = 0;

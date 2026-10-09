@@ -97,6 +97,7 @@ void LiveSplitClient::StartConnect() {
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(static_cast<uint16_t>(port_));
+    // a numeric IPv4 address only: a name lookup would block the game
     if (inet_pton(AF_INET, host_.c_str(), &address.sin_addr) != 1) {
         if (!logged_failure_) LogWarn("livesplit: '{}' is not an IPv4 address", host_);
         logged_failure_ = true;
@@ -180,6 +181,7 @@ void LiveSplitClient::Poll() {
 #ifdef _WIN32
         const int sent = send(static_cast<SOCKET>(socket_), front.data(), static_cast<int>(front.size()), 0);
 #elif defined(__APPLE__)
+        // macOS has no MSG_NOSIGNAL: SO_NOSIGPIPE is set on the socket instead (StartConnect)
         const int sent = static_cast<int>(send(static_cast<int>(socket_), front.data(), front.size(), 0));
 #else
         const int sent = static_cast<int>(send(static_cast<int>(socket_), front.data(), front.size(), MSG_NOSIGNAL));

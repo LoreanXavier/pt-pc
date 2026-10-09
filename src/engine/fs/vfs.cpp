@@ -29,6 +29,9 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     return true;
 }
 
+// The installer accepts every release of P.T. (docs/installer.md) and writes what it was made from to source.txt. Data that
+// another release may lack is named here once at start, and the game keeps running: a missing package is reported again
+// where it is loaded, and subtitles fall back to English (SubtitleTable::Load).
 void Vfs::ReportDataDifferences() const {
     std::error_code ec;
     const auto source = game_dir_ / "source.txt";
@@ -94,6 +97,7 @@ std::shared_ptr<FoxPackage> Vfs::LoadPackage(std::string_view path) {
             return it->second;
         }
     }
+    // a mod's copy of the package replaces it whole (docs/modding.md); without mods ReadOverride is a null check
     auto data = mods::ReadOverride(archive_path);
     if (data) {
         LogInfo("vfs: {} from a mod", archive_path);

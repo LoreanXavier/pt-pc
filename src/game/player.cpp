@@ -18,16 +18,21 @@ constexpr float kMotionFps = 59.94006f;
 /* The original steps the player once per 29.97 fps frame; the port ticks at 60 Hz and treats two ticks as one frame. */
 constexpr float kOriginalFrame = 1.0f / 29.97003f;
 constexpr float kTickToOriginal = 60.0f / kMotionFps;
+// 0x979070 mode 5: eye = SKL_004_HEAD + rotate(camera yaw, kHeadEyeOffset)
 constexpr glm::vec3 kHeadEyeOffset(0.0f, 0.06f, 0.015f);
+// camera roll = share * head roll (fitted)
 /* Fitted against the PS4 captures: half the head bone's roll lands within 0.2 degrees over the walk cycle, the filtered head rotation alone does not. */
 constexpr float kHeadRollShare = 0.5f;
+// 0x97B010: camera +0x240, +0x244, +0x5E0
 constexpr float kLookDeadZone = 0.094117648f;
 constexpr float kLookCrossRatio = 0.15f;
 constexpr float kLookExponent = 2.0f;
+// 0x97AD80: +0x230 (fitted), +0x234, samples of 1/59.94 s, velocity * 21 / focal
 constexpr float kLookAccelFrames = 12.0f;
 constexpr float kLookDecelFrames = 1.0f;
 constexpr float kLookFrame = 0.016683333f;
 constexpr float kLookFocal = 21.0f;
+// 0xB001E0: body yaw += (target - yaw) * (1 - (1 - 1/n)^(dt * 299.7 * 0.2)), n fitted
 constexpr float kBodyTurnDivisor = 12.0f;
 
 float Wrap(float a) {
@@ -48,6 +53,7 @@ glm::vec3 RotateYaw(float fox_yaw, const glm::vec3& v) {
     return glm::vec3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
 }
 
+// DS4 byte to axis: 0xA70BF0, 0xA5DC00
 float PadAxis(float v) {
     const int raw = std::clamp(static_cast<int>(std::lround(127.5f + 127.5f * v)), 0, 255);
     const float f = static_cast<float>(2 * raw - 256) / 255.0f;
@@ -55,6 +61,7 @@ float PadAxis(float v) {
     return static_cast<float>(s) * 3.051851e-05f;
 }
 
+// 0x97B010
 float LookVelocity(float v, float input, float max, float dt) {
     const float target = input * max;
     const float accel = dt * max / (kLookAccelFrames * kLookFrame);
@@ -107,11 +114,13 @@ void Player::Spawn(const glm::mat4& world) {
     controller.position = glm::vec3(world[3]);
     controller.Reset();
     const glm::vec3 forward = glm::normalize(glm::vec3(world[2]));
+    // 0x93FC80 turns the body to the locator and leaves the camera at its initial Fox yaw 0
     body_yaw_ = body_yaw_target_ = FoxYawOf(forward);
     yaw = target_yaw = kPi;
     pitch = target_pitch = 0.0f;
     look_velocity_ = glm::vec2(0.0f);
     zoom = 1.0f;
+    // 0x124F820: the handy light is created switched on
     handy_light.enable = true;
     spawned = true;
     handoff_weight_ = 0.0f;
@@ -144,9 +153,11 @@ void Player::ResetLocomotion() {
     frame_dt_ = 0.0f;
     frame_gravity_ = false;
     body_.Reset(kClipStand);
+    // the drawn body (third person) starts over from the logic's
     draw_sync_ = true;
 }
 
+// 0x977290 camera +0x334 bit 0: +0x350 body space position, +0x340 weight (0x979070)
 void Player::HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value) {
     yaw = target_yaw = yaw_value;
     pitch = target_pitch = ClampPitch(pitch_value);
@@ -156,6 +167,7 @@ void Player::HandCameraBack(const glm::vec3& position, float yaw_value, float pi
     eye_ = position;
 }
 
+// release functor 0x914800 to the camera hand-back
 void Player::FollowCamera(float yaw_value, float pitch_value) {
     yaw = target_yaw = yaw_value;
     pitch = target_pitch = ClampPitch(pitch_value);
@@ -247,6 +259,7 @@ void Player::UpdateLocomotion(const InputState& input) {
     }
 }
 
+// 0x986420 STAND, 0x9874F0 WALK, debounce 0x98726E, rate 0x989A10, once per 29.97 fps frame
 void Player::LocomotionFrame(const PlayerFrameContext& context) {
     const float m = stick_magnitude_;
     if (LeftStickLocked()) {
@@ -291,7 +304,11 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     }
     peephole_look_active_ = context.peephole_theater;
     const uint32_t lock_b = locks.Mask('B');
+    // VR: the head is the look. The view turns with it at once (no stick response, no easing) and the light's ray has no lead
+    // (the head aims it); the peephole keeps its stick look and its limits, a held look (lock B bit 1) stays the game's
     if (input.vr_look && !(lock_b & 2) && !context.peephole_theater) {
+        // a turn something else gave the player since the last look (a route's facing, a demo's hand-back, a warp) is kept on top
+        // of the head's yaw until the VR view takes it over (TakeVrTurn)
         if (vr_looked_) {
             vr_turn_ = Wrap(vr_turn_ + Wrap(yaw - vr_last_yaw_));
         }
@@ -314,6 +331,8 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     }
     const uint32_t light_held = HeldButtons();
     if (input.from_gamepad) {
+        // the d-pad's look bits move only the light (0x1282C50); on the keyboard the same bits turn the view (below), and the light
+        // takes that turn's stick instead
         light.y += ((light_held & kPadLookDown) ? 0.25f : 0.0f) - ((light_held & kPadLookUp) ? 0.25f : 0.0f);
         light.x += ((light_held & kPadLookRight) ? 0.25f : 0.0f) - ((light_held & kPadLookLeft) ? 0.25f : 0.0f);
     }
@@ -324,6 +343,8 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     const float k = std::pow(std::clamp(std::sqrt(x * x + y * y), 0.0f, 1.0f), kLookExponent);
     x *= k * sx;
     y *= k * sy;
+    // Keep the original per-axis dead zone, nonlinear stick curve and turn acceleration intact; this multiplier changes only
+    // the angle advanced after the original response, while the flashlight continues to use the original hand/stick input above.
     const float gamepad_sensitivity = std::clamp(input.gamepad_sensitivity, 0.25f, 4.0f);
     const float focal = params.focal_length * zoom;
     const float scale = focal > 0.0f ? kLookFocal / focal : 1.0f;
@@ -360,6 +381,11 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
         yaw -= mouse.x;
         pitch = ClampPitch(pitch - mouse.y);
     }
+    // The light's ray leads the view by the right stick's deflection (0.75 s.x, 0.5625 s.y), so on the pad the light swings ahead
+    // into a turn, as a hand does. Mouse and keyboard look (a PC addition) turn the view without a stick: they give the light the
+    // deflection that turns the view at the same rate on the pad, |v|^2 v = rate / rotVelMax (the look's response above), from
+    // their rate over the last four ticks (a mouse read once per drawn frame leaves ticks without a move below 60 fps), so the same
+    // camera motion leads the light alike with either device, and the lead ends with the turn as the stick's does
     if (dt > 0.0f) {
         pc_turns_[pc_turn_next_] = glm::vec4(Wrap(pc_yaw_from - target_yaw), target_pitch - pc_pitch_from, dt, 0.0f);
         pc_turn_next_ = (pc_turn_next_ + 1) % pc_turns_.size();
@@ -371,8 +397,10 @@ void Player::UpdateLook(float dt, const InputState& input, const PlayerFrameCont
     if (pc_sum.z > 0.0f) {
         const glm::vec2 rate = glm::vec2(pc_sum) / pc_sum.z;
         const glm::vec2 max(glm::radians(params.rot_vel_max_y) * scale, glm::radians(params.rot_vel_max_x) * scale);
+        // x to the right, y down, in units of the pad's full turn rate
         const glm::vec2 u(rate.x / std::max(max.x, 1.0e-4f), -rate.y / std::max(max.y, 1.0e-4f));
         const float m = glm::length(u);
+        // below the pad's dead zone (0.094 of the stick, 0.083 % of the rate) the pad would not turn the view
         if (m > 0.00083f) {
             light += u * (std::min(std::cbrt(m), 1.0f) / m);
         }
@@ -398,6 +426,7 @@ void Player::ClampPeepholeLook(float& yaw_value, float& pitch_value) const {
     if (!peephole_look_active_) {
         return;
     }
+    // Native camera mode 1's four angular limits (0x1C97FF0) are +/-15 degrees.
     constexpr float limit = 0.2617994f;
     const float offset = Wrap(yaw_value - peephole_yaw_);
     if (std::abs(offset) > limit) {
@@ -452,6 +481,7 @@ void Player::UpdateZoom(float dt, const PlayerFrameContext& context) {
     zoom_target_ = 1.35f;
 }
 
+// RIG_ROOT path length along the heading while steered, else the displacement turned by the body yaw
 void Player::UpdateBody(float dt, const CollisionWorld& world) {
     const float follow = 1.0f - std::pow(1.0f - 1.0f / kBodyTurnDivisor, dt * 299.7003f * 0.2f);
     body_yaw_ = Wrap(body_yaw_ + Wrap(body_yaw_target_ - body_yaw_) * follow);
@@ -460,6 +490,10 @@ void Player::UpdateBody(float dt, const CollisionWorld& world) {
     if (motion_.steered) {
         offset = glm::vec3(std::sin(motion_.heading), 0.0f, std::cos(motion_.heading)) * advance.distance;
     }
+    // 0xB001E0 runs once per 29.97 fps frame with the frame's displacement (gameplay.md 10.3). Two moves of half the
+    // displacement per frame narrow and widen the cast radius (0xAFEB60) and depenetrate twice as often: off the centre
+    // line of the f010 stair gap they shoved the player up to 31 cm in a frame where the PS4 and one move a frame give 7
+    // (docs/coverage.md, movement snaps). PT_CONTROLLER_TICK=1 moves every tick as before.
     static const bool per_tick = [] {
         const char* v = std::getenv("PT_CONTROLLER_TICK");
         return v && v[0] == '1';
@@ -475,6 +509,7 @@ void Player::UpdateBody(float dt, const CollisionWorld& world) {
             const glm::vec3 before = controller.BodyPosition();
             controller.Move(world, frame_offset_, frame_dt_, frame_gravity_ ? kOriginalFrame : 0.0f);
             const glm::vec3 step = controller.BodyPosition() - before;
+            // the drawing shows half of the frame's step now and the rest on the next tick; a warp is not drawn as a step
             drawn_offset_ = glm::dot(step, step) < 0.25f ? -0.5f * step : glm::vec3(0.0f);
             frame_offset_ = glm::vec3(0.0f);
             frame_dt_ = 0.0f;
@@ -484,6 +519,7 @@ void Player::UpdateBody(float dt, const CollisionWorld& world) {
         }
     }
     frame_start_ = false;
+    // 0x1279AF0: every foot contact sounds, also against a wall; it counts while the stick is pushed
     if (stick_magnitude_ > 0.0f && !LeftStickLocked()) {
         foot_steps += advance.footsteps;
     }
@@ -505,6 +541,7 @@ void Player::UpdateEye(float dt) {
     eye_ = eye;
 }
 
+// two 60 Hz ticks = one 29.97 fps frame
 void Player::Update(float tick_dt, const InputState& input, const CollisionWorld& world, const PlayerFrameContext& context) {
     const float dt = tick_dt * kTickToOriginal;
     held_ = input.held;
@@ -527,6 +564,7 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
         frame_start_ = true;
         LocomotionFrame(context);
     }
+    // Digital movement follows mouse turns on each tick; clip selection retains its authored cadence.
     if (!input.left_stick_from_pad) {
         motion_.heading = stick_heading_;
     }
@@ -540,11 +578,22 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
     }
 }
 
+// The third person view's drawn body (SetDrawPose). Runs once per tick after the logic's body, from its clip changes:
+// - a clip the logic starts is started here too, at the same frame and rate, so walking, strafing and starting look as the
+//   logic plays them;
+// - the logic plays a stop clip for one frame and goes to the stand idle (10.3); here the stop clip plays to its end at rate 1
+//   (40 motion frames, 0.67 s) and the body walks out its 0.2 m of travel (RIG_ROOT, as the logic moves by it), so the feet stay
+//   where they land instead of sliding into the stand pose. The drawn body then stands up to 0.2 m ahead of the logic's
+//   (draw_offset_, kept off walls by the movement hull) and gives it back while the player walks again (kOffsetReturn);
+// - standing, the body yaw follows the view (10.3) and the stand idle has no turn: each foot stays where it was put down while
+//   the body turns or moves over it (PlayerBody::FootPlant) and steps in an arc of kStepLift once it is turned kStepAngle or
+//   kStepDistance away from where the clip has it (below). The original has no turn in place for this view: the archive's 14
+//   motions are the walk loops, the starts, the stops, the stand idle and the light arm pose.
 void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
-    constexpr float kStepAngle = 0.4363323f;
+    constexpr float kStepAngle = 0.4363323f;   // 25 degrees
     constexpr float kFastStepAngle = 0.7853982f;
-    constexpr float kMaxTwist = 1.3089969f;
-    constexpr float kSettleAngle = 0.1047198f;
+    constexpr float kMaxTwist = 1.3089969f;    // 75 degrees: a faster turn drags the foot
+    constexpr float kSettleAngle = 0.1047198f; // 6 degrees
     constexpr float kSettleDistance = 0.04f;
     constexpr float kSettleSeconds = 0.35f;
     constexpr float kStepDistance = 0.12f;
@@ -554,8 +603,10 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     constexpr float kFollowSeconds = 0.2f;
     constexpr float kReleaseSeconds = 0.15f;
     constexpr float kStepLift = 0.07f;
+    // the clip's foot target (the ankle) is on the floor below this height in model space (0.10 to 0.12 standing and walking,
+    // 0.15 to 0.25 in a step)
     constexpr float kPlantHeight = 0.135f;
-    constexpr float kOffsetReturn = 0.3f;
+    constexpr float kOffsetReturn = 0.3f;      // metres per second while walking
     constexpr float kBodyRadius = 0.3f;
     if (draw_sync_) {
         drawn_body_ = body_;
@@ -593,6 +644,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     glm::vec3 offset = draw_offset_;
     if (draw_stopping_) {
         const BodyClip& stop = PlayerLocomotionData().stops[static_cast<size_t>(stop_clip_)];
+        // the logic moved by the frame it played of the clip itself
         if (kind != PlayerBody::Kind::Stop) {
             const glm::vec2 step = stop.RootAt(drawn_body_.Frame()) - stop.RootAt(before);
             offset += RotateYaw(body_yaw_, glm::vec3(step.x, 0.0f, step.y));
@@ -606,6 +658,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         const float back = kOffsetReturn * std::max(dt, 0.0f);
         offset = length > back ? offset * ((length - back) / length) : glm::vec3(0.0f);
     }
+    // never into a wall the logic's body keeps its radius from
     if (const float length = glm::length(offset); length > 1.0e-4f) {
         const glm::vec3 direction = offset / length;
         RayHit hit;
@@ -616,6 +669,11 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     }
     draw_offset_ = offset;
 
+    // the feet. While the player stands or the drawn body stops, a foot the clip puts on the floor stays where it was put down
+    // (its world position, the yaw of the body then) while the body moves or turns over it, and steps to the clip's place when
+    // the clip lifts it, when it is kStepDistance (a stop's step: kStopStepDistance) or kStepAngle away from it, or when the
+    // body has stood still for kSettleSeconds with the foot a little off; one foot steps at a time, the one further off first.
+    // While the player walks the clip has the feet
     PlayerBody::FootPlant plant;
     glm::vec3 clip_model[2];
     const bool have_feet = drawn_body_.FootTargets(clip_model);
@@ -631,6 +689,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         const glm::vec3 clip_world = have_feet ? glm::vec3(pose * glm::vec4(clip_model[side], 1.0f)) : glm::vec3(0.0f);
         const bool down = clip_model[side].y < kPlantHeight;
         if (!planting) {
+            // a foot still held when the walk starts goes to the clip's in a moment
             if (foot.state == Foot::Locked && have_feet) {
                 foot.state = Foot::Stepping;
                 foot.from = foot.floor;
@@ -658,6 +717,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             }
         }
     }
+    // the foot further off steps, if the other is not stepping; a foot the clip lifts always goes
     const int worse = off[0] >= off[1] ? 0 : 1;
     for (int pick : {worse, 1 - worse}) {
         FootState& foot = feet_[pick];
@@ -681,6 +741,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         const glm::vec3 clip_world(pose * glm::vec4(clip_model[side], 1.0f));
         if (foot.state == Foot::Locked) {
             float twist = Wrap(foot.yaw - body_yaw_);
+            // a turn faster than the steps drags the foot
             if (std::abs(twist) > kMaxTwist) {
                 foot.yaw = body_yaw_ + std::copysign(kMaxTwist, twist);
                 twist = std::copysign(kMaxTwist, twist);
@@ -715,16 +776,19 @@ std::string Player::DescribeDrawPose() const {
 }
 
 void Player::EndFrame() {
+    // the swap at the start of the next frame: this tick follows the one whose frame published
     if (published_swap_) {
         published_read_ = published_write_;
         published_swap_ = false;
     }
+    // published once per original frame, after the frame's trap update (Game::Update runs the traps when FrameEnds())
     if (FrameEnds()) {
         published_write_ = {controller.position, body_yaw_, standing_, pitch};
         published_swap_ = true;
     }
 }
 
+// a placement (spawn, warp) is seen by the readers at once, both buffers hold it
 void Player::PublishNow() {
     published_read_ = published_write_ = {controller.position, body_yaw_, standing_, pitch};
     published_swap_ = false;
@@ -738,6 +802,11 @@ Camera Player::MakeCamera() const {
     camera.roll = roll_;
     const float focal = params.focal_length * zoom;
     camera.fov_y = 2.0f * std::atan(kFilmHeightMm * 0.5f / focal);
+    // The original's near clip grows with the zoom: 0.05 m at 1.0, 0.0815 at the zoom held (1.35: start_room 1145,
+    // floor_f030 3085, explore_start_rb 2590, lisa_hallway_f040 2005, lisa_balcony_f070 3880 and 4070) and 0.14 at the armed
+    // zoom (2.0: the peephole theater, floor_f110, mirror_f110 and baby_talk_f110 5880 and 6330), all on the line
+    // 0.05 + 0.09 (zoom - 1). In the theater the camera stands 2.7 cm behind the bathroom's hole-side wall, inside its bricks;
+    // with 0.05 the bricks around it showed as a pale, broken shape across the view when the look left the hole's axis.
     camera.near_plane = 0.05f + 0.09f * std::max(zoom - 1.0f, 0.0f);
     return camera;
 }

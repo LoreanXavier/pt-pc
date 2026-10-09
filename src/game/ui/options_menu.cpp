@@ -42,6 +42,8 @@ constexpr uint16_t kContent = 39;
 constexpr uint16_t kHorizontalRow = 94;
 constexpr uint16_t kSquareIcon = 104;
 constexpr uint16_t kSquareGlow = 106;
+// the button pictures of the rows and their glows: brightness (D-pad left and right), subtitles (D-pad up and down), vertical
+// (triangle), horizontal (square), Back (OPTIONS)
 constexpr uint16_t kBrightnessIcon = 44;
 constexpr uint16_t kBrightnessGlow = 46;
 constexpr uint16_t kSubtitleIcon = 141;
@@ -68,9 +70,9 @@ constexpr int kFirstSubtitleSelector = 4;
 constexpr int kLastSubtitleSelector = kFirstSubtitleSelector + UiAssets::kLanguageCount;
 constexpr const char* kLanguageKeys[] = {"op_sub_none", "op_sub_english", "op_sub_french", "op_sub_german",
     "op_sub_spanish", "op_sub_japanese", "op_sub_itlian", "op_sub_portuguese", "op_sub_turkish",
-    "op_sub_chinese", "op_sub_arabic", "op_sub_russian", "op_sub_ukrainian", "op_sub_czech"};
+    "op_sub_chinese", "op_sub_arabic", "op_sub_russian", "op_sub_ukrainian", "op_sub_czech", "op_sub_polish"};
 constexpr std::string_view kNativeLanguageNames[] = {"", "English", "Français", "Deutsch", "Español",
-    "日本語", "Italiano", "Português", "Türkçe", "Chinese (Simplified)", "Arabic", "Russian", "Ukrainian", "Czech"};
+    "日本語", "Italiano", "Português", "Türkçe", "Chinese (Simplified)", "Arabic", "Russian", "Ukrainian", "Czech", "Polish"};
 static_assert(std::size(kLanguageKeys) == UiAssets::kLanguageCount + 1);
 static_assert(std::size(kNativeLanguageNames) == std::size(kLanguageKeys));
 
@@ -124,11 +126,14 @@ bool OptionsMenu::Init(UiAssets& assets) {
     quit.translate.x = -22.0f;
     quit.translate.y = -27.0f;
     quit_label_ = derived_->AddNode(std::move(quit), StrCode64("option_quit"));
+    // the street walk's "Return to the house", over the quit line (a PC extra: hidden outside the walk)
     ui::UifNode street = *derived_->FindById(kBack);
     street.parent = derived_->IndexOfId(kContent);
     street.translate.x = -22.0f;
     street.translate.y = kStreetReturnY;
     street_label_ = derived_->AddNode(std::move(street), StrCode64("option_street_return"));
+    // their button pictures: copies of Back's (the OPTIONS picture's node, 2 units left of its text), which ApplyPrompts fills
+    // with the device's picture of R1 / L1 or the bound key as it does for every row
     auto prompt_node = [&](uint16_t id, float y, std::string_view name) {
         ui::UifNode node = *derived_->FindById(id);
         const ui::UifNode& back_text = *derived_->FindById(kBack);
@@ -296,6 +301,9 @@ void OptionsMenu::ApplyPages() {
     ApplyPrompts();
 }
 
+// The rows' button pictures follow the device used last (the input device's pick): a PlayStation pad keeps the data's pictures, the
+// others get generated ones of the same size (letters on the disc, keycaps with the bound key's name, the arrow keys), right-aligned where
+// the data's picture ends so a wider keycap grows away from its label. The PC page's help line shows the accept button inline.
 void OptionsMenu::ApplyPrompts() {
     for (const PromptNodes& nodes : prompt_nodes_) {
         const PromptGlyph glyph = assets_->PromptPicture(nodes.prompt, prompt_style_);
@@ -436,6 +444,7 @@ void OptionsMenu::ApplyTexts() {
     };
     set(kTitle, "op_options");
     set(kBack, "op_back");
+    // the quit and street lines are labelled as Back is: the button picture (ApplyPrompts) and the text
     view_.State(quit_label_).font_type = UiFontType::PcSystem;
     view_.State(quit_label_).text = std::string(PcText(quit_confirming_ ? "pc_quit_confirm" : "pc_quit", text_language_));
     view_.State(quit_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, quit_focused_ || quit_confirming_ ? 1.0f : .65f);
@@ -518,6 +527,7 @@ void OptionsMenu::CancelPhotoZoom() {
 
 void OptionsMenu::Close() {
     if (state_ == State::SetIn || state_ == State::Active) {
+        // the original's close (state 3) leaves zoom_in playing under the setout; a pending release is dropped, as the next open clears it
         zoom_released_ = false;
         if (page_ == Page::Pc && pc_source_) pc_source_->Closed();
         resume_ = resume_ || !resume_sent_;
@@ -563,6 +573,7 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
     const bool switching = switch_frame_ >= 0.0f;
     if (state_ == State::SetIn && input.close && page_ == Page::Original && !switching) {
         close_pending_ = true;
+        // 0x9208C0: the close press resumes the game at once, also while the setin plays
         resume_ = resume_ || !resume_sent_;
         resume_sent_ = true;
     }
@@ -575,6 +586,7 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
             if(game.ProgressResetPending() || game.LoopReloadPending()) { Commit(game); Close(); }
             if (result == PcSettingsPage::Result::Quit) {
                 Commit(game);
+                // the options changed in this menu are kept, as its close keeps them (the progress as last saved or loaded)
                 game.RequestOptionsSave();
                 LogInfo("ui: quit selected from PC settings");
                 game.RequestQuit();
@@ -595,6 +607,8 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
     ApplyPages();
     view_.ClearAnimation();
     players_.Apply(view_);
+    // The collected fragment is baked into the alternate brain texture, not a separate mesh.
+    // Replace both colour and glow textures; hiding only its noise animation leaves the fragment visible.
     const bool collected = (game.Nazo().PhotoWord() & 0x100) != 0;
     if (auto* left = derived_->FindById(kImageLeft)) {
         left->material.textures = collected ? clean_brain_textures_ : fragment_brain_textures_;
@@ -602,6 +616,8 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
     ApplySubtitleSelection();
 }
 
+// The street walk's "Return to the house" (gameplay.md, street walk): the first press asks, the second closes the menu, and
+// GameUi then ends the walk with the ending's restart (Game::LeaveStreetWalk, step 29) as the original's restart after the credits
 void OptionsMenu::StreetReturn(Game& game) {
     if (!street_confirming_) {
         street_confirming_ = true;
@@ -698,6 +714,9 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
         HoldBrightness();
     }
     if (game.Nazo().IsPhotoOptionPending()) {
+        // 0x1285F80: whether zoom_in plays is read before this frame's press; a press (re)starts zoom_in, otherwise a release sets the
+        // flag +0x1BC, and the flag sends PhotoOption with zoom_out once zoom_in has ended, so a tap shorter than the zoom still counts.
+        // The close button is read after this block and does not cancel it; the flag is cleared only when the menu opens (0x1285630).
         const bool zooming = Playing("UI_sys_opt_zoom_in");
         if (input.zoom_pressed) {
             zoom_started_ = true;
@@ -801,23 +820,32 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
     }
     const bool settled = page_ == Page::Pc && state_ == State::Active && switch_frame_ < 0.0f;
     if (settled && pc_.FullScreen()) {
+        // an Archive picture over the whole screen, in place of the page
         archive_view_.DrawFullScreen(batch, canvas, *assets_, pc_.Panel(), PcText(pc_.FullScreenHint(), text_language_), text_language_);
         return;
     }
     view_.Draw(batch, canvas, text_language_, 1.0f);
     if (page_ == Page::Pc && pc_.Gallery() != PcGallery::None && settled) {
+        // the Museum's halls or a hall's wall (museum_layout.h); the strip takes the screen's width, the previews it shows are
+        // decoded ahead
         pc_.SetWallWidth(static_cast<float>(batch.Extent().width) / std::max(canvas.scale, 0.001f));
         assets_->PreloadPreviews(pc_.PreviewFiles());
         archive_view_.DrawMuseum(batch, canvas, *assets_, pc_, text_language_);
     }
     if (page_ == Page::Pc && pc_.Browser()) {
+        // all the loop previews are decoded on a worker as soon as the page shows (UiAssets::PreloadPreviews), so moving
+        // through the entries shows each at once
         if (pc_.IsLoopBrowser()) assets_->PreloadPreviews(pc_.PreviewFiles());
+        // the loop browser's preview, the Archive's picture or transcript, right of the rows
         const PcPanel panel = pc_.Panel();
         const bool text = !panel.lines.empty();
         archive_view_.DrawPanel(batch, canvas, *assets_, panel, text ? glm::vec2(650.0f, 160.0f) : glm::vec2(650.0f, 170.0f),
                                 text ? glm::vec2(1190.0f, 560.0f) : glm::vec2(1190.0f, 474.0f), text_language_);
     }
+    // the page's credit line: the back text's font style, smaller and muted, right aligned in the bottom right corner, while
+    // the page is shown (not during its switch)
     std::string_view credit = page_ == Page::Pc && state_ == State::Active && switch_frame_ < 0.0f ? pc_.Credit() : std::string_view();
+    // a text key with arguments (the version line) is shown in the menu's language
     std::string credit_text;
     if (credit.starts_with("pc_")) {
         credit_text = PcNoteText(credit, text_language_);

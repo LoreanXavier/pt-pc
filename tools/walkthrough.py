@@ -1091,7 +1091,9 @@ def main():
     parser.add_argument("--vr", action="store_true", help="run in the VR mode against the headless OpenXR test runtime (docs/vr.md)")
     parser.add_argument("--pt-arg", action="append", default=[], metavar="ARG",
                         help="an option passed on to every pt.exe (repeatable; --pt-arg=--third-person plays the routes in the third person view)")
-    parser.add_argument("--jobs", type=int, default=1, help="scenarios run at once")
+    # one pt.exe takes 1 to 3 GB: on 2026-10-06 a run of every scenario at once (about 25 pt.exe with the other workers' runs)
+    # filled the machine's 32 GB and froze it. Run under C:/Projects/pt-port/shared/ptslot.py with --slots equal to --jobs.
+    parser.add_argument("--jobs", type=int, default=1, help="scenarios run at once (default 1; at most the ptslot slots held)")
     args = parser.parse_args()
     names = args.scenarios or [name for name, scenario in SCENARIOS.items()
                                if not scenario.get("optional") and not (args.vr and scenario.get("not_vr"))]

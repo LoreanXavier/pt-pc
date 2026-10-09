@@ -123,16 +123,22 @@ struct Options {
     std::string input_text;
     std::string start_floor;
     uint32_t seed = 0;
+    // --f160-light white|red|green|blue|yellow: the f160 handy light's colour in place of its roll (comparisons with a capture)
     int handy_light_roll = 0;
+    // --bug-screen 0..6: the f120 fake crash's bug screen in place of its pick (comparisons with a capture; formats/ui.md)
     int bug_screen = -1;
     std::vector<std::string> lua_snippets;
     bool no_save = false;
     bool audio_offline = false;
+    // with --display-rate: the offline audio renders in blocks of this many frames whenever the paced clock reaches them, as an
+    // output device takes its periods, instead of one tick's worth per tick
     uint32_t audio_period = 0;
     std::filesystem::path audio_capture;
     std::filesystem::path save_dir;
     float demo_rate = 1.0f;
     float tick_rate = 60.0f;
+    // headless: pace the loop as a window refreshing at this rate (the ticks from the accumulator, the camera and the models
+    // blended between the last two ticks), so the windowed timing can be tested without a window
     float display_rate = 0.0f;
     bool trap_log = false;
     bool first_boot_options = false;
@@ -142,26 +148,44 @@ struct Options {
     bool vsync_set = false;
     bool render_all = false;
     int shot_warmup = 0;
+    // --shot-settle: a shot whose frame does not follow a rendered one settles its exposure before the warm-up (the loop browser's
+    // previews: the frames between two shots are not rendered, so the eye adaptation would start from the last shot's loop)
     bool shot_settle = false;
     std::filesystem::path settings_path;
     std::filesystem::path log_path;
     bool virtual_pads = false;
     bool list_pads = false;
+    // --prompts <device>: the button prompts and the buttons in the game's textures show that device whatever is used (comparisons
+    // with the PS4 captures pass playstation)
     std::optional<pt::PromptStyle> forced_prompts;
+    // --mods <dir>: the mods folder in place of mods/ next to pt.exe (docs/modding.md); --no-mods: none at all
     std::filesystem::path mods_dir;
     bool no_mods = false;
+    // no request to the release manifest (docs/updates.md); headless runs never send one
     bool no_update_check = false;
+    // --fake-update <version>: the check's answer is this version, without a request (tests of the notice, headless too)
     std::string fake_update;
+    // the question at the end of the credits: 0 asks, 1 walks the street, 2 restarts, -1 never asks (--street-offer)
     int street_offer = 0;
+    // the loop browser's release locks (docs/gameplay.md, loop browser): on in the release build (PT_RELEASE_LOCKS, target
+    // pt_release), off in the developer build; --release-locks and --no-release-locks override it
     bool release_locks = kReleaseLocks;
+    // --third-person: the third person view on for this run, whatever pt.ini says (tests of it headless)
     bool third_person = false;
+    // --make-loop-previews <dir>: shoot every loop browser preview into dir (tools/package.py) and quit
     std::filesystem::path make_loop_previews;
+    // --make-museum-previews <dir>: shoot the Museum's thumbnails (every cutscene and model, in the theater) into dir and quit;
+    // --museum-previews <dir>: show the thumbnails of this folder (tests) instead of the user folder's
     std::filesystem::path make_museum_previews;
     std::filesystem::path museum_previews;
+    // --vr: the experimental VR mode for this run whatever pt.ini says (docs/vr.md); --no-vr: never
     bool vr = false;
     bool no_vr = false;
 };
 
+// Every command line option pt.exe takes, with how many values follow it (-1: one optional value, a path not starting
+// with "--"). ParseOptions refuses anything else: an unknown option used to be ignored, so "pt.exe --help" or a typo
+// started the game in a window (tools/run_guard_check.py).
 struct OptionSpec {
     const char* name;
     int values;
@@ -235,6 +259,7 @@ void PrintOptions(FILE* out) {
     for (const OptionSpec& spec : kOptionSpecs) std::fprintf(out, "  %-22s %s\n", spec.name, spec.help);
 }
 
+// The values an option takes, or -2 when it is not an option pt.exe knows
 int OptionValues(std::string_view arg) {
     for (const OptionSpec& spec : kOptionSpecs)
         if (arg == spec.name) return spec.values;
@@ -267,6 +292,7 @@ Options ParseOptions(int argc, char** argv) {
         }
         const bool has_value = i + 1 < argc;
         if (arg == "--anim-test") {
+            // its optional folder is read by RunAnimTestIfRequested
             if (has_value && !std::string_view(argv[i + 1]).starts_with("--")) ++i;
             options.anim_test = true;
         } else if (arg == "--anim-only") {
@@ -294,6 +320,7 @@ Options ParseOptions(int argc, char** argv) {
         } else if (arg == "--fox2-test" && has_value) {
             options.fox2_test = argv[++i];
         } else if (arg == "--voice-test" || arg == "--voice-listen") {
+            // a missing or empty value (a script's file pattern that matched nothing) must not fall through to starting the game
             if (!has_value || !*argv[i + 1]) {
                 std::fprintf(stderr, "%s needs a value\n", arg.c_str());
                 std::exit(2);
@@ -335,6 +362,7 @@ Options ParseOptions(int argc, char** argv) {
             options.seed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (arg == "--f160-light" && has_value) {
             const std::string colour = argv[++i];
+            // the roll's ranges in FloorEnvironment (0x922C60): 1-5 red, 6-10 green, 11-15 blue, 16-20 yellow, 21-100 white
             options.handy_light_roll = colour == "red"      ? 1
                                        : colour == "green"  ? 6
                                        : colour == "blue"   ? 11
@@ -421,6 +449,8 @@ Options ParseOptions(int argc, char** argv) {
             options.size_set = true;
         }
     }
+    // PT_SHOT_WARMUP stands in for --shot-warmup where a tool builds the command line (compare_ref shots of the ray traced
+    // ambient occlusion, whose result builds up over frames)
     if (const char* warmup = std::getenv("PT_SHOT_WARMUP"); warmup && options.shot_warmup == 0) {
         options.shot_warmup = std::max(0, std::atoi(warmup));
     }
@@ -479,6 +509,8 @@ int RunFox2Test(pt::Vfs& vfs, const std::string& package_path) {
     return 0;
 }
 
+// --voice-test <wav | folder of wavs | .txt list>: each file through the recognizer as the microphone would feed it;
+// one "voice test: file" line per file with its detections and transcripts (tools/voice_check.py reads them)
 int RunVoiceTest(const std::filesystem::path& input) {
     if (!SDL_Init(SDL_INIT_AUDIO)) {
         return 1;
@@ -570,13 +602,20 @@ void WriteWav(const std::filesystem::path& path, const std::vector<float>& sampl
 struct App {
     Options options;
     pt::AppSettings settings;
+    // a newer release, looked for once at start on its own thread (docs/updates.md)
     pt::update::Checker updates;
+    // the game loop's poll of it: the notice was shown or there is none (docs/updates.md)
     bool update_polled = false;
     std::filesystem::path settings_path;
+    // the marker of a start that loaded Streamline (StartStreamline), removed after its first 600 frames and at exit
     std::filesystem::path streamline_marker;
     SDL_Window* window = nullptr;
     bool microphone_test = false;
+    // the Extras page's free camera and photo mode rows: the main loop takes the request once the menu has closed (1 free
+    // camera, 2 photo mode) and reports what is running
     int extras_request = 0;
+    // the Archive (Extras, src/game/archive.h): an entry the menu opened in the theater (archive_theater.h), which the main loop
+    // takes, and the subtitle tables its transcripts are read from (the game UI's)
     std::string archive_request;
     pt::game::SubtitlePlayer* transcripts = nullptr;
     bool freecam_active = false;
@@ -592,15 +631,22 @@ struct App {
     std::unique_ptr<pt::ModelCache> models;
     pt::EnhancedTextureJob texture_job;
     std::filesystem::path texture_cache;
+    // the enhanced textures' largest generated side: 0 (2x, a 2048 source becomes 4096) with about 10 GB of device-local video
+    // memory or more, else 2048 (see the cache's setup in main)
     uint32_t texture_max_output = 0;
     std::filesystem::path texture_runtime;
     pt::Vfs* vfs = nullptr;
     bool texture_requested = false;
+    // the mods found at start (docs/modding.md); null without a mods folder and with --no-mods
     std::unique_ptr<pt::mods::ModSet> mods;
+    // the experimental VR mode (docs/vr.md): the OpenXR host while VR is on, null without VR
     std::unique_ptr<pt::xr::Host> xr;
+    // the speedrun timer's LiveSplit Server client (pt.ini [extras] livesplit, off by default)
     pt::LiveSplitClient livesplit;
 };
 
+// Mods are read once, before anything loads, and stay as found until the next start (the settings page's switches are saved
+// to pt.ini [mods] for then). Headless runs (tools, comparisons with captures) take mods only from an explicit --mods.
 /* the game itself, for the preview captures it starts in the background */
 std::filesystem::path GameExecutable() {
 #ifdef __APPLE__
@@ -748,7 +794,7 @@ std::filesystem::path UserDataDir() {
 
 std::filesystem::path LegacyUserDataDir() {
 #if defined(__APPLE__)
-    return {};
+    return {};  // no earlier macOS profile exists
 #elif defined(_WIN32)
     PWSTR roaming = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_DONT_VERIFY, nullptr, &roaming))) {
@@ -779,6 +825,8 @@ std::filesystem::path RememberedGameDirFile() {
     return user.empty() ? std::filesystem::path() : user / "game_dir.txt";
 }
 
+// Without --game: game\CUSA01127 under the working folder, next to pt.exe or up to four folders above it, then the folder
+// picked last time; a windowed start asks for the folder when none of them has the game.
 std::filesystem::path FindGameDir(const Options& options) {
     if (options.game_dir_given || LooksLikeGameDir(options.game_dir)) {
         return options.game_dir;
@@ -830,6 +878,7 @@ std::filesystem::path FindGameDir(const Options& options) {
             dialog->Release();
         }
         CoUninitialize();
+        if (!LooksLikeGameDir(picked) && LooksLikeGameDir(picked / "CUSA01127")) picked /= "CUSA01127";
         if (LooksLikeGameDir(picked)) {
             if (!remembered_file.empty()) {
                 std::ofstream out(remembered_file, std::ios::binary | std::ios::trunc);
@@ -839,8 +888,9 @@ std::filesystem::path FindGameDir(const Options& options) {
             return picked;
         }
     }
-#elif defined(__APPLE__)
-    /* macOS has no installer (docs/macos.md): the first start asks for the folder, as on Windows */
+#else
+    /* macOS has no installer (docs/macos.md) and the Linux portable zip none either: the first start asks for the folder, as on
+       Windows (SDL's folder dialog: the desktop portal or zenity on Linux) */
     if (!options.headless && SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         struct Pick {
             std::filesystem::path path;
@@ -877,6 +927,10 @@ std::filesystem::path FindGameDir(const Options& options) {
     return options.game_dir;
 }
 
+
+// --voice-listen <seconds> [--voice-device <name>]: the microphone through the recognizer as the game hears it on f160,
+// with the console telling the player what to say when (tools/voice_mic_session.ps1); every prompt and utterance goes to
+// the console and pt.log, PT_VOICE_DUMP=<folder> keeps each segment as a wav
 int RunVoiceListen(float seconds, const std::string& device) {
     struct Prompt {
         float at;
@@ -972,6 +1026,12 @@ pt::Camera BlendCameras(const pt::Camera& from, const pt::Camera& to, float t, b
     return camera;
 }
 
+// The state before a game tick, for the frames drawn between ticks. The window draws at the display's rate and blends the
+// camera from the camera before the last tick to the one after it (BlendCameras); what is drawn with it takes the same blend,
+// or what the camera follows shakes against it by up to a tick of motion at the display's rate (the ending's walk behind the
+// player, the handy light's beam): the draws (items pair by source, mesh and occurrence, pt::DrawPairKeys, as the renderer's motion history does; the
+// skins are copied, since the game rewrites its own in the next tick), the handy light's look target and the demo lights
+// (TickBlend, for the scene builder) and the effects' transforms (VfxScene::SnapshotWorlds).
 struct TickState {
     std::vector<pt::DrawItem> items;
     std::vector<glm::mat4> skins;
@@ -1009,6 +1069,8 @@ struct TickState {
     }
 };
 
+// Each item that was drawn before the last tick and moved less than 1 m in it takes the transform (pt::BlendTransform) and the
+// skin blended by t, the camera's weight; moving roots and bones mix together in world space
 void BlendDraws(const TickState& from, std::vector<pt::DrawItem>& items, float t, std::vector<glm::mat4>& storage) {
     storage.clear();
     if (from.index.empty() || t >= 1.0f) {
@@ -1052,6 +1114,8 @@ void BlendDraws(const TickState& from, std::vector<pt::DrawItem>& items, float t
     }
 }
 
+// PT_RENDER_TRACE: per drawn frame, the ticks it ran, the blend weight, the camera, each playing demo's frame and the head of
+// every drawn skinned demo model as drawn (from the frame's skin) and as the last tick left it
 void LogRenderTrace(uint64_t frame, int ticks, float t, const pt::Camera& camera, pt::game::Game& game, const std::vector<pt::DrawItem>& items) {
     std::string heads;
     for (const pt::game::PlayingDemo& demo : game.Demos().Playing()) {
@@ -1079,6 +1143,8 @@ void LogRenderTrace(uint64_t frame, int ticks, float t, const pt::Camera& camera
                 glm::degrees(camera.roll), glm::degrees(camera.fov_y), heads);
 }
 
+// PT_RENDER_TRACE, for frames that render: the moving lights within 20 m of the camera as the frame draws them (the handy
+// light, demo lights, effect lights) and the effects whose transform changed in the last tick, at the frame's blend
 void LogLightTrace(uint64_t frame, const pt::Camera& camera, const pt::SceneLighting& lighting, pt::game::VfxScene& vfx, float blend) {
     std::string text;
     for (const pt::SceneLight& l : lighting.lights) {
@@ -1098,6 +1164,10 @@ void LogLightTrace(uint64_t frame, const pt::Camera& camera, const pt::SceneLigh
     pt::LogInfo("render lights {}:{}", frame, text);
 }
 
+// NVIDIA DLSS Frame Generation (upscaling.md): Streamline is loaded only for a start whose pt.ini selects it (in a window), or
+// with PT_STREAMLINE=1 (tests, headless included). A marker file next to pt.ini stands while Streamline starts and through the
+// first rendered frames; a start that finds it (the last one crashed or hung there) leaves Streamline out, turns the option
+// off and shows why. Returns the marker's path while it stands.
 void UpscaleToApp(const pt::UpscaleSettings& u, pt::AppSettings& s);
 
 std::filesystem::path StartStreamline(App& app) {
@@ -1107,6 +1177,7 @@ std::filesystem::path StartStreamline(App& app) {
         return {};
     }
     std::error_code ec;
+    // a forced test start keeps Streamline's log in the working folder, away from the player's data
     std::filesystem::path dir = forced ? std::filesystem::current_path(ec) : app.settings_path.parent_path();
     if (dir.empty()) {
         dir = UserDataDir();
@@ -1154,6 +1225,7 @@ pt::UpscaleSettings UpscaleFromApp(const pt::AppSettings& s) {
     return u;
 }
 
+// ray traced shadows (PC option, rendering.md 12.21): pt.ini [raytracing] shadows; PT_RT_SHADOWS=0|1 overrides it (headless tests)
 pt::RayTracingSettings RayTracingFromApp(const pt::AppSettings& s) {
     int mode = s.ray_tracing.shadows;
     if (const char* env = std::getenv("PT_RT_SHADOWS")) {
@@ -1189,9 +1261,12 @@ void ApplyGraphicsSettings(App& app) {
     app.scene.toggles.motion_blur=g.motion_blur;
     app.scene.toggles.film_grain=g.film_grain>0;
     app.scene.toggles.distortion=g.lens_distortion;
+    // the lens flares' full screen ghosts (graphics.lens_ghosts): on draws them at the strength a shadPS4 sweep of the original
+    // measured at the first corridor's lantern (+41 % peak lift, port scale 0.75); PT_FLARE_GHOSTS overrides it (rendering.md)
     pt::vfx::SetFlareGhostScale(g.lens_ghosts?0.75f:0.0f);
 }
 
+// anisotropic filtering (PC option, rendering.md 12.22): pt.ini [graphics] anisotropy; PT_ANISOTROPY overrides it (tests)
 int AnisotropyFromApp(const pt::AppSettings& s) {
     if (const char* env = std::getenv("PT_ANISOTROPY")) {
         return std::atoi(env);
@@ -1404,6 +1479,8 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
     }
 }
 
+// the Extras page's free camera (F6): the game ticks on with the player's input taken away, so the player stands still; the
+// menu button is the camera's own (it ends it). The prompts' device stays, for the UI's prompts after the camera ends
 pt::InputState FreecamInput(const pt::InputState& input) {
     pt::InputState out;
     out.prompts = input.prompts;
@@ -1411,6 +1488,10 @@ pt::InputState FreecamInput(const pt::InputState& input) {
     return out;
 }
 
+// The photo mode's lens on the frame's lighting: depth of field focused on the manual distance or, on Auto, on what is at the
+// centre of the frame (the player's head or body, else the level's collision; the game's own focus when nothing is near), the
+// manual f-number or the game's own (f/4 when the game's lens has none), the exposure offset, and the flashlight's light (with its
+// mirror image and its bounce lights) left out
 void ApplyPhotoLens(const pt::game::PhotoSettings& photo, const pt::game::Game& game, const pt::Camera& camera, pt::SceneLighting& lighting) {
     lighting.screen.focal_length = photo.focal_length_mm;
     if (photo.depth_of_field) {
@@ -1450,48 +1531,87 @@ void ApplyPhotoLens(const pt::game::PhotoSettings& photo, const pt::game::Game& 
     }
 }
 
+// a photo of the photo mode: %USERPROFILE%\Pictures\PT Photos\pt_YYYYMMDD_HHMMSS.png (HOME elsewhere), the folder made on the way;
+// a second photo in the same second gets a number
+// The loop browser's previews (docs/gameplay.md, loop browser): each entry is picked as the player picks it (Game::BrowseLoop, retried
+// while a reset runs), in the state the pick really starts (the loop's floor and pass, the puzzles before it solved, its light set and
+// flashlight), and shot at the moment its loop is remembered by, framed as a photo mode shot. A hallway loop is entered through the
+// start room's door (sbrowsed) and walked to the place of its moment in the hallway's file space (sanchor); a moment of a demo is
+// waited for by its demo frame (sdframe, at the game's demo rate so the frame is the demo's) and the game is then held by the photo
+// mode (sphoto 2), whose camera frames it (sphotocam in the player's frame, sphotofile at a point of the hallway) with the player's
+// body shown or hidden. The handy light and the lamps light the subject; the photo mode's exposure adds at most 2 EV (sphotoset,
+// half EV steps), and only to the preview (the f120 glitch's demo frame takes no photo mode and no lift). A shot is dropped unless
+// the game is on the loop's floor and pass with no fade (sat, sfade), and the waits have limits (gfile, sdframe, slisa, sbrowsed,
+// sfade), so a moment that does not come drops its picture rather than shooting another. Between shots nothing is rendered: each
+// shot settles its exposure and renders a short warm-up (--shot-settle, --shot-warmup). The capture's random draws are fixed
+// (kLoopPreviewSeed, the f120 bug screen and the f160 light colour), so the pictures are the same on every machine.
 struct LoopPreviewPose {
+    // input script lines (without the frame column) run once the pick has reached its loop
     std::string_view lines;
 };
+// the capture's version, written to version.txt next to the pictures: pictures of another version, such as a stale
+// loop-previews folder left next to a build, are not shown (PcSettings::BundledPreviewDirectory), and the user folder's capture
+// carries it in its name
 constexpr int kLoopPreviewVersion = 5;
 constexpr uint32_t kLoopPreviewSeed = 2014;
-constexpr int kLoopPreviewBugScreen = 1;
-constexpr int kLoopPreviewF160Roll = 1;
+constexpr int kLoopPreviewBugScreen = 1;  // sh_bug_2, "Fix this damn bug (cause = ??) before release!"
+constexpr int kLoopPreviewF160Roll = 1;  // the f160 handy light red (rolls 1 to 5)
 constexpr std::array<LoopPreviewPose, 18> kLoopPreviewPoses{{
+    // the start room after the stand-up: the player before the door with the light under it, from behind
     {"sstep 15|sfree|sfade|sat f000 1|swait 30|sphoto 2|swait 2|sphotoset 50 0 0 0 0 3 1|swait 2|sphotocam -0.5 0.1 -1.6 -0.3 0 3|swait 3"},
+    // loop 1: the radio on the lobby corridor's table, close
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -6.8 -1.4 7.5 600|fent shsb_radi001_0000|swait 30|sphoto 2|swait 2|"
      "sphotoset 40 0 0 0 0 2 0|swait 2|sphotofile -7.9 0.05 7.35 -8.79 -0.35 6.40|swait 3"},
+    // loop 2: the lobby door at the end of the lobby corridor, over the player's shoulder
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -3.5 -1.4 7.5 600|ffile -11 -0.2 7.5|swait 60|sphoto 2|swait 2|"
      "sphotoset 45 0 0 0 0 2 1|swait 2|sphotocam 0.45 0.1 -1.3 -0.25 0 4|swait 3"},
+    // loop 3: the player at the bathroom door the crying comes from
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -3.6 -1.4 7.0 600|ffile -3.6 -0.3 6.0|swait 30|sphoto 2|swait 2|"
      "sphotoset 55 0 0 0 0 2 1|swait 2|sphotofile -1.5 0.1 7.9 -3.6 -0.4 6.2|swait 3"},
+    // loop 4: Lisa in the gap of the bathroom door as it slams (gc_p01_021, the zoom toward its locator; frame 57, before its lights
+    // go out at 63)
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -4.4 -1.4 7.5 600|swait 10|sfree|gfile -10.2 -1.4 7.9 600|swait 10|sfree|"
      "gfile -2.35 -1.4 7.15 600|fdir 6_Locator_trap_check_dir|swait 60|srate 1|szoom 1|sdframe gc_p01_021 57 900|sphoto 2|swait 2|"
      "sphotoset 40 0 0 0 0 2 0|swait 2|sphotocam 0.15 -0.05 -0.5 -0.1 0.75 1.0|swait 3"},
+    // loop 5: Lisa standing at the end of the lobby corridor under its lamp, seen from the corner (she is shown while the player is
+    // in the first leg, so the game is held there)
     {"gfile 0 -1.4 5.4 600|swait 20|sphoto 2|swait 2|sphotoset 30 0 0 0 0 2 0|swait 2|sphotofile -1.0 0.15 7.4 -8.49 -0.3 7.75|swait 3"},
+    // loop 6: the player in the bathroom with the flashlight just picked up (gc_p00_030 frame 260), by the sink and its mirror
     {"gfile 0 -1.4 6.3 600|swait 10|sfree|sdemo gc_p01_110|gfile -1.0 -1.4 7.4 600|gfile -3.2 -1.4 7.4 600|gfile -3.3 -1.4 5.7 600|"
      "srate 1|fent shsb_lght005_0000|sdframe gc_p00_030 260 900|sphoto 2|swait 2|sphotoset 50 0 0 0 0 4 1|swait 2|"
      "sphotocam 0.7 0.0 0.6 -0.1 0 0.3|swait 3"},
+    // loop 7: Lisa three metres behind the player (Chase), the camera turned back over his shoulder, the lobby's lamp behind her
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -8.0 -1.4 7.5 600|gfile -4.5 -1.4 7.5 600|swait 90|slisa 60|sphoto 2|swait 2|"
      "sphotoset 40 0 0 0 0 2 1|swait 2|sphotocam 0.3 0.05 1.5 -0.25 -0.3 -3|swait 3"},
+    // loop 8: the X mark photo with "Gouge it out!" written over it, by the lamp
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -7.9 -1.4 7.5 600|fent shsb_hous001_pc1a_0000|swait 10|sphoto 2|swait 2|"
      "sphotoset 35 0 0 0 0 1 0|swait 2|sphotofile -7.55 0.0 7.05 -7.95 -0.25 6.05|swait 3"},
+    // loop 9: the window frame breaking at the corridor's end, its glass in the air (gc_p04_120 frame 133)
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|srate 1|gfile -4.6 -1.4 7.5 600|sdframe gc_p04_120 133 900|sphoto 2|swait 2|"
      "sphotoset 50 0 0 0 0 3 0|swait 2|sphotofile -6.6 -0.6 7.5 -7.9 -0.6 8.8|swait 3"},
+    // loop 10: the bleeding fridge hanging over the lobby, in the handy light
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|gfile -6.3 -1.4 7.5 600|ffile -8.1 1.6 7.9|swait 60|sphoto 2|swait 2|"
      "sphotoset 40 0 0 0 0 2 0|swait 2|sphotofile -6.6 -0.6 7.4 -8.1 1.6 7.9|swait 3"},
+    // loop 11: "HELLO!" written on the wall at the end of the first leg, in the handy light (the letters face the corner, so the
+    // camera looks back from it; the photo mode holds the game before the look away that would advance the puzzle)
     {"gfile 0 -1.4 6.5 600|gfile 0 -1.4 7.3 600|fent shsb_labl001_hhhh001_0000|swait 60|sphoto 2|swait 2|sphotoset 30 0 0 0 0 2 0|"
      "swait 2|sphotofile 0.45 -0.05 7.5 0.97 -0.1 6.3|swait 3"},
+    // loop 12: the red hallway past the ceiling lamp, from the corner
     {"gfile 0 -1.4 6.5 600|gfile -1.0 -1.4 7.5 600|ffile -8 0.5 7.5|swait 30|sphoto 2|swait 2|sphotoset 50 0 0 0 0 2 0|swait 2|"
      "sphotofile -1.2 -0.6 7.5 -6 1.0 7.5|swait 3"},
+    // loop 13: through maze A into maze B, the player at the peephole
     {"sanchor next|gfile 0 0 1.5 600|gfile 0 0 13.6 600|gfile -9.8 0 13.6 900|gfile -9.8 0 1.3 900|gfile -29.2 0 1.3 900|"
      "gfile -29.2 0 -1.0 600|sanchor nextB|gfile -13.5 0 -30.2 900|gfile -7.1 0 -30.2 900|gfile -7.1 0 -34.5 900|"
      "fent shsb_labl001_holl001_0000|swait 20|sphoto 2|swait 2|sphotoset 50 0 0 0 0 3 1|swait 2|sphotocam -0.9 0.05 0.45 -0.05 0 0.35|"
      "swait 3"},
+    // loop 14: the bug screen's first glitch over the bright corridor (gc_p02_060, started by gc_p02_080 at its frame 1800)
     {"sdframe gc_p02_080 1700 3600|srate 1|sdframe gc_p02_060 5 900"},
+    // loop 15: the final loop's red handy light on the end wall's window, the player against it, from behind
     {"gfile 0 -1.4 6.6 600|ffile -0.2 -0.5 8.3|swait 60|sphoto 2|swait 2|sphotoset 50 0 0 0 0 4 1|swait 2|"
      "sphotocam -0.45 0.2 -1.3 -0.2 0 1.5|swait 3"},
+    // the ending's wide street shot, its demo at the game's rate (its fades run on the game clock)
     {"srate 1|sstep 28|sdframe gc_p06_010_final 5760|sfade 600|srate 20"},
+    // the street walk: the man in the street, from behind
     {"sstep 31|swait 150|sfade 600|sphoto 2|swait 2|sphotoset 50 0 0 0 0 0 1|swait 2|sphotocam 0.0 0.05 -2.2 -0.1 0 4|swait 3"},
 }};
 
@@ -1502,6 +1622,8 @@ std::string LoopPreviewRoute(const std::filesystem::path& dir, const std::vector
         const bool hallway = i > 0 && i < pt::game::kBrowseEnding;
         route += std::format("20 sloop {}\n", i);
         if (hallway) {
+            // the pick respawns the player in the start room on the previous floor; he walks out through its door as a player does
+            // (tests/walkthrough/start.txt), and the door takes him into the loop
             route += "20 sstep 20\n20 sstep 15\n20 swait 5\n20 sfree\n20 goto 0 0 12.5 900\n20 swait 10\n20 sfree\n20 sbrowsed 900\n"
                      "20 sstep 15\n20 swait 5\n20 sfree\n20 sanchor\n";
         } else {
@@ -1514,8 +1636,10 @@ std::string LoopPreviewRoute(const std::filesystem::path& dir, const std::vector
             lines = bar == std::string_view::npos ? std::string_view() : lines.substr(bar + 1);
         }
         if (hallway) {
+            // no sfree here: a demo's moment is held by the photo mode while the demo still has the player
             route += std::format("20 sfade 120\n20 sat {} {}\n", loop.floor, loop.pass);
         }
+        // the photo mode, the zoom and the demo rate are put back before the next pick
         route += std::format("20 sshot {}\n20 swait 2\n20 sphoto 0\n20 szoom 0\n20 srate 20\n20 swait 2\n20 scamera off\n",
                              (dir / std::format("loop-{}.png", i)).generic_string());
     }
@@ -1523,6 +1647,7 @@ std::string LoopPreviewRoute(const std::filesystem::path& dir, const std::vector
     return route;
 }
 
+// --make-loop-previews <dir>: this run is the capture (tools/package.py ships the pictures next to pt.exe)
 void SetUpLoopPreviewRun(Options& options) {
     const std::filesystem::path dir = std::filesystem::absolute(options.make_loop_previews);
     std::error_code ec;
@@ -1551,7 +1676,15 @@ void SetUpLoopPreviewRun(Options& options) {
     if (options.log_path.empty()) options.log_path = dir / "capture.log";
 }
 
+// The Museum's thumbnails (docs/gameplay.md 14.7): every cutscene and model opened in the theater as its row opens it, shot once
+// its picture is on screen and the entry's frames have passed (ArchiveThumbnailFrames), at 480 x 270, named by the entry; the
+// subliminal images and photo pieces need none (the wall draws them from the data). The capture is a run of pt.exe of its own
+// (--make-museum-previews, started by the Museum's page when its pictures are missing) and nothing of it is shipped
 constexpr int kMuseumPreviewVersion = 2;
+// the capture's held exposure for a model (ArchiveTheater::Settings::model_ev): the viewer's own -5.5 EV renders the start
+// room's models near black at thumbnail size (a radio or phone at a mean of 1 of 255, even lifted six times on the wall);
+// +0.5 EV is 3.6 stops brighter under the exposure rows' compensation (ExposureFor), where the radio, the phone and the
+// models read as the cutscene shots do. Capture only: the viewer in the game keeps the room's exposure
 constexpr float kMuseumPreviewModelEv = 0.5f;
 
 std::string MuseumPreviewRoute(const std::filesystem::path& dir, const std::vector<const pt::game::ArchiveEntry*>& entries) {
@@ -1564,6 +1697,7 @@ std::string MuseumPreviewRoute(const std::filesystem::path& dir, const std::vect
     return route;
 }
 
+// the entries the capture shoots: those the theater shows
 std::vector<const pt::game::ArchiveEntry*> MuseumPreviewEntries() {
     std::vector<const pt::game::ArchiveEntry*> out;
     for (const pt::game::ArchiveEntry& e : pt::game::ArchiveEntries()) {
@@ -1627,6 +1761,8 @@ std::filesystem::path PhotoPath() {
     return path;
 }
 
+// "Version X is available (this is Y)" as a PC text key with both versions as its arguments (PcNoteText translates it): the PC
+// settings page's corner line and the in-game notice (GameUi::ShowUpdateNotice)
 std::string UpdateNoticeKey(std::string_view version) {
     return std::format("pc_update_available{}{}{}{}", pt::game::kPcNoteArgument, version, pt::game::kPcNoteArgument, pt::update::CurrentVersion());
 }
@@ -1635,6 +1771,7 @@ class PcSettings final : public pt::game::PcSettingsSource {
 public:
     PcSettings(App& app, pt::game::Game& game, pt::InputDevice& input) : app_(app), game_(game), input_(input) {}
     ~PcSettings() override {
+        // the handle only: the preview generator keeps running and finishes its pictures
         if (preview_process_) SDL_DestroyProcess(preview_process_);
         if (museum_process_) SDL_DestroyProcess(museum_process_);
     }
@@ -1665,6 +1802,7 @@ public:
         }
         if (page_ == kStreetPage && game_.SpeedrunResultsPending()) return SpeedrunResults();
         if (page_ == kStreetPage) {
+            // the end of the credits (Game::OfferStreetWalk)
             pt::game::PcSettingSection street{"pc_street_question", 0, {}};
             auto walk = Row(kStreetWalk, "pc_street_walk", {""}, 0, "pc_note_street_walk");
             walk.link = true;
@@ -1697,15 +1835,18 @@ public:
             photo.link = true;
             photo.enabled = app_.window != nullptr && !app_.xr;
             extras.rows.push_back(std::move(photo));
+            // not in the original (pt.ini [camera] third_person, Game::SetThirdPerson)
             extras.rows.push_back(Row(kThirdPerson, "pc_third_person", OffOn(), game_.ThirdPerson() ? 1 : 0, "pc_note_third_person"));
             extras.rows.push_back(Row(kSpeedrun, "pc_speedrun", {"pc_off", "pc_speedrun_real_time", "pc_speedrun_game_time"},
                                       std::clamp(app_.settings.extras.speedrun, 0, 2), "pc_note_speedrun"));
             extras.rows.push_back(Row(kLiveSplit, "pc_livesplit", OffOn(), app_.settings.extras.livesplit ? 1 : 0,
                                       std::format("pc_note_livesplit{}{}", pt::game::kPcNoteArgument, app_.settings.extras.livesplit_port)));
+            // the experimental VR mode (docs/vr.md): its own page
             auto vr = Row(kVr, "pc_vr", {"pc_graphics_value"}, 0, "pc_note_vr");
             vr.link = true;
             extras.rows.push_back(std::move(vr));
             if (app_.options.release_locks) {
+                // the unlocks outlive Reset Progress (pt.ini [progress]); this row is the way to clear them
                 auto lock = Row(kLoopLock, "pc_loop_lock", {"pc_extras_start"}, 0, "pc_note_loop_lock");
                 lock.action = true;
                 lock.enabled = game_.GameFinished() || game_.BrowseReached() != 0;
@@ -1714,6 +1855,7 @@ public:
             return {std::move(extras)};
         }
         if (page_ == kVrPage) {
+            // pt.ini [vr]: the mode applies at the next start, the flashlight and the turning at once
             const pt::AppSettings::Vr& v = app_.settings.vr;
             pt::game::PcSettingSection vr{"pc_vr", 0, {}};
             vr.rows.push_back(Row(kVrMode, "pc_vr_mode", OffOn(), v.enabled ? 1 : 0, "pc_note_vr_mode"));
@@ -1792,6 +1934,9 @@ public:
         quality.enabled = !off;
         upscaling.rows.push_back(std::move(quality));
         const int sharpness_step = std::clamp(static_cast<int>(std::lround(u.sharpness * 10.0f)), 0, 10);
+        // the sharpening pass is FSR's own (RCAS, fsr_backend.cpp); DLSS and XeSS get no sharpness from the port, so the row
+        // only takes values with FSR (with the others it changed pt.ini and nothing on screen). With DLSS the row's place
+        // holds the DLSS model (the left column has no room for another row)
         const bool fsr = u.kind == pt::UpscalerKind::Fsr || u.kind == pt::UpscalerKind::Fsr4;
         if (u.kind == pt::UpscalerKind::Dlss) {
             pt::game::PcSettingRow model = Row(kDlssModel, "pc_dlss_model", {"pc_dlss_model_auto", "K", "L", "M"},
@@ -1804,6 +1949,7 @@ public:
             sharpness.wrap = false;
             upscaling.rows.push_back(std::move(sharpness));
         }
+        // Off, AMD FSR 3 and NVIDIA DLSS Frame Generation; one this machine cannot run shows greyed with its reason
         pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS"},
                                                       static_cast<int>(u.frame_generation), "pc_note_frame_generation");
         std::string fg_reason;
@@ -1812,10 +1958,12 @@ public:
         if (!fg) {
             fsr_note = "pc_note_frame_generation_missing";
         } else if (!fg->Available(fg_reason)) {
+            // the GPU reason has its own text key, as DLSS Frame Generation's has (pc_note_dlssg_gpu); the others stay English
             fsr_note = fg_reason.starts_with("needs an AMD Radeon RX 5000") ? "pc_note_fsr_fg_gpu" : Sentence(fg_reason);
         }
         const pt::DlssFrameGenSupport& dlss_fg = pt::UpscaleHost::Get().DlssFrameGen();
         const std::string dlss_note = dlss_fg.hardware && dlss_fg.built ? std::string() : dlss_fg.note;
+        // FSR 3's interpolation swapchain and Streamline's cannot share a start: with Streamline loaded FSR 3 waits for a restart
         if (pt::streamline::Active() && fsr_note.empty()) {
             fsr_note = "pc_note_fsr_fg_restart";
         }
@@ -1830,9 +1978,12 @@ public:
         }
         upscaling.rows.push_back(std::move(frame_generation));
         out.push_back(std::move(upscaling));
+        // the last row of the left column (a section of its own would reach the help line): the graphics page
         pt::game::PcSettingRow graphics = Row(kGraphics, "pc_graphics", {"pc_graphics_value"}, 0, "pc_note_graphics");
         graphics.link = true;
         out.back().rows.push_back(std::move(graphics));
+        // under it the mods page, only with a mod installed (without one the page is as it was); the right column has no
+        // room above the help line
         if (app_.mods && !app_.mods->mods.empty()) {
             auto mods = Row(kMods, "pc_mods", {"pc_graphics_value"}, 0, "pc_note_mods");
             mods.link = true;
@@ -1856,6 +2007,8 @@ public:
         for (int i = 0; i <= 20; ++i) controller_speaker_volume.values.push_back(std::format("{}%", i * 5));
         controller_speaker_volume.wrap = false;
         sound.rows.push_back(std::move(controller_speaker_volume));
+        // voice recognition is always on, as the original's (gameplay.md 7: the true end has no path without the word); it
+        // listens only on f160
         pt::game::PcSettingRow microphone = Row(kMicrophone, "pc_microphone", {"pc_system_default"}, 0, "pc_note_voice");
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -1871,10 +2024,23 @@ public:
         }
         std::string trigger_label(pt::game::PcText("pc_microphone_trigger_assign",Language()));
         if(const size_t at=trigger_label.find("{input}"); at!=std::string::npos) trigger_label.replace(at,7,trigger_input);
-        sound.rows.push_back(Row(kMicrophoneTrigger,trigger_label,OffOn(),s.voice.key.empty()?0:1,"pc_note_microphone_trigger"));
+        auto trigger = Row(kMicrophoneTrigger, trigger_label, OffOn(), s.voice.key.empty() ? 0 : 1, "pc_note_microphone_trigger");
+        trigger.label_lines = 2;
+        sound.rows.push_back(std::move(trigger));
         auto microphone_test = Row(kMicrophoneTest, "pc_microphone_test", {"pc_graphics_value"}, 0, "pc_note_microphone_test");
         microphone_test.link = true;
         sound.rows.push_back(std::move(microphone_test));
+        if (page_ == kSoundPage) {
+            pt::game::PcSettingSection voice{"pc_microphone", 1, {}};
+            voice.rows.assign(std::make_move_iterator(sound.rows.begin() + 4), std::make_move_iterator(sound.rows.end()));
+            sound.rows.resize(4);
+            sound.column = 0;
+            return {std::move(sound), std::move(voice)};
+        }
+        sound.rows.resize(1);
+        auto sound_settings = Row(kSoundSettings, "pc_section_sound", {"pc_graphics_value"}, 0, "pc_note_voice");
+        sound_settings.link = true;
+        sound.rows.push_back(std::move(sound_settings));
         out.push_back(std::move(sound));
 
         pt::game::PcSettingSection controls{"pc_section_controls", 1, {}};
@@ -1936,14 +2102,17 @@ public:
                 for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
             }
         }
-        page_ = kVrPage;
-        for (const auto& section : Sections()) for (const auto& row : section.rows) {
-            if (!row.note.empty()) notes.push_back(row.note);
-            for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
+        for (const int page : {kVrPage, kSoundPage}) {
+            page_ = page;
+            for (const auto& section : Sections()) for (const auto& row : section.rows) {
+                if (!row.note.empty()) notes.push_back(row.note);
+                for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
+            }
         }
         page_ = previous;
         archive_section_ = previous_section;
         for (const char* note : {"pc_note_archive_playing", "pc_note_archive_locked", "pc_note_archive_lock"}) notes.push_back(note);
+        // the upscaling notes that depend on the upscaler, the GPU or the frame generation state
         for (const char* note : {"pc_note_fsr4_vulkan", "pc_note_dlss_model", "pc_note_frame_generation_dlss", "pc_note_dlssg_gpu",
                                  "pc_note_dlssg_driver", "pc_note_dlssg_hags", "pc_note_dlssg_missing", "pc_note_dlssg_failed",
                                  "pc_note_dlssg_restart", "pc_note_vsync_dlssg", "pc_note_fsr_fg_restart", "pc_note_vsync_off"}) {
@@ -1956,6 +2125,7 @@ public:
         pt::AppSettings& s = app_.settings;
         pt::UpscaleSettings& u = app_.scene.upscale;
         if (id >= kModFirst) {
+            // saved for the next start; the mods in use stay as they were found
             if (app_.mods && id - kModFirst < static_cast<int>(app_.mods->mods.size())) {
                 s.mods[app_.mods->mods[id - kModFirst].folder] = value == 1;
                 Save();
@@ -2115,6 +2285,8 @@ public:
             RequestEnhancedTextures(app_,s.graphics.enhanced_textures);
             break;
         }
+        // the merged lighting rows: the original's techniques first, then the ray traced ones, which leave the raster
+        // setting at its default (what the presets hold with ray tracing on) so a preset still reads as itself
         case kShadowQuality:
             value=std::clamp(value,0,5);
             s.graphics.shadow_quality=value<=3?value:3;
@@ -2180,6 +2352,7 @@ public:
         case kTexturesPage:return "pc_section_textures";
         case kEffectsPage:return "pc_graphics_effects";
         case kMicrophonePage:return "pc_microphone_test";
+        case kSoundPage:return "pc_section_sound";
         case kModsPage:return "pc_mods";
         case kExtrasPage:return "pc_extras";
         case kArchivePage:return "pc_archive";
@@ -2191,10 +2364,13 @@ public:
 
     bool IsLoopBrowser() const override { return page_ == kLoopPage; }
     bool IsBrowser() const override { return page_ == kLoopPage; }
+    // the Museum's pages (museum_layout.h): the halls, then a hall's wall
     pt::game::PcGallery Gallery() const override {
         return page_ == kArchivePage ? pt::game::PcGallery::Halls : page_ == kArchiveListPage ? pt::game::PcGallery::Wall : pt::game::PcGallery::None;
     }
 
+    // an entry's picture on the Museum's wall: its texture, photo piece, or the thumbnail the capture shot of it in the theater; a
+    // voice shows what speaks it (ArchivePictureOf)
     pt::game::PcPanel EntryPicture(const pt::game::ArchiveEntry& entry) const {
         pt::game::PcPanel panel;
         using M = pt::game::ArchiveMedia;
@@ -2220,6 +2396,8 @@ public:
         return panel;
     }
 
+    // the Museum's panel: a hall's doorway shows its first open exhibit; an exhibit its picture, caption and, for a voice, its
+    // transcript (with the spoken line while it plays); a locked one nothing
     pt::game::PcPanel Panel(int id) const override {
         pt::game::PcPanel panel;
         if (page_ == kLoopPage) {
@@ -2228,6 +2406,8 @@ public:
         }
         if (page_ == kArchivePage && id >= kArchiveSectionFirst && id < kArchiveSectionFirst + pt::game::kArchiveSectionCount) {
             const auto section = static_cast<pt::game::ArchiveSection>(id - kArchiveSectionFirst);
+            // the voices have no picture of their own (their stand-ins are dark shots of small things): their doorway carries the
+            // hall's name, as a frame without a picture does
             if (section == pt::game::ArchiveSection::Voices) return panel;
             if (const pt::game::ArchiveEntry* cover = pt::game::FindArchiveEntry(pt::game::ArchiveSectionCover(section)); cover && game_.ArchiveUnlocked(*cover)) {
                 pt::game::PcPanel picture = EntryPicture(*cover);
@@ -2261,6 +2441,7 @@ public:
         case M::Sound:
         case M::Dialogue: {
             if (!app_.transcripts) break;
+            // while it plays, the line last begun is the spoken one
             const float now = voice_entry_ == entry ? VoiceSeconds() : -1.0f;
             for (const auto& line : app_.transcripts->Transcript(SubtitleOf(*entry), language)) {
                 if (now >= 0.0f && now >= line.start) panel.current_line = static_cast<int>(panel.lines.size());
@@ -2282,11 +2463,14 @@ public:
     bool CompactRows() const override { return page_ == kLoopPage || (page_ == kStreetPage && game_.SpeedrunResultsPending()); }
     std::string_view Credit() const override {
         if (page_ == kExtrasPage) return "Port by LoreanXavier";
+        // the version, or the update notice: the same small muted line, on the main page only, never in the way of play
         if (page_ == kMainPage) {
             if (const auto newer = app_.updates.Newer()) {
+                // "Version X is available (this is Y)", a text key with both versions as its arguments (OptionsMenu translates it)
                 if (update_notice_.empty()) update_notice_ = UpdateNoticeKey(newer->version);
                 return update_notice_;
             }
+            // "P.T. PC Port <version> by LoreanXavier", a text key with the version as its argument (OptionsMenu translates it)
             if (version_text_.empty()) version_text_ = std::format("pc_credit_version{}{}", pt::game::kPcNoteArgument, pt::update::CurrentVersion());
             return version_text_;
         }
@@ -2297,6 +2481,7 @@ public:
     std::vector<std::string> PreviewFiles(int id) const override {
         std::vector<std::string> files;
         if (page_ == kArchivePage || page_ == kArchiveListPage) {
+            // the Museum's thumbnails the page can show: the cursor's first, then the rest of the wall's (the halls' doorways)
             MuseumPreviewsGenerating();
             auto add = [&](const pt::game::PcPanel& panel) {
                 if (!panel.thumbnail.empty() && std::find(files.begin(), files.end(), panel.thumbnail) == files.end()) files.push_back(panel.thumbnail);
@@ -2320,6 +2505,7 @@ public:
         return files;
     }
     std::string PreviewFile(int id) const override {
+        // a locked entry shows no picture of what it would start
         const int index = id - kLoopFirst;
         return IsLoopBrowser() && index >= 0 && index < kLoopCount && LoopUnlocked(index) ?
             pt::os::PathToUtf8((PreviewDirectory() / std::format("loop-{}.png", index))) : std::string();
@@ -2347,12 +2533,14 @@ public:
         if (id == kLoopBrowser) { page_ = kLoopPage; GeneratePreviews(); }
         if (id == kExtras) page_ = kExtrasPage;
         if (id == kVr) page_ = kVrPage;
+        // the menu closes first (main loop), so the photo mode's pause is not the menu's
         if (id == kFreecam) app_.extras_request = 1;
         if (id == kPhotoMode) app_.extras_request = 2;
         if (id >= kLoopFirst && id < kLoopFirst + kLoopCount && LoopUnlocked(id - kLoopFirst)) game_.BrowseLoop(id - kLoopFirst);
         if (id == kStreetWalk) game_.AnswerStreetOffer(true);
         if (id == kRunMenu) game_.AnswerSpeedrunMenu();
         if (id == kStreetRestart) game_.AnswerStreetOffer(false);
+        // the menu closes first (main loop), then the walk ends
         if (id == kStreetLeave) app_.extras_request = 3;
         if (id == kLoopLock) {
             game_.SetBrowseUnlocks(0, false);
@@ -2379,6 +2567,7 @@ public:
             app_.microphone_status = "pc_mic_waiting";
             app_.microphone_reason = "pc_mic_st_loading";
         }
+        if (id == kSoundSettings) page_ = kSoundPage;
     }
 
     void Opened() override {
@@ -2392,6 +2581,7 @@ public:
         app_.microphone_test = app_.microphone_monitor = false;
         archive_full_ = false;
         StopVoice();
+        // the question closed without an answer: the original's restart
         if (game_.StreetOfferPending()) game_.AnswerStreetOffer(false);
     }
 
@@ -2413,10 +2603,19 @@ public:
         }
         if (page_ == kArchivePage) {
             page_ = kExtrasPage;
+            // the Archive row, after the street walk's row when that is shown and the loop browser's
             pending_cursor_ = game_.StreetWalkActive() ? 2 : 1;
             return true;
         }
-        page_ = page_==kLightingPage || page_==kTexturesPage || page_==kEffectsPage ? kGraphicsPage : page_ == kLoopPage || page_ == kVrPage ? kExtrasPage : kMainPage;
+        const int parent_row = page_ == kMicrophonePage ? kMicrophoneTest : page_ == kSoundPage ? kSoundSettings : -1;
+        page_ = page_ == kMicrophonePage ? kSoundPage : page_==kLightingPage || page_==kTexturesPage || page_==kEffectsPage ? kGraphicsPage : page_ == kLoopPage || page_ == kVrPage ? kExtrasPage : kMainPage;
+        if (parent_row >= 0) {
+            int index = 0;
+            for (const auto& section : Sections()) for (const auto& row : section.rows) {
+                if (row.id == parent_row) pending_cursor_ = index;
+                ++index;
+            }
+        }
         app_.microphone_test = app_.microphone_monitor = false;
         return true;
     }
@@ -2435,7 +2634,7 @@ private:
         kFrameGeneration,
         kVolume,
         kMicrophone,
-        kMicrophoneTest, kMicrophoneTrigger,
+        kMicrophoneTest, kMicrophoneTrigger, kSoundSettings,
         kMicLevel,
         kMicHeard,
         kMicMonitor,
@@ -2465,6 +2664,9 @@ private:
         kArchiveSectionFirst = 3000,
         kArchiveEntryFirst = 4000,
     };
+    // The Archive (Extras; src/game/archive.h): its first page lists the sections, a section's page its entries in the loop browser's
+    // layout with the panel on the right. A picture opens over the whole screen, a voice plays where it is, a cutscene or a model opens
+    // in the theater (main loop) under the open menu, which comes back on the same row when it ends
     static constexpr int kArchivePage = 10;
     static constexpr int kArchiveListPage = 11;
     int archive_section_ = 0;
@@ -2500,6 +2702,7 @@ private:
             sections.rows.push_back(std::move(row));
         }
         if (app_.options.release_locks) {
+            // what play reached outlives Reset Progress (pt.ini [progress] archive); this row clears it
             auto lock = Row(kArchiveLock, "pc_archive_lock", {"pc_extras_start"}, 0, "pc_note_archive_lock");
             lock.action = true;
             lock.enabled = !game_.ArchiveSeen().empty();
@@ -2530,10 +2733,12 @@ private:
         return {std::move(list)};
     }
 
+    // Museum captures share the installation's data directory; tests may name another folder.
     std::filesystem::path MuseumPreviewDirectory() const {
         if (!app_.options.museum_previews.empty()) return app_.options.museum_previews;
         return UserDataDir() / std::format("museum-previews-v{}", kMuseumPreviewVersion);
     }
+    // the capture started by this session is still running (polled; the handle goes once it has exited)
     bool MuseumPreviewsGenerating() const {
         if (!museum_process_) return false;
         int code = 0;
@@ -2543,6 +2748,7 @@ private:
         museum_process_ = nullptr;
         return false;
     }
+    // the capture of the thumbnails still missing, once a session, when the Museum opens (not headless, not from a test's folder)
     void GenerateMuseumPreviews() {
         if (museum_started_ || app_.options.headless || !app_.options.museum_previews.empty()) return;
         const auto dir = MuseumPreviewDirectory();
@@ -2600,11 +2806,14 @@ private:
         }
     }
 
+    // the line's subtitle: the entry's own, or for a dialogue the one its marker opens (its unlock key)
     static std::string SubtitleOf(const pt::game::ArchiveEntry& entry) {
         if (entry.media == pt::game::ArchiveMedia::Dialogue && entry.unlock.starts_with("voice:")) return std::string(entry.unlock.substr(6));
         return std::string(entry.extra);
     }
 
+    // the sound plays on the player's own sound system (paused with the menu, a new post plays) where the camera is, so it is heard
+    // as the game mixes it, at full level
     void PlayVoice(const pt::game::ArchiveEntry& entry) {
         StopVoice();
         auto* sound = dynamic_cast<pt::game::GameSound*>(game_.Audio());
@@ -2631,14 +2840,23 @@ private:
         voice_entry_ = nullptr;
     }
 
+    // seconds of the voice's sound heard: the output's own clock
     float VoiceSeconds() const {
         auto* sound = dynamic_cast<pt::game::GameSound*>(game_.Audio());
         if (!sound || !sound->Ready()) return 0.0f;
         return static_cast<float>(sound->System().RenderedFrames() - voice_start_) / 48000.0f;
     }
+    // the graphics page (rendering.md 12.21 and 12.22), opened from the last row of the left column
+    // the previews' folder carries the capture's version: pictures an older capture made (version 1: unsettled exposure, walks to
+    // guessed points, shots of the loop before a refused pick; version 2: the start room's doorway after the door demo; version 4:
+    // first person poses, many of them dark or away from the loop's moment) are not shown or kept again
     static constexpr int kPreviewVersion = kLoopPreviewVersion;
     static constexpr int kLoopCount = static_cast<int>(pt::game::kBrowseLoops.size());
+    // release builds: an entry opens once the game was finished and its loop was reached in play (Game::OnFloorReached)
     bool LoopUnlocked(int index) const { return game_.BrowseUnlocked(index); }
+    // the pictures shipped next to the executable (loop-previews, shot by tools/package.py at packaging time with version.txt of
+    // this version) come first; the local capture below only runs when they are missing. Looked up once: the page asks for it
+    // every frame
     static std::filesystem::path BundledPreviewDirectory() {
         static const std::filesystem::path bundled = [] {
             const std::filesystem::path directory = pt::ExecutableDir() / "loop-previews";
@@ -2653,6 +2871,7 @@ private:
         if (auto bundled = BundledPreviewDirectory(); !bundled.empty()) return bundled;
         return UserDataDir() / std::format("loop-previews-v{}", kPreviewVersion);
     }
+    // the preview generator started by this session is still running (polled; the handle goes once it has exited)
     bool PreviewsGenerating() {
         if (!preview_process_) return false;
         int code = 0;
@@ -2660,6 +2879,7 @@ private:
         pt::LogInfo("loop browser: preview generation finished (exit {})", code);
         SDL_DestroyProcess(preview_process_);
         preview_process_ = nullptr;
+        // a shot the capture dropped (its loop not reached, a game over on the way) gets one more run this session
         if (preview_runs_ < 2) {
             preview_started_ = false;
             GeneratePreviews();
@@ -2668,14 +2888,17 @@ private:
         return false;
     }
     void GeneratePreviews() {
+        // at most two runs a session (the second only for the pictures the first dropped); later ones wait for the next start
         if (preview_started_ || preview_runs_ >= 2 || app_.options.headless || !BundledPreviewDirectory().empty()) return;
         const auto dir = PreviewDirectory();
         if (dir.empty()) return;
         std::error_code ec;
+        // the folders of older captures (version 1 had no number)
         std::filesystem::remove_all(dir.parent_path() / "loop-previews", ec);
         for (int v = 2; v < kPreviewVersion; ++v) std::filesystem::remove_all(dir.parent_path() / std::format("loop-previews-v{}", v), ec);
         std::filesystem::create_directories(dir, ec);
         if (ec) return;
+        // only the loops without a picture, in browser order (LoopPreviewRoute)
         std::vector<int> missing;
         for (int i = 0; i < kLoopCount; ++i) {
             if (!std::filesystem::exists(dir / std::format("loop-{}.png", i), ec)) missing.push_back(i);
@@ -2715,6 +2938,7 @@ private:
     static constexpr int kMainPage = 0;
     static constexpr int kGraphicsPage = 1;
     static constexpr int kMicrophonePage = 2;
+    static constexpr int kSoundPage = 13;
     static constexpr int kLightingPage=3,kTexturesPage=4,kEffectsPage=5;
     static constexpr int kAnisotropySteps[] = {0, 2, 4, 8, 16};
     int page_ = kMainPage;
@@ -2734,6 +2958,9 @@ private:
 
     static std::vector<std::string> OffOn() { return {"pc_off", "pc_on"}; }
 
+    // The speedrun's results at the end of the credits (in place of the street question): "Return to menu" (the ending's restart
+    // with the option screen first, so the next run starts from the opening), "Explore outside" (the street walk), the run's real
+    // and game time and the record, then each split in the shown clock (docs/gameplay.md, speedrun mode)
     std::vector<pt::game::PcSettingSection> SpeedrunResults() const {
         const pt::game::SpeedrunTimer& run = game_.Speedrun();
         using pt::game::SpeedrunTimer;
@@ -2753,6 +2980,7 @@ private:
         const std::string previous = run.PreviousBest() > 0.0 ? SpeedrunTimer::Format(run.PreviousBest()) : std::string("-");
         result.rows.push_back(Row(kRunBest, "pc_speedrun_best", {best}, 0,
                                   std::format("pc_note_speedrun_best{}{}", pt::game::kPcNoteArgument, previous)));
+        // the splits: the right column, the rest under the run's rows
         constexpr size_t kRightRows = 19;
         pt::game::PcSettingSection right{"pc_speedrun_splits", 1, {}};
         pt::game::PcSettingSection more{"pc_speedrun_splits", 0, {}};
@@ -2768,6 +2996,7 @@ private:
         return out;
     }
 
+    // Individual ray tracing switches report unsupported devices and pipeline initialization failures.
     pt::game::PcSettingRow RtSwitchRow(int id, const char* label, bool on, const char* note_on) const {
         std::string reason;
         const bool supported = app_.scene.RayTracingSupported(reason);
@@ -2799,6 +3028,9 @@ private:
         auto preset=Row(kGraphicsPreset,"pc_graphics_preset",{"pc_preset_low","pc_preset_original","pc_preset_high","pc_preset_ultra","pc_preset_custom"},
                         static_cast<int>(pt::DetectGraphicsPreset(s,supported)),"pc_note_preset");
         preset.wrap=false;quality.rows.push_back(std::move(preset));
+        // one row per feature: its values run from the original's own technique to the ray traced ones, so no feature
+        // appears twice (the page had a shadow, ambient occlusion and reflection row in both a standard and a ray tracing
+        // section, and a master ray tracing switch over them)
         auto lighting = LightingSections();
         auto textures = TextureSections();
         auto effects = EffectSections();
@@ -2815,6 +3047,7 @@ private:
         std::string reason;
         const bool supported=app_.scene.RayTracingSupported(reason);
         const bool ready=app_.scene.RayTracingReady();
+        // a ray traced value on a device without ray tracing reads as the standard one
         const int rt_shadows=supported?s.ray_tracing.shadows:0;
         const bool rt_ao=supported&&s.ray_tracing.ambient_occlusion;
         const bool rt_reflections=supported&&s.ray_tracing.reflections;
@@ -2831,6 +3064,7 @@ private:
         ao.wrap=false;lighting.rows.push_back(std::move(ao));
         auto reflections=Row(kRasterReflections,"pc_reflections",std::move(traced),rt_reflections?2:g.reflections?1:0,note(rt_reflections,"pc_note_reflections"));
         reflections.wrap=false;lighting.rows.push_back(std::move(reflections));
+        // the rays per pixel of the soft shadows and the traced ambient occlusion, the two that use more than one
         auto quality=Row(kRayQuality,"pc_ray_quality",{"pc_ray_balanced","pc_preset_high","pc_preset_ultra"},g.ray_quality,"pc_note_ray_quality");
         quality.enabled=supported&&(rt_shadows==2||rt_ao);lighting.rows.push_back(std::move(quality));
         return {std::move(lighting)};
@@ -2846,6 +3080,7 @@ private:
         return {std::move(textures)};
     }
 
+    // the installed mods, ten to a column, each switched on or off for the next start (docs/modding.md)
     std::vector<pt::game::PcSettingSection> ModSections() const {
         pt::game::PcSettingSection left{"pc_section_mods", 0, {}};
         pt::game::PcSettingSection right{"pc_section_mods", 1, {}};
@@ -2881,6 +3116,7 @@ private:
         clarity.rows.push_back(Row(kFilmGrain,"pc_film_grain",{"pc_off","25%","50%","75%","100%"},static_cast<int>(g.film_grain*4+.5f),"pc_note_film_grain"));
         clarity.rows.push_back(Row(kLensDistortion,"pc_lens_distortion",OffOn(),g.lens_distortion?1:0,"pc_note_lens_distortion"));
         clarity.rows.push_back(Row(kClarity,"pc_clarity",Numbers(0,10),static_cast<int>(g.clarity*10+.5f),"pc_note_clarity"));
+        // the letterbox is a display choice (pt.ini [display], outside the presets) shown with the image rows
         clarity.rows.push_back(Row(kLetterbox,"pc_photo_letterbox",{"pc_off","2.39:1","1.85:1"},std::clamp(app_.settings.display.letterbox,0,2),"pc_note_letterbox"));
         return {std::move(effects),std::move(clarity)};
     }
@@ -2922,6 +3158,8 @@ private:
         }
     }
 
+    // every upscaler of the build; notes (one per value) gets the reason of each one this machine cannot run, which the page
+    // shows greyed (PcSettingRow::value_notes)
     std::vector<pt::UpscalerKind> Upscalers(std::vector<std::string>* notes) const {
         std::vector<pt::UpscalerKind> kinds{pt::UpscalerKind::Off};
         if (notes) notes->assign(1, std::string());
@@ -3198,16 +3436,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
     config.bug_screen = options.bug_screen;
     config.street_offer = options.street_offer;
     config.release_locks = options.release_locks;
+    // PT_TRAP_LOG=1 as --trap-log, for runs whose command line a tool builds (compare_ref)
     const char* trap_log_env = std::getenv("PT_TRAP_LOG");
     config.trap_log = options.trap_log || (trap_log_env && *trap_log_env == '1');
     config.first_boot_options = options.first_boot_options;
     if (!game.Init(config)) {
         return 1;
     }
+    // the speedrun timer (Extras; off by default): its records go next to pt.ini, none without a settings file
     game.Speedrun().SetMode(app.settings.extras.speedrun);
     if (!app.settings_path.empty()) game.Speedrun().SetRecordDirectory(std::filesystem::absolute(app.settings_path).parent_path());
     app.livesplit.Configure(app.settings.extras.livesplit, app.settings.extras.livesplit_host, app.settings.extras.livesplit_port);
     game.Speedrun().SetLiveSplit(&app.livesplit);
+    // the loop browser's unlocks live in pt.ini (Game::SetBrowseUnlocks); a save that finished the game before they were kept
+    // (its Game+ flag) counts as finished with every loop reached. Runs without saves neither read nor write them
     uint32_t unlocks_seen = 0;
     if (game.SavesEnabled()) {
         auto& progress = app.settings.progress;
@@ -3219,6 +3461,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         game.SetBrowseUnlocks(progress.loops_reached, progress.game_finished);
         unlocks_seen = game.BrowseUnlockGeneration();
+        // the Archive's record: the unlock keys play reached, comma separated
         std::set<std::string> archive_keys;
         for (size_t at = 0; at < progress.archive.size();) {
             const size_t comma = std::min(progress.archive.find(',', at), progress.archive.size());
@@ -3245,6 +3488,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     game.Demos().time_scale = options.demo_rate;
     pt::game::GameUi ui;
+    // the photo mode hides the game's UI (HUD, subtitles, menu) and draws its letterbox and panel in its place
     bool hide_game_ui = false;
     pt::game::PhotoPanelView photo_view;
     const bool ui_ready = ui.Init(app.renderer, app.textures, vfs);
@@ -3353,16 +3597,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
     float accumulator = 0.0f;
     pt::Camera tick_camera_from = game.ViewCamera();
     pt::Camera motion_camera_from = tick_camera_from;
+    // a window, or a headless run paced as one (--display-rate): ticks from the accumulator, draws blended between the last two
     const bool paced = app.window != nullptr || options.display_rate > 0.0f;
     TickState tick_state;
     std::vector<glm::mat4> blended_skins;
     static const bool render_trace = std::getenv("PT_RENDER_TRACE") != nullptr;
+    // PT_TICK_BLEND=camera blends only the camera between ticks (as before the draws and lights were), 0 nothing: for A/B tests
     static const int tick_blend = [] {
         const char* v = std::getenv("PT_TICK_BLEND");
         return !v ? 2 : std::strcmp(v, "camera") == 0 ? 1 : v[0] == '0' ? 0 : 2;
     }();
     bool scripted_camera = false;
     uint64_t last_render_frame = 0;
+    // the flashlight reflection's colour, read back by the renderer kFramesInFlight frames after it sampled it, for the lights
+    // the next scene build makes (RenderSceneBuilder::AddHandyReflection)
     uint64_t reflection_readbacks = 0;
     auto take_reflection_readback = [&](pt::game::Game& target) {
         const pt::RenderStats& stats = app.scene.Stats();
@@ -3381,6 +3629,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
             paused_by_settings = false;
         }
     };
+    // Extras (PcSettings): the free camera (F6) flies within kFreecamRange of where it started, through the game's camera override;
+    // the photo mode (F7) pauses the world as the pause menu does, flies the free camera and shows its own panel (PhotoPanel, drawn
+    // as the PC settings page). Leaving either takes the override away and puts back the pause, the camera, the body, the effect
+    // toggles and the film grain as they were
     constexpr float kFreecamRange = 15.0f;
     bool freecam = false;
     pt::Camera freecam_camera;
@@ -3450,6 +3702,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
         photo_had_freecam = freecam;
         start_freecam();
         if (!photo_had_freecam) {
+            // the photo mode starts in front of the player looking back at the face: 1.1 m out along the player's facing at eye
+            // height (short of a wall that is nearer), the free camera's range around that point
             const pt::game::Player& player = game.GetPlayer();
             glm::vec3 facing = player.CameraForward();
             facing.y = 0.0f;
@@ -3488,6 +3742,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         settings.lens = app.scene.toggles.distortion;
         settings.grain = app.scene.toggles.film_grain;
         settings.grading = app.scene.toggles.color_lut;
+        // the photo starts with the PC letterbox's bars, which its own row then changes
         settings.aspect = std::clamp(app.settings.display.letterbox, 0, 2);
         photo_panel.Open(settings);
         if (!game.Paused()) {
@@ -3497,14 +3752,19 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         pt::LogInfo("extras: photo mode on");
     };
+    // The Archive's theater (src/game/archive_theater.h): a session of its own for one cutscene or model, with its own scene builder
+    // and effects; while it runs the player's game is not updated (the menu that opened it keeps it paused) and the frame shows the
+    // theater's. It ends with its demo, or with the menu, back or cancel buttons (or confirm, in a cutscene), and the menu comes back
     struct TheaterView {
         std::unique_ptr<pt::game::ArchiveTheater> theater;
         pt::game::RenderSceneBuilder scene_builder;
         pt::game::VfxScene vfx;
     };
     std::unique_ptr<TheaterView> theater;
+    // a theater an input script opened without the menu pauses the game itself
     bool theater_paused = false;
     auto start_theater = [&](const std::string& id) {
+        // `sarchive -`: leave the viewer as its back button does
         if (id == "-") {
             if (theater) theater->theater->Stop();
             return;
@@ -3559,12 +3819,21 @@ int RunGame(App& app, pt::Vfs& vfs) {
         game.SetArchiveTheaterActive(false);
         pt::LogInfo("archive: theater ended");
     };
+    // the experimental VR mode (docs/vr.md)
     std::unique_ptr<pt::game::VrPlay> vr;
     if (app.xr) {
         vr = std::make_unique<pt::game::VrPlay>(*app.xr, app.settings.vr);
     }
     bool frozen = false;
     bool was_focused = false;
+    // The background pause and mute apply once the window has had the input focus. A Wayland compositor that does not focus a new
+    // window (issue #36 and Linux reports of a window that stayed black) otherwise kept the game frozen before its first frame
+    // was ever presented, until the player clicked into it.
+    bool ever_focused = false;
+    // The start waits on its loading screen (the turning circles) while the enhanced textures of what has loaded are prepared and
+    // uploaded, at most 20 s: a first start that still has to generate them (minutes) goes on and swaps them in later
+    bool boot_wait = true;
+    const uint64_t boot_wait_start = SDL_GetTicksNS();
     float applied_volume = -1.0f;
     pt::ControllerSpeakerOutput controller_speaker;
     SDL_JoystickID speaker_gamepad_id = 0;
@@ -3574,6 +3843,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool speaker_route_requested = false;
     constexpr std::array<uint32_t, 2> kLisaCryEvents{0xAD52F3C2u, 0x0CB2A9B7u};
     while (running) {
+        // VR: the headset is the view, a minimized window does not stop it; the frame wait paces the loop. While the runtime has
+        // no running session (the headset asleep or not yet ready, its compositor restarting) the game holds as a window in the
+        // background does
         const SDL_Scancode next_voice_key = app.settings.voice.key.empty() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(app.settings.voice.key.c_str());
         if(next_voice_key!=voice_key) { voice_key_press.Discard(); voice_key=next_voice_key; }
         bool visible = PumpEvents(app, &input, running, &voice_key_press, static_cast<uint32_t>(voice_key)) || vr != nullptr;
@@ -3585,24 +3857,41 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         }
         PollEnhancedTextures(app);
+        app.textures.PumpEnhancedTextures(boot_wait ? 12.0 : 3.0);
+        if (boot_wait) {
+            const bool preparing = app.texture_requested || app.textures.EnhancedPending();
+            const double waited = static_cast<double>(SDL_GetTicksNS() - boot_wait_start) * 1e-9;
+            const bool hold = preparing && waited < 20.0 && game.Controller().Step() <= 5;
+            if (!hold) {
+                boot_wait = false;
+                pt::LogInfo("start: loading screen released after {:.1f} s{}", waited, preparing ? " (enhanced textures still preparing)" : "");
+            }
+            game.SetBootHold(hold);
+        }
         const std::optional<bool> forced_focus = script.ForcedFocus(frame);
         if (app.window || forced_focus || vr) {
+            // VR: the headset's focus (its system menu takes it), not the mirror window's
             const bool focused = forced_focus ? *forced_focus
                                  : vr         ? !vr->Host().FocusLost()
                                               : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
             const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
 #ifdef __APPLE__
+            // an app opened from Finder or the Dock in the background (ignusloki's fix): a menu opened before the controller's
+            // first tick would stop the startup under the opaque boot fade
             const bool startup_ticked = game.Controller().Step() >= 0;
 #else
             const bool startup_ticked = true;
 #endif
             if (was_focused && !focused && pause && ui_ready && startup_ticked && !ui.MenuOpen() && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
+                // the photo mode's pause goes first, so the menu owns the pause it finds
                 stop_freecam();
                 ui.OpenMenu(game, false);
                 pt::LogInfo("focus: window in the background, pause menu opened");
             }
             was_focused = focused;
-            const bool freeze = !visible || (!focused && pause && !(ui_ready && ui.MenuOpen()));
+            ever_focused = ever_focused || focused;
+            const bool focus_rules = ever_focused || forced_focus;
+            const bool freeze = !visible || (!focused && focus_rules && pause && !(ui_ready && ui.MenuOpen()));
             if (freeze != frozen) {
                 frozen = freeze;
                 if (sound.Ready()) {
@@ -3612,7 +3901,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                             sound.Ready() ? sound.System().RenderedFrames() : 0);
                 last_ticks = SDL_GetTicksNS();
             }
-            const float volume = !focused && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
+            const float volume = !focused && focus_rules && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
             if (sound.Ready() && volume != applied_volume) {
                 sound.System().SetMasterVolume(volume);
                 applied_volume = volume;
@@ -3708,6 +3997,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 show_debug = !show_debug;
             }
             tab_was_down = keys[SDL_SCANCODE_TAB];
+            // the photo mode's panel keeps the pointer; the right mouse button held looks around
             const bool photo_pointer = photo_mode && photo_overlay && !(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
             const bool want_capture = !show_debug && !show_settings && !(ui_ready && ui.MenuOpen()) && !photo_pointer && !vr &&
                                       (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
@@ -3736,6 +4026,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         }
         const bool keyboard_free = app.window && !show_settings && !(show_debug && ImGui::GetIO().WantCaptureKeyboard);
+        // headless runs have no window to capture the mouse: injected mouse buttons act as in play unless the menu is open
         const bool menu_open = ui_ready && ui.MenuOpen();
         const pt::MouseUse mouse_use = mouse_captured || (!app.window && !menu_open) ? pt::MouseUse::Look
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
@@ -3783,6 +4074,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pending_input.pointer = glm::vec2(x, y) * SDL_GetWindowPixelDensity(app.window);
             pending_input.pointer_valid = true;
         }
+        // Extras hotkeys: F6 the free camera, F7 the photo mode; in the photo mode P (Square) takes a photo and H (Triangle) hides
+        // the panel; the menu button (Esc, Start) ends the photo mode, then the free camera, and opens no menu
         if (const std::vector<int> set = game.TakePhotoSettingsRequest(); (set.size() == 7 || set.size() == 8) && photo_mode) {
             pt::game::PhotoSettings& photo = photo_panel.Settings();
             photo.focal_length_mm = pt::game::PhotoFocalLengthFromFovYDegrees(static_cast<float>(set[0]));
@@ -3881,6 +4174,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (photo_mode) {
                 if (p || (polled.raw_pressed & pt::kRawSquare)) photo_shot = true;
                 if (h || (polled.raw_pressed & pt::kRawTriangle)) photo_overlay = !photo_overlay;
+                // the panel: the D-pad or the arrow keys choose and change, Enter or Cross runs the photo and reset rows, Circle or
+                // Backspace leaves (Space, E and the left mouse button are Cross too, but rise and look here)
                 static bool return_was_down = false;
                 const bool return_key = keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_KP_ENTER];
                 const bool return_pressed = return_key && !return_was_down && usable;
@@ -3943,10 +4238,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
             motion_camera_from = game.ViewCamera();
             scripted_camera = motion_camera_from.position != tick_camera_from.position || motion_camera_from.yaw != tick_camera_from.yaw ||
                               motion_camera_from.pitch != tick_camera_from.pitch || motion_camera_from.roll != tick_camera_from.roll;
+            // PT_TICK_CSV=<file>: per tick the milliseconds of the game update, the effects, the UI and the offline audio
+            // (a frame that is slow while the GPU and the renderer are not names its part here), written at exit
             static const char* tick_csv = std::getenv("PT_TICK_CSV");
             const auto tick_t0 = std::chrono::steady_clock::now();
             if (theater) {
                 const bool model = theater->theater->ModelView();
+                // a pad's Circle (B on an Xbox pad) is back as in the menus (OptionsMenu: raw Circle or cancel); Cross, like Enter,
+                // also stops a cutscene but not the model viewer (the hints, pc_archive_demo_hint and pc_archive_model_hint)
                 const bool back = state.pause || state.cancel || (state.raw_pressed & pt::kRawCircle);
                 const bool accept = state.confirm || (state.raw_pressed & pt::kRawCross);
                 if (back || (accept && !model)) theater->theater->Stop();
@@ -3998,6 +4297,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             stop_freecam();
         }
         if (ui_ready) ui.AdvancePresentation(paced ? dt : step);
+        // the release check's answer, once (non-blocking): the in-game notice, and the URL in the log (docs/updates.md)
         if (!app.update_polled && app.updates.Done()) {
             app.update_polled = true;
             if (const auto newer = app.updates.Newer()) {
@@ -4005,6 +4305,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 if (ui_ready) ui.ShowUpdateNotice(UpdateNoticeKey(newer->version));
             }
         }
+        // the notice waits while the photo mode draws in the UI's place, and never shows in VR (its HUD is not the place for it)
         if (ui_ready) ui.HoldUpdateNotice(photo_mode || vr != nullptr);
         game.Speedrun().Poll();
         if (game.SavesEnabled() && (game.BrowseUnlockGeneration() != unlocks_seen || game.ArchiveGeneration() != archive_seen)) {
@@ -4017,6 +4318,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             app.settings.progress.archive = keys;
             if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
         }
+        // the Archive's theater: opened by a menu row or `sarchive`, closed when it is done
         game.SetArchiveTheaterShowing(theater && theater->theater->Showing());
         if (theater && theater->theater->Finished()) {
             end_theater();
@@ -4026,6 +4328,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
         } else if (std::string script_id = game.TakeArchiveRequest(); !script_id.empty()) {
             start_theater(script_id);
         }
+        // an Extras row closes the menu first, then starts (the menu's pause and resume are its own); a menu opened otherwise
+        // ends the free camera
         if (app.extras_request != 0 && ui_ready) {
             if (ui.MenuOpen()) {
                 ui.CloseMenu();
@@ -4069,6 +4373,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             freecam_camera.yaw -= look.x * (game.Options().invert_x ? -1.0f : 1.0f);
             freecam_camera.pitch = std::clamp(freecam_camera.pitch - look.y * (game.Options().invert_y ? -1.0f : 1.0f), -1.55f, 1.55f);
             if (photo_mode) {
+                // the photo mode's lens and effects (each put back by stop_photo); film grain at 0 in the PC settings is shown at
+                // the original's strength while the photo mode turns it on
                 const pt::game::PhotoSettings& photo = photo_panel.Settings();
                 freecam_camera.fov_y = glm::radians(pt::game::PhotoFovYDegrees(photo.focal_length_mm));
                 freecam_camera.roll = glm::radians(static_cast<float>(photo.roll));
@@ -4113,6 +4419,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             active_microphone_device = app.settings.voice.device;
             previous_microphone_test = app.microphone_test;
         }
+        // The models load once on the recognizer's thread and stay while the game listens (f160 to the ending) or the
+        // microphone test is open; the microphone itself is open only while it is heard (not paused)
+        // PT_VOICE_INPUT=<16 kHz wav> stands in for the microphone, looped at game time, also headless (tools/walkthrough.py voice)
         const bool voice_file = !voice_input.empty();
         const bool hearing = (app.window || voice_file) && ((game.VoiceListening() && !game.Paused()) || app.microphone_test);
         if ((app.window || voice_file) && (game.VoiceListening() || app.microphone_test)) {
@@ -4131,6 +4440,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 mic_quiet_seconds = 0.0f;
                 if (microphone_failed) pt::LogError("voice: no microphone to listen with");
             }
+            // why nothing is heard, for the test page: the row's value is the short key, the hint the long one
             const pt::VoiceRecognizer::State state = recognizer->GetState();
             if (microphone_failed) {
                 app.microphone_status = "pc_mic_unavailable";
@@ -4144,6 +4454,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 default: app.microphone_status = "pc_mic_err_runtime"; app.microphone_reason = "pc_mic_st_runtime"; break;
                 }
             } else if (state == pt::VoiceRecognizer::State::Ready) {
+                // the stream is open but carries no sound (muted, a switch on the headset, the wrong device)
                 const bool silent = mic_quiet_seconds >= 3.0f && app.microphone_hypothesis.empty();
                 app.microphone_status = silent ? "pc_mic_err_silent" : "pc_mic_say_jack";
                 app.microphone_reason = silent ? "pc_mic_st_silent" : "pc_mic_no_word";
@@ -4162,6 +4473,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (microphone.IsOpen() || voice_file) {
                 if (!microphone.SetMonitor(app.microphone_test && app.microphone_monitor)) app.microphone_monitor = false;
                 if (!voice_file) microphone.Read(mic_samples);
+                // the meter holds the loudest 10 ms of the frame and falls 60 dB a second, so a word shows its level
                 float loudest = -80.0f;
                 for (size_t at = 0; at + 160 <= mic_samples.size(); at += 160) {
                     double energy = 0.0;
@@ -4172,8 +4484,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 if (mic_samples.empty()) mic_quiet_seconds += static_cast<float>(dt);
                 else mic_quiet_seconds = loudest <= -75.0f ? mic_quiet_seconds + static_cast<float>(dt) : 0.0f;
                 bool heard = recognizer->Feed(mic_samples);
+                // a headless run outpaces real time: with a file for the microphone, the game waits for the recognizer
                 if (voice_file) heard = recognizer->Drain() || heard;
                 if (heard && !app.microphone_test) game.OnVoiceKeyword(recognizer->Keyword());
+                // the transcript of the last utterance; a long one (talk, the radio) is cut to fit the settings row
                 app.microphone_hypothesis = recognizer->LastHypothesis();
                 if (app.microphone_hypothesis.size() > 32) {
                     size_t cut = 30;
@@ -4182,13 +4496,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             }
         } else {
-            microphone_failed = false;
+            microphone_failed = false; // a device that would not open is tried again after a pause
             if (microphone.IsOpen()) {
                 microphone.Close();
                 if (recognizer) recognizer->Reset();
             }
         }
 
+        // what the frame shows: the player's game, or the Archive's theater with its own scene builder and effects
         pt::game::Game& view = theater ? theater->theater->Sandbox() : game;
         pt::game::RenderSceneBuilder& view_builder = theater ? theater->scene_builder : scene_builder;
         pt::game::VfxScene& view_vfx = theater ? theater->vfx : vfx_scene;
@@ -4196,11 +4511,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
         app.renderer.fade[0] = fx.FadeShown().r;
         app.renderer.fade[1] = fx.FadeShown().g;
         app.renderer.fade[2] = fx.FadeShown().b;
+        // VR's stereo view: the eyes take the fade (the HUD draws only the UI)
         app.renderer.fade[3] = ui_ready && !(vr && !vr->ScreenMode(game)) ? 0.0f : fx.FadeShown().a;
         app.renderer.output_brightness = game.Options().BrightnessValue();
         draw_items.clear();
+        // the drawn view: the player's own (GetCamera), or the third person camera behind the shoulder (Extras), or the theater's
         pt::Camera camera = game.ViewCamera();
         if (theater) {
+            // black until the theater's session has its picture (its stages loading, the walk into its loop)
             if (theater->theater->Showing()) {
                 theater->theater->CollectDraws(draw_items);
             } else {
@@ -4211,6 +4529,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         } else {
             game.CollectDraws(draw_items);
         }
+        // the weight of the state after the last tick for everything but the camera (1 without a window, after a cut)
         float blend = 1.0f;
         if (paced && !theater) {
             const float t = std::clamp(accumulator / step, 0.0f, 1.0f);
@@ -4272,6 +4591,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             base_render_extent = {options.width, options.height};
         }
         app.renderer.SetRenderExtent(base_render_extent);
+        // the photo mode's panel, left out of the frame a photo is taken in (the letterbox stays in it)
         if (photo_mode) {
             const int language = std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
             photo_status_time = std::max(0.0f, photo_status_time - dt);
@@ -4313,12 +4633,26 @@ int RunGame(App& app, pt::Vfs& vfs) {
             camera.fov_y = 2.0f * std::atan(std::tan(camera.fov_y * 0.5f) * photo_crop.height);
             photo_view.crop = {};
         }
-        const bool render = app.window || options.render_all || frame + 1 >= static_cast<uint64_t>(options.frames) || !shots.empty();
+        // The fake crash (f120): once the bug picture has set in, the original presents no new frame until its setout, so the
+        // screen holds one still image (floor_f120 3900 to 4130: every pixel identical, no film grain, the scene at the sides of
+        // a wide window frozen). The port drew on, which animated the grain over the page and let players look around behind it.
+        const bool bug_still = ui_ready && ui.DemoGraphs().BugScreenStill();
+        if (static bool logged_still = false; bug_still != logged_still) {
+            logged_still = bug_still;
+            pt::LogInfo("ui: bug screen {} at frame {}", bug_still ? "still, presenting stops" : "released", frame);
+        }
+        const bool still_screen = app.window && !vr && bug_still;
+        const bool render = !still_screen && (app.window || options.render_all || frame + 1 >= static_cast<uint64_t>(options.frames) || !shots.empty());
+        if (still_screen) {
+            SDL_Delay(4);
+        }
         ++frame;
         pt::LogSetTick(frame);
         app.scene.AdvanceTime(dt);
         bool warmed = false;
         if (vr) {
+            // VR (docs/vr.md): every waited frame is drawn (or ended without layers): the stereo view, two eyes from one game
+            // state, or the virtual screen, the flat frame on a screen in front of the player
             const bool screen = vr->ScreenMode(game);
             const bool menu_open = ui_ready && ui.MenuOpen();
             const float scene_dt = static_cast<float>(game.Time() - last_scene_time);
@@ -4362,6 +4696,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                         continue;
                     }
                     app.scene.SetVrEye(eye);
+                    // the exposure adapts once a frame: the second eye repeats the first's
                     app.scene.Render(stereo.eyes[eye], draw_items, lighting, eye == 0 ? dt : 0.0f);
                     ui.SetVrHud(true);
                     pt::XrFrame xr_frame;
@@ -4375,6 +4710,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 ui.SetVrHud(false);
                 take_reflection_readback(game);
                 vr->FinishStereo(stereo);
+                // PT_VR_TRACE=1 (tools/vr_check.py): the game's camera against the drawn head every frame, and at every shot
                 static const bool vr_trace = std::getenv("PT_VR_TRACE") != nullptr;
                 if (vr_trace || !shots.empty()) {
                     const pt::Camera& h = stereo.head;
@@ -4407,6 +4743,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         }
         if (render && !vr) {
+            // PT_PARTS_CSV=<file>: per rendered frame the milliseconds of the frame wait (BeginFrame), the scene build, the
+            // effects' preparation, the render recording and the submission, written at exit
             static const char* parts_csv = std::getenv("PT_PARTS_CSV");
             using parts_ms = std::chrono::duration<float, std::milli>;
             const auto part_t0 = std::chrono::steady_clock::now();
@@ -4442,6 +4780,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             };
             static PartsTrace parts_trace;
+            // loop_ms: from the end of the previous rendered frame's submission to this frame's wait (the game ticks, input, UI)
             static std::chrono::steady_clock::time_point parts_last_end{};
             std::array<float, 7> parts_row{parts_ms(part_t1 - part_t0).count(), parts_ms(part_t2 - part_t1).count(),
                                            parts_ms(part_t3 - part_t2).count(), 0.0f, 0.0f, static_cast<float>(frame),
@@ -4457,6 +4796,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 const pt::Camera& reference = warmed ? camera : options.render_all ? tick_camera_from : scripted_camera ? camera : motion_camera_from;
                 app.scene.SetMotionReference(reference, demo_scale / options.tick_rate, last_render_frame + 1 == frame);
             }
+            // PT_TARGET_DUMP: the G-buffer, light accumulation and HDR targets of every screenshot frame next to the screenshot
             static const bool dump_targets = std::getenv("PT_TARGET_DUMP") != nullptr;
             if (dump_targets && !shots.empty()) {
                 app.scene.RequestTargetDump();
@@ -4483,11 +4823,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     const std::filesystem::path path(shot);
                     app.scene.DumpTargets(pt::os::PathToUtf8((path.parent_path() / path.stem())));
                 }
+                // the adapted EV of the shot, to set against a capture's ev column (compare_ref without --match-ev)
                 const pt::RenderStats& stats = app.scene.Stats();
                 pt::LogInfo("screenshot ev {:.3f} (exposure {:.6f}, metered luminance {:.5f}), {} lights, {} shadow views, camera ({:.3f} {:.3f} {:.3f}) "
                             "yaw {:.2f} pitch {:.2f} frame {}: {}",
                             stats.ev, stats.exposure, stats.luminance, stats.lights, stats.shadow_views, camera.position.x, camera.position.y,
                             camera.position.z, glm::degrees(camera.yaw), glm::degrees(camera.pitch), frame, shot);
+                // PT_SHOT_LIGHTS: every light of the frame's scene before the renderer's culling, world space, intensity as the
+                // deferred m_lightParams[4] (the light's value over pi, before the exposure)
                 static const bool log_lights = std::getenv("PT_SHOT_LIGHTS") != nullptr;
                 if (log_lights && lighting.tpp.enabled) {
                     const pt::TppAtmosphereSettings& t = lighting.tpp;
@@ -4526,6 +4869,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             }
         }
+        // Memory guard: below 1.5 GB of free memory or commit headroom, or over 95 % of the GPU's memory budget, it logs and backs
+        // off (no stage parse kept ahead) until there is room again
         {
             static auto guard_last = std::chrono::steady_clock::time_point{};
             static double guard_vram_used = 0.0;
@@ -4555,6 +4900,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 }
             }
         }
+        // Every 10 s a status line (window, or PT_STATUS_LOG=1): frame rate, GPU time, device memory against the driver's budget,
+        // the render size, upscaler, frame generation, v-sync and floor, so a tester's log shows the state before a crash
         static const bool status_log = app.window || std::getenv("PT_STATUS_LOG") != nullptr;
         if (status_log) {
             static auto status_start = std::chrono::steady_clock::now();
@@ -4591,6 +4938,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         }
         if (app.window && !vr) {
+            // Frame cap. The scene is rendered behind the pause menu and the PC settings page too, so with v-sync off, or v-sync
+            // on a high refresh display, a menu ran at whatever rate the GPU allowed (260 frames per second on the user's 260 Hz
+            // display, the fans at full speed over a still picture). The menus and the paused game are held to 60 frames per
+            // second; pt.ini [display] fps_limit caps everything else (0, the default, leaves it to v-sync). The photo mode flies
+            // a camera and is not held.
             constexpr int kMenuFpsCap = 60;
             static std::chrono::steady_clock::time_point frame_deadline{};
             const bool menu = ((ui_ready && ui.MenuOpen()) || show_settings || game.Paused()) && !photo_mode;
@@ -4598,6 +4950,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (menu) {
                 cap = cap > 0 ? std::min(cap, kMenuFpsCap) : kMenuFpsCap;
             }
+            // DLSS Frame Generation is off in menus and the paused game (Streamline's guide, 6.4), where the cap above holds
+            // the frames; in play the fps limit goes to Reflex's limiter (the one Streamline's frame pacing works with), for
+            // the rendered frames: half the shown rate with one generated frame each
             pt::UpscaleHost::Get().SetMenuOpen(menu);
             pt::FrameGeneration* dlss_fg = pt::streamline::Active() ? pt::UpscaleHost::Get().DlssFrameGenImpl() : nullptr;
             const bool reflex_paced = dlss_fg && dlss_fg->Generating() && !menu;
@@ -4616,6 +4971,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (cap > 0) {
                 const auto period = std::chrono::nanoseconds(1000000000LL / cap);
                 const auto now = std::chrono::steady_clock::now();
+                // a frame that ran late starts the count again rather than letting the next frames catch up
                 if (frame_deadline.time_since_epoch().count() == 0 || now - frame_deadline > period) {
                     frame_deadline = now;
                 }
@@ -4659,11 +5015,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
 
 }
 
+// PT_HEADLESS_ONLY set to anything but empty or 0
 bool HeadlessOnly() {
     const char* value = std::getenv("PT_HEADLESS_ONLY");
     return value && *value && std::string_view(value) != "0";
 }
 
+// Every run but --headless and the console tools opens a window (or, when it fails early, a message box)
 bool WouldOpenWindow(const Options& options) {
     return !(options.headless || options.script_test || options.anim_test || !options.voice_test.empty() || options.voice_listen > 0.0f ||
              !options.fox2_test.empty() || options.list_pads);
@@ -4687,6 +5045,8 @@ int main(int argc, char** argv) {
         SetUpMuseumPreviewRun(app.options);
     }
     const Options& options = app.options;
+    // Headless runs (the test harnesses) keep their log in the working folder and touch no data folder, unless
+    // PT_HEADLESS_USER_DATA asks for the normal launch's layout (tools/local_data_check.py).
     const bool headless_user_data = options.headless && !pt::os::GetEnv("PT_HEADLESS_USER_DATA").empty();
     const bool tool = (options.headless && !headless_user_data) || options.script_test || options.anim_test ||
                       !options.voice_test.empty() || options.voice_listen > 0.0f || !options.texture_test.empty() || options.list_pads;
@@ -4702,12 +5062,33 @@ int main(int argc, char** argv) {
     }
     g_output_dir = log_path.parent_path();
     pt::LogSetFile(log_path);
+    // PT_HEADLESS_ONLY (set by the workers' slot limiter, C:/Projects/pt-port/shared/ptslot.py): a run that would open a
+    // window or a message box stops here, before SDL starts video (tools/run_guard_check.py)
+    // A start that fails before the first frame used to end without a word (issue #25 and pt.log reports: "Installed Vulkan doesn't
+    // implement the VK_KHR_surface extension", "No available video device"): the player saw nothing happen at all.
+    auto startup_failure = [&](const std::string& what, const std::string& advice) {
+        pt::LogError("startup failed: {}", what);
+        if (options.headless) {
+            return;
+        }
+        const std::string text = what + "\n\n" + advice + "\n\nDetails are in " + pt::os::PathToUtf8(std::filesystem::absolute(log_path)) +
+                                 "; please attach that file when you report this.";
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T. could not start", text.c_str(), nullptr);
+    };
+#ifdef _WIN32
+    const std::string driver_advice = "Install the latest graphics driver from NVIDIA, AMD or Intel (a clean reinstall fixed this for other "
+                                      "players), and close overlays such as RivaTuner or MSI Afterburner. P.T. needs a GPU with Vulkan 1.3.";
+#else
+    const std::string driver_advice = "Make sure your graphics driver provides Vulkan 1.3 (Mesa 23 or newer, or the NVIDIA driver) and that "
+                                      "P.T. runs inside your desktop session.";
+#endif
     if (HeadlessOnly() && WouldOpenWindow(options)) {
         pt::LogError("refused: PT_HEADLESS_ONLY set, run would open a window");
         std::fprintf(stderr, "refused: PT_HEADLESS_ONLY set and this run would open a window\n");
         return 3;
     }
     if (!tool) {
+        // A normal launch imports the old profile folder once; a headless run never reads the player's profile.
         const pt::platform::UserDataReport user_data = pt::platform::PrepareUserDataDirectory(
             UserDataDir(), options.headless ? std::filesystem::path() : LegacyUserDataDir(), !options.headless);
         if (!user_data.success) {
@@ -4725,7 +5106,9 @@ int main(int argc, char** argv) {
     }
     pt::LogInfo("pt-port version {} ({})", pt::update::CurrentVersion(), pt::update::Platform());
 #ifdef _WIN32
+    // a minidump and a last line for every way the process ends that it controls (crash_report.h); the dumps go next to pt.log
     pt::InstallCrashReporting(g_output_dir, PT_BUILD_ID);
+    // PT_TEST_CRASH=access|terminate|purecall|abort: exercise a crash path (the dump and the last lines; tests only)
     if (const char* test = std::getenv("PT_TEST_CRASH")) {
         const std::string kind = test;
         pt::LogInfo("crash test: {}", kind);
@@ -4748,7 +5131,13 @@ int main(int argc, char** argv) {
             Derived d;
         }
     }
+    // the first failed allocation logs the process's and the system's commit before std::bad_alloc is thrown: the stage load
+    // failures of parallel test runs were the machine's commit running out (52.8 of 59.9 GB with a dozen pt.exe and the
+    // compilers), not a bad size, and the log now says which
     pt::InstallAllocationFailureLog();
+    // A headless run waits for 4 GB of free memory and commit before it starts and gives up after 2 minutes (exit 75): on
+    // 2026-10-06 about 25 test runs started within seconds filled the 32 GB machine and froze it. PT_MEMORY_GATE=<MB> sets
+    // the amount, 0 skips the gate.
     const double memory_gate = std::getenv("PT_MEMORY_GATE") ? std::atof(std::getenv("PT_MEMORY_GATE")) : 4096.0;
     if (options.headless && memory_gate > 0.0 && !pt::WaitForFreeMemory(memory_gate, 120)) {
         pt::LogExit(75, "not enough free memory to start");
@@ -4784,16 +5173,21 @@ int main(int argc, char** argv) {
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
                                      "texture.qar), put that folder next to P.T. PC Port.app, or start pt with --game <folder>.";
+#elif defined(_WIN32)
+            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
+                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
+                                     "texture.qar), put that folder next to pt.exe, or start pt.exe with --game <folder>.";
 #else
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
-                                     "\n\nStart pt.exe with --game <folder>, where the folder is your extracted CUSA01127 package "
-                                     "(it contains chunk1.psarc and texture.qar), or put that folder at game\\CUSA01127 next to the "
-                                     "working directory.";
+                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
+                                     "texture.qar), put that folder next to pt, or start pt with --game <folder>.";
 #endif
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
         return 1;
     }
+    // the folder in use, absolute: the loop browser's preview generator is started with it from the exe's folder, and
+    // options.game_dir alone is the default relative path when the folder was found another way (game_dir.txt, the search)
     app.options.game_dir = std::filesystem::absolute(game_dir);
     if (const int code = pt::anim::RunAnimTestIfRequested(argc, argv, vfs); code >= 0) {
         return code;
@@ -4808,7 +5202,9 @@ int main(int argc, char** argv) {
     if (!SDL_Init(options.headless ? (options.virtual_pads ? SDL_INIT_GAMEPAD : 0) : (SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))) {
         pt::LogError("SDL_Init: {}", SDL_GetError());
         pt::LogError("SDL_Init: {}", pt::SdlVideoDiagnostics());
+        // only the window is needed to start: a missing audio or gamepad backend must not end the game (1.0.1 on Linux did)
         if (options.headless || !SDL_Init(SDL_INIT_VIDEO)) {
+            startup_failure(std::string("No window can be opened: ") + SDL_GetError() + ".", driver_advice);
             return 1;
         }
         for (const auto& [flag, name] : {std::pair{SDL_INIT_GAMEPAD, "gamepad"}, std::pair{SDL_INIT_AUDIO, "audio"}}) {
@@ -4820,6 +5216,7 @@ int main(int argc, char** argv) {
     if (!options.headless) {
         pt::LogSdlVideoInUse();
     }
+    // a headless run without --settings keeps the defaults, never an installation's own pt.ini
     app.settings_path = !options.settings_path.empty() ? options.settings_path
                         : (options.headless && !headless_user_data) ? std::filesystem::path()
                                                                     : UserDataDir() / "pt.ini";
@@ -4832,6 +5229,7 @@ int main(int argc, char** argv) {
             app.updates.Start();
         }
     }
+    // tests: the answer without a request, headless too (Checker::Fake does nothing once a real check has started)
     if (!options.fake_update.empty() && !options.no_update_check) {
         app.updates.Fake(options.fake_update);
         pt::LogInfo("update: fake release {} (--fake-update)", options.fake_update);
@@ -4854,6 +5252,7 @@ int main(int argc, char** argv) {
                                       SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!app.window) {
             pt::LogError("SDL_CreateWindow: {}", SDL_GetError());
+            startup_failure(std::string("The game window could not be created: ") + SDL_GetError() + ".", driver_advice);
             return 1;
         }
         ApplyFullscreen(app);
@@ -4871,10 +5270,13 @@ int main(int argc, char** argv) {
     }
     settings.width = options.width;
     settings.height = options.height;
+    // VR (docs/vr.md): pt.ini [vr] enabled or --vr, never with --no-vr. The OpenXR loader is loaded only here; without it, a
+    // runtime or a headset the game starts as without VR
     if ((app.settings.vr.enabled || options.vr) && !options.no_vr) {
         app.xr = std::make_unique<pt::xr::Host>();
         if (app.xr->Init("P.T. (pt-port)")) {
             app.renderer.Context().creator = app.xr.get();
+            // the headset paces the frames; the window only mirrors the left eye
             settings.vsync = false;
         } else {
             pt::LogWarn("vr: off for this run: {}", app.xr->Error());
@@ -4884,17 +5286,24 @@ int main(int argc, char** argv) {
     app.renderer.Context().hooks = &pt::UpscaleHost::Get();
     app.scene.upscale = UpscaleFromApp(app.settings);
     if (app.xr) {
+        // an upscaler keeps one history for one view; VR draws two views a frame, so the upscalers and the frame generation
+        // are off in VR (docs/vr.md)
         app.scene.upscale.kind = pt::UpscalerKind::Off;
         app.scene.upscale.frame_generation = pt::FrameGenKind::Off;
     }
     ApplyGraphicsSettings(app);
+    // the ray query extensions and features only when the option is on at start
     const pt::RayTracingSettings& rt = app.scene.raytracing;
     app.renderer.Context().want_ray_query = true;
     pt::UpscaleHost::Get().SetStartupUpscaler(app.scene.upscale.kind);
     app.streamline_marker = StartStreamline(app);
     int result = 1;
+    // PT_TEST_CRASH=devicelost: the lost device path right after the renderer starts (tests only)
     const bool test_device_lost = std::getenv("PT_TEST_CRASH") && std::string(std::getenv("PT_TEST_CRASH")) == "devicelost";
     const bool renderer_ready = app.renderer.Init(app.window, settings);
+    if (!renderer_ready) {
+        startup_failure("The graphics device could not be set up (Vulkan).", driver_advice);
+    }
     if (renderer_ready && test_device_lost) {
         app.renderer.Context().CheckDeviceLost(VK_ERROR_DEVICE_LOST, "PT_TEST_CRASH");
     }
@@ -4907,6 +5316,9 @@ int main(int argc, char** argv) {
         if (texture_data.empty()) {
             texture_data = UserDataDir();
         }
+        // Enhanced textures take the BC1 colour maps up to 2048 px. Upscaled 2x, the 68 maps of 2048 become 4096 (about 21 MB each
+        // with mips): that mode needs about 10 GB of device-local video memory; below it the output is capped at 2048, in a cache
+        // of its own. PT_ENHANCED_TEXTURES_CAP=0|2048 picks a mode for tests.
         {
             VkPhysicalDeviceMemoryProperties memory{};
             vkGetPhysicalDeviceMemoryProperties(app.renderer.Context().physical, &memory);

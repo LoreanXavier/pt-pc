@@ -18,7 +18,9 @@ constexpr std::string_view kNotePhoto = "pc_note_archive_photo";
 constexpr std::string_view kNoteDemo = "pc_note_archive_demo";
 constexpr std::string_view kNoteModel = "pc_note_archive_model";
 
+// The rows, in the order the pages list them. Assets are paths and names in the player's own game data; nothing here is game data.
 constexpr ArchiveEntry kEntries[] = {
+    // the subliminal service (gameplay.md 11): its ten strings, the noise of its flashes and the peephole's overlay sprite
     {.id = "sub01", .section = S::Images, .media = M::String, .label = "pc_archive_sub", .number = 1,
      .asset = "/Assets/sh/effect/vfx_pic/text/text_sub01_alp.ftex", .unlock = "sub:1", .note = kNoteImage},
     {.id = "sub02", .section = S::Images, .media = M::String, .label = "pc_archive_sub", .number = 2,
@@ -46,6 +48,7 @@ constexpr ArchiveEntry kEntries[] = {
     {.id = "peephole_mask", .section = S::Images, .media = M::Image, .label = "pc_archive_peephole_mask",
      .asset = "/Assets/sh/effect/vfx_pic/holl/holl_002_alp.ftex", .unlock = "overlay", .note = kNoteImage},
 
+    // spoken lines: the radio's caster, the phone, the peephole, the bag and the fetus (formats/audio.md, SAL3)
     {.id = "radio_news", .section = S::Voices, .media = M::Sound, .label = "pc_archive_radio_news", .asset = "Play_radio_f010",
      .extra = "tria1000_101010", .unlock = "voice:tria1000_101010", .note = kNoteVoice},
     {.id = "radio_news2", .section = S::Voices, .media = M::Sound, .label = "pc_archive_radio_news2", .asset = "Play_radio_f050",
@@ -76,13 +79,14 @@ constexpr ArchiveEntry kEntries[] = {
      .extra = "tria1000_171010", .unlock = "voice:tria1000_171010", .note = kNoteVoice},
     {.id = "peephole_voice", .section = S::Voices, .media = M::Sound, .label = "pc_archive_peephole_voice", .asset = "Play_Peephole_Theater",
      .extra = "tria1000_151010", .unlock = "event:Play_Peephole_Theater", .note = kNoteVoice},
-    {.id = "bag", .section = S::Voices, .media = M::Dialogue, .label = "pc_archive_bag", .asset = "pab0", .extra = "TRIA1000_111010_0_mib",
+    {.id = "bag", .section = S::Voices, .media = M::Dialogue, .label = "pc_archive_bag", .asset = "pab", .extra = "TRIA1000_111010_0_mib",
      .unlock = "voice:tria1000_111010", .note = kNoteVoice},
     {.id = "fetus_1", .section = S::Voices, .media = M::Sound, .label = "pc_archive_fetus", .number = 1, .asset = "Play_voice_baby_mimicry_01",
      .extra = "tria1000_121010", .unlock = "voice:tria1000_121010", .note = kNoteVoice},
     {.id = "fetus_2", .section = S::Voices, .media = M::Sound, .label = "pc_archive_fetus", .number = 2, .asset = "Play_voice_baby_mimicry_02",
      .extra = "tria1000_1g1010", .unlock = "voice:tria1000_1g1010", .note = kNoteVoice},
 
+    // the photo pieces (gameplay.md 6.4, nazo.cpp kPieces) and the photo they make in the frame on the wall
     {.id = "photo_lisa", .section = S::Photos, .media = M::Photo, .label = "pc_archive_photo_lisa",
      .asset = "/Assets/sh/environ/object/shsb/label/shsb_labl001/scenes/shsb_labl001_mapc004.fmdl", .unlock = "photo:PhotoLisa", .note = kNotePhoto},
     {.id = "photo_tree", .section = S::Photos, .media = M::Photo, .label = "pc_archive_photo_tree",
@@ -98,6 +102,7 @@ constexpr ArchiveEntry kEntries[] = {
     {.id = "photo_complete", .section = S::Photos, .media = M::Photo, .label = "pc_archive_photo_complete", .unlock = "photo:complete",
      .note = kNotePhoto},
 
+    // the demos, in the order the game plays them (demo.md 1); a hallway demo plays on its floor with that floor's light and doors
     {.id = "preface", .section = S::Cutscenes, .media = M::Demo, .label = "pc_archive_preface", .asset = "gc_p02_500", .extra = "preface",
      .floor = "f000", .note = kNoteDemo},
     {.id = "awakening", .section = S::Cutscenes, .media = M::Demo, .label = "pc_archive_awakening", .asset = "gc_p00_022", .extra = "opening",
@@ -160,6 +165,7 @@ constexpr ArchiveEntry kEntries[] = {
     {.id = "teaser", .section = S::Cutscenes, .media = M::Demo, .label = "pc_archive_teaser", .asset = "gc_p06_010_final", .extra = "teaser",
      .floor = "f160", .unlock = "finished", .note = kNoteDemo},
 
+    // models: the gimmicks with their own motions (ShGimmickSetUp.lua), the characters of the demos and the things of the hallway
     {.id = "lisa_stand", .section = S::Models, .media = M::Model, .label = "pc_archive_lisa_stand", .asset = "Ocho", .extra = "OchoStop",
      .floor = "f010", .unlock = "gimmick:Ocho", .note = kNoteModel},
     {.id = "lisa_walk", .section = S::Models, .media = M::Model, .label = "pc_archive_lisa_walk", .asset = "Ocho", .extra = "Ocho",
@@ -196,6 +202,8 @@ constexpr ArchiveEntry kEntries[] = {
     {.id = "man", .section = S::Models, .media = M::Model, .label = "pc_archive_man", .asset = "/Assets/sh/chara/plr/Scenes/plr0_main0_def.fmdl",
      .floor = "f010", .unlock = "demo:gc_p06_010_final", .note = kNoteModel},
 
+    // content the game holds but never shows (fix-extras2's findings, docs/unused-content.md when it lands): opened by finishing the
+    // game once. The body in the bathtub is named by the task; the port's Game+ shows it in play (Game::Update)
     {.id = "bathtub_lisa", .section = S::Unused, .media = M::Model, .label = "pc_archive_bathtub",
      .asset = "/Assets/sh/environ/object/shsb/bath/shsb_bath001/scenes/shsb_bath001_ocho001.fmdl", .floor = "f010", .unlock = "finished",
      .note = "pc_note_archive_unused"},
@@ -296,6 +304,7 @@ std::string_view ArchiveSectionCover(ArchiveSection section) {
 
 int ArchiveThumbnailFrames(const ArchiveEntry& entry) {
     if (entry.media == ArchiveMedia::Model) return 30;
+    // the preface and the first awakening open on black; the teaser is played fast to its street
     if (entry.id == "preface" || entry.id == "awakening") return 420;
     if (entry.id == "teaser") return 60;
     if (entry.id == "ending") return 600;

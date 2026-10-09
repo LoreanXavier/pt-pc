@@ -1,6 +1,22 @@
 #version 460
 #include "common.glsl"
 
+// The flashlight reflection's colour (0x9359D0; the Draw2D list of its 64x64 view is built by 0x934E30; rendering.md 12.5).
+// The original draws, into a 64x64 RGBA8 region:
+//   1. Draw2D_ShSpotLightReflection: a strip quad over the whole region, vertices (0, 0), (1, 0), (0, 1), (1, 1), whose UVs are
+//      the screen positions of the four rays around the beam, sampling the scene;
+//   2. six times Draw2D_ShSpotLightReflection2 from the region into the 64x64 beside it and back (c0 = (64/w, 64/h, 1/w, 1/h));
+//   3. Draw2D_ShSpotLightReflection3 over the region (c1..c4 from 0x1C91980, c0 from 0x1C91970, c5 as above);
+// and 0x9359D0 reads the word 0x2000 bytes into the 64x64 copy at +0x2B8, the pixel at column 0, row 32.
+// Here: step 1 as the original's (affine UVs per triangle of the strip, the scene clamped to [0, 1] as the RGBA8 target keeps
+// it), the twelve passes of step 2 as a [1 2 1] filter each (a binomial of 24 taps per axis around that pixel, the taps
+// clamped to the region), step 3 left out, the result rounded to 8 bits. The scene is the HDR target after the forward pass
+// (exposure applied, before bloom and tone mapping). GUESSES: the shaders' expressions (ShShaders_ps4 ShSpotLightReflection,
+// 2 and 3), the texture 0x9359D0 binds (0xCDFA00 of 0x1E6D288) and the vertex table 0x1C91930 are not read yet.
+//
+// ids.x the scene image, ids.y the first of the two vec2 of the result in the luminance buffer; f0 = (uv0, uv1), f1 = (uv2, uv3)
+// the screen UVs of the quad's corners (rays at 315, 45, 225 and 135 degrees).
+
 layout(local_size_x = 64) in;
 
 layout(push_constant) uniform PassPush {
@@ -18,18 +34,22 @@ layout(std430, set = 1, binding = 5) buffer LuminanceOut {
 const int kSize = 64;
 const int kRadius = 12;
 const ivec2 kRead = ivec2(0, 32);
+// C(24, k): twelve [1 2 1] passes; the sum is 2^24
 const float kBinomial[25] = float[](1.0, 24.0, 276.0, 2024.0, 10626.0, 42504.0, 134596.0, 346104.0, 735471.0, 1307504.0, 1961256.0,
                                     2496144.0, 2704156.0, 2496144.0, 1961256.0, 1307504.0, 735471.0, 346104.0, 134596.0, 42504.0,
                                     10626.0, 2024.0, 276.0, 24.0, 1.0);
 
 shared vec3 s_sum[64];
 
+// the colour step 1 writes at a pixel of the region
 vec3 Warped(ivec2 pixel) {
     vec2 p = (vec2(pixel) + 0.5) / float(kSize);
     vec2 uv;
     if (p.x + p.y <= 1.0) {
+        // triangle (0, 0), (1, 0), (0, 1)
         uv = pass.f0.xy + p.x * (pass.f0.zw - pass.f0.xy) + p.y * (pass.f1.xy - pass.f0.xy);
     } else {
+        // triangle (1, 0), (0, 1), (1, 1)
         uv = pass.f1.zw + (1.0 - p.x) * (pass.f1.xy - pass.f1.zw) + (1.0 - p.y) * (pass.f0.zw - pass.f1.zw);
     }
     vec3 c = ImgLod(pass.ids.x, SMP_LINEAR_CLAMP, uv, 0.0).rgb;

@@ -106,6 +106,7 @@ void InstallCrashReporting(const std::filesystem::path& dump_dir, const std::str
 }
 
 std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointers) {
+    // one dump per process: a second fault while writing (or a handler chain) only logs
     if (g_dumping.fetch_add(1) != 0) {
         LogError("crash: {} (dump already written)", reason);
         return {};

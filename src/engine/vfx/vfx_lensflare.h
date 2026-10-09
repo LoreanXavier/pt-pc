@@ -9,6 +9,7 @@
 
 namespace pt::vfx {
 
+// 0x8FA8A0
 struct LensFlareField {
     bool valid = false;
     int32_t shape_type = 0;
@@ -19,6 +20,7 @@ struct LensFlareField {
     float Eval(const glm::vec2& p, float inv_aspect) const;
 };
 
+// 0x8F7B00
 struct LensFlareGraph {
     bool valid = false;
     float values[11] = {};

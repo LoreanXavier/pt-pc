@@ -13,6 +13,8 @@ struct Camera {
     float roll = 0.0f;
     float fov_y = glm::radians(60.0f);
     float near_plane = 0.05f;
+    // the far clip: the projection has none (reverse Z to infinity), but the SSAO fade ends at min(far, 250) (0xDA39F0); the
+    // game camera holds 100 m in play and in demos (rendering.md 12.17, boot_dof), a demo's farClip functor sets its own
     /* Not a clip distance (the projection is reverse-Z to infinity); it only bounds the SSAO fade, which the original ends at min(far, 250). */
     float far_plane = 100.0f;
 
@@ -44,6 +46,8 @@ struct Camera {
     }
 };
 
+// A transform between two game ticks, for the frames a window draws between them: rotation slerped, scale and translation
+// mixed (per element for a mirrored or degenerate transform); a move over 1 m in the tick is a cut and keeps the later one
 inline glm::mat4 BlendTransform(const glm::mat4& from, const glm::mat4& to, float t) {
     if (t >= 1.0f || from == to || glm::distance(glm::vec3(from[3]), glm::vec3(to[3])) > 1.0f) {
         return to;
@@ -67,6 +71,8 @@ inline glm::mat4 BlendTransform(const glm::mat4& from, const glm::mat4& to, floa
     return out;
 }
 
+// Keep a rotating actor root and its counter-animated bones in the same space.
+// inverse_blended_world is computed once per draw, shared by all its bones.
 inline glm::mat4 BlendSkinTransform(const glm::mat4& from_world, const glm::mat4& to_world,
                                     const glm::mat4& inverse_blended_world, const glm::mat4& from_skin,
                                     const glm::mat4& to_skin, float t) {
@@ -74,5 +80,6 @@ inline glm::mat4 BlendSkinTransform(const glm::mat4& from_world, const glm::mat4
     const glm::mat4 to = to_world * to_skin;
     return inverse_blended_world * (from + (to - from) * t);
 }
+
 
 }

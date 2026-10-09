@@ -10,6 +10,7 @@
 
 #include "engine/platform/http.h"
 
+// written at every build by cmake/version.cmake
 #if __has_include("pt_version.h")
 #include "pt_version.h"
 #endif
@@ -22,6 +23,7 @@
 
 namespace pt::update {
 namespace {
+// The placeholder until releases are public: the reserved .invalid domain never resolves, and no request is made for it.
 bool Placeholder(std::string_view url) {
     const auto scheme = url.find("://");
     const auto host_start = scheme == std::string_view::npos ? 0 : scheme + 3;
@@ -30,6 +32,7 @@ bool Placeholder(std::string_view url) {
     return host.empty() || host.ends_with(".invalid") || host == "invalid";
 }
 
+// Keep release assets as well as objects and strings; unrelated API fields are ignored by the caller.
 struct Value {
     std::string text;
     std::map<std::string, Value> members;
@@ -116,6 +119,7 @@ private:
                 return false;
             }
         }
+        // numbers, true, false, null
         const size_t start = at_;
         while (at_ < s_.size() && (std::isalnum(static_cast<unsigned char>(s_[at_])) || s_[at_] == '.' || s_[at_] == '-' || s_[at_] == '+')) ++at_;
         out.text = std::string(s_.substr(start, at_ - start));
@@ -223,6 +227,7 @@ std::optional<Release> ParseManifest(std::string_view json, std::string_view pla
         }
         return release;
     }
+    // Accept custom/legacy endpoints without requiring any manifest asset on the public release.
     const std::string* version = Text(root, "version");
     if (!version) return std::nullopt;
     Release release;
@@ -251,7 +256,7 @@ void Checker::Start() {
         http::Request request;
         request.url = url;
         request.timeout_ms = 5000;
-        request.follow_redirects = true;
+        request.follow_redirects = true;  // release hosts answer "latest" with a redirect
         request.max_body = 512 * 1024;
         if (const auto response = http::Get(request); response && response->status == 200) {
             if (auto release = ParseManifest(response->body, Platform()); release && CompareVersions(release->version, CurrentVersion()) > 0) {

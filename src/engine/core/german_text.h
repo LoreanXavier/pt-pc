@@ -1,6 +1,8 @@
 #pragma once
 #include <string_view>
 
+// German for the port's own menus (PC settings, extras, photo mode, loop browser, notes and prompts) and the added
+// languages' names on the option screen. The options screen's other texts and the subtitles are the game's own.
 namespace pt::german {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
@@ -48,6 +50,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Russisch"},
     {"op_sub_ukrainian","Ukrainisch"},
     {"op_sub_czech","Tschechisch"},
+    {"op_sub_polish","Polnisch"},
     {"pc_loop_browser","Schleifenauswahl"},
     {"pc_note_loop_browser_entry","Beliebige Schleife starten, ohne Ihren Spielstand zu ersetzen."},
     {"pc_loop_choose","Schleife wählen"},

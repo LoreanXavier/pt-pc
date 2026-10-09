@@ -28,6 +28,7 @@ std::optional<int64_t> ParseHttpDate(const std::string& text) {
         if (std::strcmp(month, kMonths[i]) == 0) mon = i;
     }
     if (mon < 0 || year < 1970) return std::nullopt;
+    // days from civil (proleptic Gregorian), no time zone involved
     const int y = year - (mon < 2);
     const int era = (y >= 0 ? y : y - 399) / 400;
     const int yoe = y - era * 400;
@@ -113,6 +114,7 @@ std::optional<Response> Get(const Request& request) {
 #else
 
 namespace {
+// The few libcurl entry points used, with the option numbers of curl.h (stable ABI since libcurl 7)
 using CURL = void;
 struct curl_slist;
 enum : int {
@@ -171,6 +173,7 @@ size_t OnHeader(char* data, size_t size, size_t count, void* user) {
     std::string lower = line;
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     if (lower.starts_with("http/")) {
+        // a new response (after a redirect): forget the previous one's headers
         response->date.reset();
         response->aged = false;
     } else if (lower.starts_with("date:")) {

@@ -27,6 +27,9 @@ vec4 Tex(uint index, vec2 uv) {
     return texture(textures[nonuniformEXT(index)], uv, g_mip_bias);
 }
 
+// The forward shaders output min(encode(colour) alpha, 1), premultiplied and sRGB encoded, for the original's blend on encoded values.
+// Flag 0x80 (the main view, RecordForward): write that value to the effect buffer, which vfx_composite puts over the scene on encoded
+// values; without it (the mirror view) write its linear value for the linear blend on the HDR target.
 vec4 ForwardOut(vec3 encoded_premultiplied, float a) {
     if ((draw.ids.z & 0x80u) != 0u) {
         return vec4(encoded_premultiplied, a);
@@ -55,7 +58,15 @@ void main() {
     vec3 T = normalize(in_tangent);
     vec3 B = normalize(in_bitangent);
     if (m.kind == KIND_PARALLAX) {
+        // The bathroom mirror as P.T. draws it, sh3dfw_parallax_refrection: the dirt (Base_Tex2, m.aux2, sampled raw at the
+        // clamped UV0 and decoded in the shader) lit by the hemisphere terms and the lights of MirrorLights (the handy light
+        // alone while it is on), over the mirror capture by the dirt's alpha. The shader writes its result to the gamma scene
+        // buffer without an sRGB curve, so the lit dirt stands there as an encoded value, and the capture it samples holds
+        // encoded values too.
         vec4 dirt = m.params.w > 0.5 ? Tex(m.aux2, clamp(in_uv0, 0.0, 1.0)) : vec4(0.0);
+        // PT_MIRROR_DIRT=0|1 (bit 1 of the draw flags): the mirror's blend forced to the reflection alone or to the lit
+        // dirt alone, so a shot with and one without measures which of the two is short of the original
+        // (scratch/mirror-split)
         if ((flags & 2u) != 0u) {
             dirt.a = (flags & 4u) != 0u ? 1.0 : 0.0;
         }

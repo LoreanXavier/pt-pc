@@ -67,6 +67,7 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
     const float aw = static_cast<float>(font.font.AtlasWidth());
     const float ah = static_cast<float>(font.font.AtlasHeight());
     if (shade == ui::UiShade::Border) {
+        // 0xDDAFB0 clamps the rim's taps to 4 texels (4 x 0.5 / size, doubled); the taps are 1.2 pixels of the original's 1080p
         params.extra = glm::vec4(4.0f / aw, 4.0f / ah, static_cast<float>(batch.Extent().height) / 1080.0f, 0.0f);
     }
     std::vector<ui::UiVertex> vertices;
@@ -79,6 +80,7 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
             }
             const glm::vec2 p0 = canvas.ToTarget(g.position) + snap;
             const glm::vec2 p1 = canvas.ToTarget(g.position + g.size) + snap;
+            // 0xD36980: the glyph's UV rect reaches half a texel past its cell on every side
             const float border = font.crisp ? 0.0f : 0.5f;
             const glm::vec2 uv0((static_cast<float>(g.glyph->atlas_x) - border) / aw, (static_cast<float>(g.glyph->atlas_y) - border) / ah);
             const glm::vec2 uv1((static_cast<float>(g.glyph->atlas_x + g.glyph->width) + border) / aw,
@@ -167,6 +169,8 @@ const UifView::World& UifView::Resolve(int index, std::vector<World>& cache, flo
     return world;
 }
 
+// A button prompt inside a text: centred on its advance and on the cap height of the line (the H of the font), the glow added under
+// it at 0.4 as the icon glows of the option screen are
 void UifView::DrawInlinePictures(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, const ui::TextStyle& style,
                                  const ui::TextLayout& layout, const UifInlinePicture& picture, float height, glm::vec4 color) const {
     const auto& textures = model_->Textures();
@@ -290,7 +294,9 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
             text_style.font_height *= text_scale;
             text_style.text_space *= text_scale;
             text_style.line_space *= text_scale;
+            if (state.text_line_pitch) text_style.line_space = *state.text_line_pitch - text_style.font_height * font->font.LineFactor();
             const UifInlinePicture* picture = state.inline_picture && state.inline_picture->texture >= 0 ? &*state.inline_picture : nullptr;
+            // the picture's disc or keycap is one em high, with a quarter em of space on both sides
             const float picture_height = picture ? text_style.font_height / std::max(0.05f, picture->body_height) : 0.0f;
             if (picture) {
                 text_style.inline_advance = picture_height * picture->body_width + 0.5f * text_style.font_height;
@@ -319,7 +325,7 @@ void UifView::Draw(ui::UiBatch& batch, const UiCanvas& canvas, int language, flo
             if (state.text_box) {
                 const auto box = *state.text_box;
                 layout = ui::LayoutTextInBox(*state.text, text_style, {box.x, box.y}, {box.z, box.w}, state.mirror_rtl);
-                if (!descriptions_audited_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) {
+                if (!descriptions_audited_ && !state.description_samples.empty() && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) {
                     descriptions_audited_ = true;
                     int count = 0, failures = 0, original_overflows = 0;
                     auto keys = PcDescriptionKeys();

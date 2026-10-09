@@ -48,6 +48,7 @@ struct DemoCameraParams {
     uint32_t set_mask = 0;
 };
 
+// defaults: CreateLight's reset 0xB25310
 struct DemoLight {
     std::string demo_id;
     std::string name;
@@ -99,6 +100,8 @@ struct DemoEffect {
     int created_frame = 0;
     int end_frame = -1;
     std::string sound_event;
+    // FxSoundCallProgramEffectNode (read by 0xB6DCB0): soundStop, flags bit 2 (0x37CD447C, stop the playing id when the effect
+    // instance is destroyed), the stop fade (0xD2ECAC68, seconds) and its curve (0xE3A9CADA, AkCurveInterpolation)
     std::string sound_stop;
     bool sound_stop_playing = false;
     float sound_stop_fade = 0.0f;
@@ -147,6 +150,8 @@ struct DemoModel {
     glm::mat4 world{1.0f};
     std::set<uint64_t> hidden_meshes;
     bool player_own = false;
+    // the model's bone simulation (.sim) and its state; the sections of the physics functor 0x116E2D91CDAE that take the
+    // model's units out of the world (the ending's plr0 at frames 4893 to 4927 and 5625 to 5659, around cuts)
     std::shared_ptr<const anim::SimRig> sim_rig;
     std::shared_ptr<anim::SimPhysics> sim;
     double sim_frame = -1.0;
@@ -174,12 +179,14 @@ struct PlayingDemo {
     bool loop = false;
     bool started = false;
     double startup = 0.0;
+    // game frames from Play to the start: 3, one more when a save is being written (demo.md Playback)
     double startup_frames = 0.0;
     bool startup_io_checked = false;
     double advance_wait = 0.0;
     double finish_wait = 0.0;
     bool skip_requested = false;
     bool end_reached = false;
+    // FinishMotion was posted in this play, by the data or by the runtime at the end (once a play, demo.md Playback)
     bool finish_motion_sent = false;
     std::shared_ptr<DemoStreamData> stream;
     std::shared_ptr<const DemoInfo> info;
@@ -209,6 +216,8 @@ struct PlayingDemo {
     bool player_taken = false;
     bool player_released = false;
     std::string player_model;
+    // 0x945620 clears the model's hide bits (+0x1AC bits 0 and 1) before it shows or hides a group, so the player's own
+    // body is drawn only in demos that run the mesh functor 0xBFA41F9E6521
     bool player_visible = false;
     std::vector<DemoModel> models;
     std::set<std::string> locators;
@@ -220,12 +229,18 @@ struct PlayingDemo {
     bool audio_clock = false;
     uint64_t audio_start_frames = 0;
     uint64_t audio_last_frames = 0;
+    // the audio clock's lead over the demo clock, smoothed (DemoSystem::Update), and its last reading in demo frames
     double audio_error = 0.0;
     double audio_frame = -1.0;
+    // the demo frame the audio clock's count starts from (0, or the frame of a ResyncAudio)
     double audio_base = 0.0;
+    // a demo played by another demo's play functor runs on that demo's clock (0x797650 -> 0xB15FC0: player +0x288 = the parent's
+    // player, +0x290 = the play event's frame), so its frame is the parent's minus the offset once that is positive
     std::string sync_parent;
     double sync_offset = 0.0;
     std::set<uint64_t> logged_functors;
+    // scenery hold (PlayScenery): the demo runs fast and silent to this frame and stays there, for its stage lights, fog, tone,
+    // exposure, models and effects; it shows no camera, characters, texts or fades and never finishes. Negative: a normal play
     double hold_frame = -1.0;
     bool Held() const { return hold_frame >= 0.0; }
 
@@ -240,18 +255,23 @@ public:
     void IndexStage(Stage& stage);
     void ForgetStage(const Stage& stage);
     bool Play(std::string_view demo_id);
+    // the ending street walk: plays the demo as scenery held at `frame` (PlayingDemo::hold_frame)
     bool PlayScenery(std::string_view demo_id, double frame);
+    // a held scenery demo has reached its frame
     bool SceneryReady() const;
     bool IsHeld(std::string_view demo_id) const;
+    // the exposure of a held scenery demo's camera (its lens is not used), when no demo camera is on screen
     const DemoCameraParams* SceneryCameraParams() const;
     void SetDemoTransform(std::string_view demo_id, const glm::quat& rotation, const glm::vec3& translation);
     void StopAll();
     void ToggleLoop(std::string_view demo_id);
     void Skip(std::string_view demo_id = {});
+    // the Archive's teaser (archive_theater.h): after a fast run to a frame, the demo's sound jumps there and its clock follows it
     void ResyncAudio(std::string_view demo_id);
     bool IsPlaying(std::string_view demo_id) const;
     bool IsAnyPlaying() const { return !playing_.empty(); }
     bool ControlsPlayer() const;
+    // a playing demo's camera is on screen (not the last camera kept while a demo holds the player)
     bool HasActiveCamera() const { return ActiveCamera() != nullptr; }
     bool CameraOverride(Camera& camera) const;
     bool CameraWorld(glm::vec3& position, glm::quat& rotation, float& fov_y) const;
@@ -261,16 +281,24 @@ public:
     void Update(float dt);
 
     void CollectDraws(std::vector<DrawItem>& out) const;
+    // The player's own model as plr0_main0_def_v00.parts describes it: the model file, its help bones and the groups its
+    // invisibleMeshNames hide (MESH_arm), for the body the mirror captures draw in play
     const std::string& PlayerModelFile();
     const std::set<uint64_t>& PlayerDefaultHidden();
+    // the player's body groups as the parts list them (the one model the original keeps for the session; a new session's
+    // body is the boot's)
     void ResetPlayerBody() { player_hidden_ = player_default_hidden_; }
     const std::set<uint64_t>& PlayerHidden() const { return player_hidden_; }
     std::shared_ptr<const anim::HelpBones> PlayerHelpBones();
+    // the bone simulation of the player's own model (null without a .sim or with PT_SIM=0)
     std::shared_ptr<const anim::SimRig> PlayerSimRig();
     const std::vector<DemoLight>& Lights() const { return lights_; }
     const std::vector<DemoEffect>& Effects() const { return effects_; }
     std::vector<DemoUiEvent> TakeUiEvents() { return std::exchange(ui_events_, {}); }
     const DemoCameraParams* CameraParams() const;
+    // the camera lens of one original frame (1/30 s) ago, for the depth of field: the DOF plugin (0xCC9D40) reads the GrCamera
+    // before the frame's demo update writes it (boot_dof: in all 313 frames whose focus changed, the blur ratio pass used the
+    // previous frame's; kill_dof 3750: 0.2 where the camera holds 0.118); null when no demo camera was shown then
     const DemoCameraParams* DofLens() const;
     const DemoScreenState* ScreenState() const;
     GimmickAnimation& Gimmicks() { return *gimmicks_; }
@@ -290,6 +318,7 @@ private:
     void SetPlayerMeshVisible(PlayingDemo& demo, uint64_t mesh, bool visible, bool functor);
     std::string MessageName(uint64_t hash) const;
     std::string ModelPath(const PlayingDemo& demo, const std::string& model, const std::string& event_path) const;
+    // a file string of the demo's events through its own DemoData fileParams, then the names every demo registered
     std::string FilePath(const PlayingDemo& demo, uint64_t code) const;
     void Start(PlayingDemo& demo);
     void Advance(PlayingDemo& demo, float dt);
@@ -346,6 +375,8 @@ private:
     std::string player_model_file_;
     std::string player_help_bone_file_;
     std::set<uint64_t> player_default_hidden_;
+    // Mesh groups of the player's own model whose own hidden bit is set (the model's +0x180 flags): the parts'
+    // invisibleMeshNames at first, then what the mesh functor and VisibleMesh events change; the one model persists
     std::set<uint64_t> player_hidden_;
     std::vector<DemoUiEvent> ui_events_;
     uint64_t next_sound_object_ = 0;
@@ -353,6 +384,7 @@ private:
     float game_focus_distance_ = 1.0f;
     float game_aperture_ = 100.0f;
     float game_shutter_speed_ = 1.0f / 120.0f;
+    // the demo camera on screen last; it stays there while no demo camera is enabled and a demo holds the player (0x7DF8B0)
     struct ShownCamera {
         bool valid = false;
         std::string demo_id;

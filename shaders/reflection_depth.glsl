@@ -12,8 +12,13 @@ float ReflectionSceneDepth(View view, vec2 uv) {
     return ReflectionContinuousDepth(footprint, fract(sample_pixel), point_depth, true);
 }
 
+// PT_REFLECT_DEPTH_LEGACY=1: the floor reflections take ReflectionSceneDepth's footprint test again (the passes set it from
+// their push constants)
 bool g_reflection_depth_legacy = false;
 
+// The floor reflections' scene depth (reflect_make.frag, reflect_make_rt.frag, the reflection layer): under a jittered view the
+// footprint interpolated only on a plane (ReflectionPlanarDepth), else the texel's own depth as without jitter. The mirror's
+// capture keeps ReflectionSceneDepth.
 float ReflectionFloorDepth(View view, vec2 uv) {
     if (g_reflection_depth_legacy) return ReflectionSceneDepth(view, uv);
     float point_depth = ImgLod(IMG_DEPTH, SMP_POINT_CLAMP, uv, 0.0).x;

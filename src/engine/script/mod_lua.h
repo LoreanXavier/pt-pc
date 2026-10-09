@@ -13,15 +13,20 @@ struct lua_Debug;
 
 namespace pt {
 
+// The mods' init.lua scripts (docs/modding.md). They run in a Lua state of their own, apart from the game's: a mod cannot
+// see or change the game's scripts, globals or save data, only listen to the events below and log. Each mod has its own
+// environment table; an error, a runaway loop (instruction budget) or too much memory stops that mod's hooks, never the game.
 class ModLua {
 public:
     enum class Event { FloorEnter, StepChange, Tick, Message, Count };
 
+    // the read-only state the scripts can ask for (Mod.Floor, Mod.Loop, Mod.Step)
     struct Queries {
         std::function<std::string()> floor;
         std::function<int()> loop;
         std::function<int()> step;
     };
+    // error: an error of a script, else its Mod.Log output
     using LogSink = std::function<void(bool error, std::string_view text)>;
 
     static constexpr uint64_t kInstructionBudget = 20'000'000;
@@ -34,8 +39,10 @@ public:
     ModLua& operator=(const ModLua&) = delete;
 
     void SetQueries(Queries queries) { queries_ = std::move(queries); }
+    // runs one mod's init.lua; false (the mod's hooks off) when it does not load or fails
     bool AddMod(std::string name, std::string_view chunk_name, std::span<const uint8_t> code);
 
+    // a mod has a hook for this event and has not failed
     bool Wants(Event event) const;
     void FloorEnter(std::string_view floor, int loop);
     void StepChange(int old_step, int new_step);
@@ -51,7 +58,7 @@ public:
 private:
     struct ModState {
         std::string name;
-        int handlers = -2;
+        int handlers = -2;  // LUA_NOREF: registry reference of {event name = {functions}}
         bool failed = false;
         int log_lines = 0;
         bool hooks[static_cast<int>(Event::Count)] = {};

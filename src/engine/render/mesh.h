@@ -22,8 +22,10 @@ struct Vertex {
     glm::vec4 color{1.0f};
     glm::u8vec4 joints{0};
     glm::u8vec4 weights{0};
+    // TEXCOORD2 (vertex usage 10): the layer mask's UV of the *_MaskUV layer materials (fox3ddf_blin_layer_bl_mu vs)
     glm::vec2 uv2{0.0f};
 };
+// the shaders that read vertex buffers directly (rt_skin.comp, rt_shadow.glsl, reflect_make_rt.frag) step 22 floats a vertex
 static_assert(sizeof(Vertex) == 88);
 
 enum class RenderPass : uint8_t { Opaque = 0, Decal = 1, Unlit = 2, Transparent = 3, Count = 4 };

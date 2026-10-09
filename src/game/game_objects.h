@@ -47,13 +47,18 @@ struct Gimmick {
     bool enabled = false;
     bool shown = false;
     bool placed = false;
+    // body components active (model +0x9C bit 0): set for enabled records with a locator by 0x953A80, cleared by 0x953FE0 when
+    // their locators are removed; the body updates (motion, motion events) only while active and not suspended by SetEnabled(false)
     bool active = false;
     uint32_t stage_id = 0;
     glm::mat4 world{1.0f};
+    // the locator RelocateGimmicks found, Ocho's too, whose body 0x953A80 does not move there
     glm::mat4 locator{1.0f};
     std::string motion;
     float motion_time = 0.0f;
     bool return_to_idle = false;
+    // body vfunc +0x238 (0x1257BF0): the motion layer holds a request. 0xAA18C0 sets it for every motion found in the
+    // archive and only a layer stop (0xAA1D90) clears it, which no gimmick path calls, so it stays set for the session
     bool motion_requested = false;
     bool silent_logged = false;
     float anim_rate = 1.0f;
@@ -64,14 +69,20 @@ struct Gimmick {
     bool freezer_strong = false;
     float freezer_timer = 0.0f;
     float freezer_interval = 0.0f;
+    // Views the body is hidden in (bit 0 the camera view, bit 1 the mirror capture): the body's show (vtable +0xA0)
+    // clears the mask, its hide (+0xA8) sets it, +0xB8 and +0xC0 clear and set one bit (0x12571F0, 0x1257220)
     uint8_t hidden_views = 0;
     std::set<uint64_t> hidden_meshes;
+    // the parts' invisibleMeshNames (ResolveModels), which a new session's records start from (Reset)
     std::set<uint64_t> parts_hidden_meshes;
     std::string sound_cnp;
+    // CallSound and PostSoundEvent posts still playing on the record's sound object
     std::vector<uint32_t> sound_handles;
 };
 
 void SetFixedRandomSeed(uint32_t seed);
+// The low 32 bits of sceKernelReadTsc, which the eboot's random picks read at the moment they pick (0x1175540, 0x42C9C0): the
+// clock, or after SetFixedRandomSeed a fixed sequence, so seeded runs repeat
 uint32_t ReadTsc();
 
 class OchoLogic {
@@ -144,6 +155,7 @@ private:
     glm::vec3 player_forward_{0.0f, 0.0f, 1.0f};
     glm::quat player_rotation_{1.0f, 0.0f, 0.0f, 0.0f};
     float player_yaw_ = 0.0f;
+    // the frame time gathered since the last game frame tick, and the dash step's second half for the tick after it
     float frame_dt_ = 0.0f;
     glm::vec3 dash_rest_{0.0f};
     int dash_frames_ = 0;
@@ -184,11 +196,17 @@ public:
     const std::string* MotionPath(std::string_view key) const;
     void ResolveModels();
     void CollectDraws(std::vector<DrawItem>& out) const;
+    // the feet of the characters drawn in the camera view now (Lisa), which the third person camera keeps out of
     void DrawnCharacters(std::vector<glm::vec3>& feet) const;
+    // the record passes CollectDraws' test (input script `expect gimmick`)
     bool GimmickDrawn(std::string_view name) const;
     void SetOchoTransform(const glm::mat4& world);
     void ShowOcho(bool visible);
     void HideRecordsWithoutLocator();
+    // The ShGimmick sound control (0x95CE60, at ShGimmick +0x70) is shared by the five records, and every record body holds
+    // one instance with index 0, so their motion events' dialogue all goes to its slot 0, posted at the slot's transform. Each
+    // record PlayMotion (0x1253990) sets the slot position to that body's position; ResetToLocators (0x953A80) sets the slot
+    // transform to the locator of each record it places, in record order.
     const glm::vec3& DialoguePosition() const { return dialogue_position_; }
     const glm::vec3& DialogueForward() const { return dialogue_forward_; }
 
@@ -199,6 +217,7 @@ private:
     void UpdateInView(Gimmick& g, float dt);
     void UpdateOchoRootMotion();
     void MotionStarted(const Gimmick& g);
+    // where the record's sound object stands: its connect point (CallSound's cnp), else its body (0x954270)
     glm::vec3 SoundPosition(const Gimmick& g) const;
     uint32_t Random();
 
@@ -215,6 +234,7 @@ private:
     glm::vec3 dialogue_position_{0.0f};
     glm::vec3 dialogue_forward_{0.0f, 0.0f, 1.0f};
     uint32_t rng_ = 0x6C078965u;
+    // the gimmicks already reported to the Archive (bit per GimmickType)
     uint32_t archive_noted_ = 0;
 };
 

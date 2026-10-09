@@ -124,6 +124,7 @@ const Node* File::Input(uint32_t node, uint8_t port) const {
     return nullptr;
 }
 
+// 0xB60640
 bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error) {
     out = File{};
     if (data.size() < kHeaderSize + 1 || std::memcmp(data.data(), "vfx", 3) != 0) {

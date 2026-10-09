@@ -10,6 +10,7 @@
 namespace pt::audio {
 namespace {
 
+// a mod's sh/sound/wem/<media id>.wem (or a 16-bit PCM .wav) in place of the bank's embedded media (docs/modding.md)
 std::shared_ptr<Media> ModMedia(uint32_t id) {
     if (!mods::Active()) {
         return nullptr;

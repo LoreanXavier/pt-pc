@@ -13,6 +13,9 @@
 
 namespace pt::anim {
 
+// Help-bone drivers (.frdv): the HelpBone anim plugin (0xAE6910; per frame 0xAE7410 -> 0xAE7420) places every driven
+// bone from the model space pose once the rig and all other bones are placed. Types 1, 2, 7, 11, 12 and 13 are the
+// ones in P.T.'s files (docs/formats/motion.md, section .frdv); other types leave their bone as it is.
 enum class HelpBoneType : uint16_t {
     SlideByAngle = 1,
     Follow = 2,
@@ -50,13 +53,16 @@ public:
     bool Parse(std::span<const uint8_t> data, std::string* error);
     const std::vector<HelpBoneEntry>& Entries() const { return entries_; }
     size_t UnknownEntries() const;
+    // Model space rotations and positions of every bone, changed in place for the driven bones in entry order.
     void Evaluate(std::span<const glm::vec3> bind_local, std::span<glm::quat> rotation, std::span<glm::vec3> position) const;
+    // The same on bone matrices without scale (ComputeBoneWorld output).
     void Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world) const;
 
 private:
     std::vector<HelpBoneEntry> entries_;
 };
 
+// PT_HELP_BONES_OFF=1 turns the evaluation off (for comparisons).
 bool HelpBonesEnabled();
 
 }

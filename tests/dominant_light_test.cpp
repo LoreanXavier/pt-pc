@@ -1,3 +1,5 @@
+// DominantLightSearch's change over time (0x8D12A0): small changes are taken at once, changes over 22.5 degrees turn with w 1
+// and changes over 45 degrees fade out and in, each over 1/4 s of game time.
 #include <cmath>
 #include <cstdio>
 
@@ -28,6 +30,7 @@ glm::vec3 Dir(float degrees) {
 int main() {
     const float frame = 1.0f / 30.0f;
     {
+        // the first result after the default (0, -1, 0) is 90 degrees away: a fade
         pt::DominantLightState s;
         glm::vec4 v = s.Step(Dir(0.0f), frame);
         Expect(Near(v, glm::vec4(0.0f, -1.0f, 0.0f, 1.0f - 2.0f * 4.0f * frame)), "fade starts from the old direction", v);
@@ -51,6 +54,7 @@ int main() {
         Expect(Near(v, glm::vec4(Dir(40.0f), 1.0f - 8.0f * frame)), "a 60 degree change fades", v);
     }
     {
+        // a render long after the last one: the whole change happens in that step
         pt::DominantLightState s;
         const glm::vec4 v = s.Step(Dir(0.0f), 2.0f);
         Expect(Near(v, glm::vec4(Dir(0.0f), 1.0f)), "a long gap settles at once", v);

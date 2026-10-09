@@ -55,10 +55,13 @@ public:
 
     PlayingId PostEvent(std::string_view event_name, GameObjectId object = 0);
     PlayingId PostEventId(uint32_t event_id, GameObjectId object = 0);
+    // the event playing these media of its container in order, once (SoundEngine::PostEventMedia)
     PlayingId PostEventMedia(std::string_view event_name, std::vector<uint32_t> media_ids, GameObjectId object = 0);
     PlayingId PostDialogueEvent(std::string_view dialogue_event, std::span<const std::string_view> arguments, GameObjectId object = 0);
     PlayingId PostDialogueEventId(uint32_t dialogue_event_id, std::span<const std::string_view> arguments, GameObjectId object = 0);
+    // stop every voice of a playing id with a fade of that curve (AK::SoundEngine::ExecuteActionOnPlayingID Stop)
     void StopPlayingId(PlayingId id, float fade_seconds = 0.0f, Interp curve = Interp::Linear);
+    // move every voice of a playing id to that time of its media (AK::SoundEngine::SeekOnEvent)
     void SeekPlayingId(PlayingId id, float seconds);
     void StopAll(float fade_seconds = 0.0f);
     bool IsPlaying(PlayingId id) const;
@@ -113,6 +116,7 @@ private:
     SubtitleTable subtitles_;
     std::mutex warn_mutex_;
     std::unordered_set<uint32_t> warned_events_;
+    // PT_SOLO_EVENT: the one event posted, 0 all
     uint32_t solo_event_ = 0;
 };
 

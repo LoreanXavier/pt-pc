@@ -14,8 +14,11 @@ struct GpuMesh;
 enum class LightType : uint8_t { Point = 0, Spot = 1 };
 enum class AreaClipMode : uint8_t { None = 0, Box = 1, ProjectiveAperture = 2 };
 
+// SceneLight::id of the player's handy light (RenderSceneBuilder::AddHandyLight); the mirror's LocalLight is this light
 constexpr uint64_t kHandyLightId = 0x48414E44594C4954ull;
+// SceneLight::id of the MirrorLight, the handy light seen in the mirror (RenderSceneBuilder::AddMirrorLight)
 constexpr uint64_t kMirrorLightId = 0x4D4952524F524C54ull;
+// SceneLight::id of the first of the handy light's four reflection lights (RenderSceneBuilder::AddHandyReflection), + 0 to 3
 constexpr uint64_t kHandyReflectionId = 0x5245464C45435430ull;
 
 struct SceneLight {
@@ -49,9 +52,18 @@ struct SceneLight {
     bool masked = false;
     float mask_fov = 0.0f;
     int32_t mask_texture = -1;
+    // The light data's priority byte (+0x69): 0x40 by default (0xD4DF90), 0x80 for demo lights and light copies (0xCD9FE0),
+    // 0xC0 for level lights (lightsel_f060, lightsel_f010); the shadow selection takes the lights below 0x80 first
     uint8_t priority = 0x40;
+    // Views the light is left out of, as DrawItem::hidden_views: bit 0 the camera view, bit 1 the mirror view. The capture
+    // views select and shadow their own lights (0xD3F0C0 gives MirrorCapture and MirrorCaptureLow their own limits of 2 and
+    // 2), so a light only the mirror view has takes its shadow casters from that view (RecordShadows)
     uint8_t hidden_views = 0;
+    // the entity or demo light name for the PT_SHOT_LIGHTS log (empty for effect lights)
     std::string name;
+    // The point the shadow ranking and the light LOD measure from, GrLight +0x80. Level lights: the irradiationPoint's position,
+    // or the light's own (spots 0xE166A0 through +0xD0, which 0xCDB4F0 copies; points 0xE10B90 through 0xCDA930); other
+    // lights: the centre of their grid box
     glm::vec3 rank_point{0.0f};
     bool has_rank_point = false;
 };
@@ -64,12 +76,14 @@ struct SceneProbe {
     float weight = 1.0f;
     int priority = 0;
     std::array<glm::vec3, 9> sh{};
+    // the ShLightProbe entity (logs)
     std::string name;
 };
 
 struct SceneMirror {
     const GpuMesh* mesh = nullptr;
     glm::mat4 transform{1.0f};
+    // the Mirror's lightAreaLocatorHandle box, [-0.5, 0.5] on each axis in this frame (a Locator's box is size wide, 0x51BB50)
     glm::mat4 light_area{1.0f};
     bool has_light_area = false;
 };
@@ -114,17 +128,22 @@ struct ScreenSettings {
     float shutter_speed = 0.0f;
     float zoom = 1.0f;
     bool local_reflections = true;
+    // the main view's byte +0x5D4 (0xCAF440, set by the floor environment 0x922C60 on f110 only): its light selection
+    // (0xD3F0C0) then allows 10 shadowed lights below priority 0x80 and 5 more instead of 3 and 5
     bool wide_shadow_limit = false;
+    // ReflectMapBlend m_localParam[1].zw and [2].w (0xDDFD60): strength scale, bias, edge flag (rendering.md 12.16)
     float reflect_scale = 1.0f;
     float reflect_bias = 0.0f;
     bool reflect_edge = false;
     bool colour_banding_canceller = false;
+    // the SUBSURFACE_SCATTER plugin's bit in the main view's plugin mask (0x922C60 -> 0xCAF3E0): set on the ending only
     bool subsurface_scatter = false;
 };
 
 struct TppAtmosphereSettings {
     bool enabled = false;
     bool tonemap = false;
+    // an enabled TppSky: the sky pixels take Sky_Draw_TppBaked's far fog and Bayer offset (compose.frag)
     bool sky = false;
     float threshold = 0.3f;
     float range = 8.0f;
@@ -138,6 +157,8 @@ struct TppAtmosphereSettings {
     glm::vec3 fog_rayleigh{0.0f};
     float exposure_offset_values[3] = {0.0f, 0.0f, 0.0f};
     float exposure_offset_targets[3] = {0.0f, 0.0f, 0.0f};
+    // the atmosphere's directional light over pi (0x8EEC00: the moon in P.T., moonColor x moonLux / pi), its direction toward
+    // the light (m_localParam[1] of VolFog_TppVolFog) and the fog's dirLightGain (0x906330)
     glm::vec3 dir_color{0.0f};
     glm::vec3 light_dir{0.0f, 1.0f, 0.0f};
     float dir_gain = 0.0f;
@@ -151,13 +172,20 @@ struct TppAtmosphereSettings {
     bool area_inverse = false;
 };
 
+// OccluderEx (0xE07C70): a planar polygon of up to 7 points; the culling core leaves out a grid box it hides from the eye
 struct SceneOccluder {
     std::array<glm::vec3, 7> points{};
     uint32_t count = 0;
     bool one_sided = false;
+    // the runtime occluder's flag 4 (0xD53AC0 passes it to 0xD2A100, which then takes the other distance limit and
+    // 0xD2AC10 keeps such occluders by distance); which OccluderEx property sets it was not traced (0xDA78B0), so none
     bool flag4 = false;
 };
 
+// The flashlight reflection's colour sample (0x9359D0, rendering.md 12.5): the world points whose screen positions are the
+// corners of the Draw2D_ShSpotLightReflection quad, in the order of its vertices (0, 0), (1, 0), (0, 1), (1, 1). The renderer
+// projects them with the camera view, samples the scene through the quad as SceneRenderer::RecordReflectionSample describes
+// and returns the colour kFramesInFlight frames later in RenderStats::reflection_readback
 struct SceneReflectionSample {
     bool active = false;
     glm::vec3 points[4]{};
@@ -170,6 +198,8 @@ struct SceneLighting {
     std::vector<SceneProbe> probes;
     std::vector<SceneMirror> mirrors;
     std::vector<SceneOccluder> occluders;
+    // 0x959FD0: the floor's MirrorCapture flag (0x1B86A28) and a MirrorSwitch viewport bit (0x1C938D0) are set; bit 1
+    // (the High traps) picks MirrorCapture, 512x512, over MirrorCaptureLow, 128x128 (0x959070)
     bool mirror_capture = false;
     bool mirror_high = false;
     std::string reflection_texture;

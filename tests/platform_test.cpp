@@ -1,3 +1,5 @@
+// The platform layer (src/engine/platform: os, http, update_check) on the platform it is built for. No network: the HTTP
+// part checks only the date parser; tools/linux/run_tests.sh and the installer's --check-update make the real requests.
 #include "engine/platform/http.h"
 #include "engine/platform/os.h"
 #include "engine/platform/update_check.h"
@@ -72,6 +74,8 @@ int main(int argc, char** argv) {
     const auto unsafe_asset = update::ParseManifest(R"({"tag_name":"v1.0.2","html_url":"https://example.org/r",
         "assets":[{"name":"P.T.PC.Port.Setup.exe","browser_download_url":"http://example.org/setup.exe"}]})", "windows");
     check(unsafe_asset && unsafe_asset->url == "https://example.org/r", "non-HTTPS asset is ignored");
+    // a placeholder address (the reserved .invalid domain) sends nothing and is done at once; the built-in address (the GitHub
+    // release manifest, docs/updates.md) is asked for real, and the answer, or none when offline, comes within the timeout
     if (os::GetEnv("PT_UPDATE_MANIFEST_URL").empty()) {
 #ifdef _WIN32
         _putenv_s("PT_UPDATE_MANIFEST_URL", "https://releases.invalid/pt-port/latest.json");
@@ -93,6 +97,8 @@ int main(int argc, char** argv) {
         std::printf("update check at %s: %s\n", update::ManifestUrl().c_str(), newer ? (newer->version + " " + newer->url).c_str() : "nothing newer");
         check(built_in.Done(), "the built-in manifest address answers or times out");
     }
+    // --network: the real HTTPS path (WinHTTP, or libcurl loaded at run time) against a public endpoint, and the update check
+    // against PT_UPDATE_MANIFEST_URL when it is set
     if (argc >= 2 && std::string_view(argv[1]) == "--network") {
         http::Request request;
         request.url = "https://www.google.com/generate_204";
@@ -135,6 +141,7 @@ int main(int argc, char** argv) {
         if (f) std::fclose(f);
     }
     std::atomic<bool> cancel{false};
+    // the test runs itself as the child: no shell, the same on both platforms
     const std::filesystem::path self = std::filesystem::absolute(argv[0]);
     const auto exit3 = os::RunProcess(self, {"--child-exit", "3"}, dir, dir / "out.log", cancel, std::chrono::seconds(10));
     const auto slow = os::RunProcess(self, {"--child-sleep", "30"}, dir, dir / "slow.log", cancel, std::chrono::milliseconds(500));

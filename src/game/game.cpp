@@ -26,12 +26,26 @@ namespace {
 
 constexpr double kGameFrame = 1.0 / 30.0;
 constexpr float kBrowseFadeSeconds = 0.5f;
+// the ending demo frame the street walk keeps as scenery: the wide shot of the street after the close-up (5700), before the white fade
 constexpr double kStreetSceneryFrame = 5760.0;
+// the street walk: where the outro's man walks at that frame, facing down the street, and the walls around the straight street
+// (ending file space x and z; the building fronts stand at about x -19 and 12.5, the ground ends at z -14)
 const glm::vec3 kStreetSpawn(-1.15f, 0.05f, 27.0f);
 constexpr glm::vec2 kStreetMin(-19.5f, -12.5f);
 constexpr glm::vec2 kStreetMax(13.5f, 190.0f);
+// the street's ambience: the rain the hallway hears outside its windows (sfx_common)
 constexpr const char* kStreetAmbience = "Play_sfx_rainfall_01";
 
+// The flashlight model's own bbox is +/-0.0246 m across and -0.1139 to +0.1160 m along its local Z, and that Z is the beam:
+// the body is 0.23 m long, its head (the lens end, the wider half) is local +Z, and its mid point sits 0.1159 m behind the
+// tip. The beam leaves the flash point - the point HandyLightPose puts where the reference captures put the light and
+// Game::UpdateHandyReflection reads its cone back from - and the player's right hand is at that same point, thumb and fingers
+// pinched to hold it. Standing the model's mid point on the flash point therefore put its whole body behind the hand, the
+// tail 0.34 m from the camera, and left the lens 0.10 m short of the cone the player is meant to be shining. This offset is
+// the mid point's place in the beam's own frame (x right of the beam, y up, z along it), measured from the flash point, so
+// the head and its lit lens stand just past the flash point on the beam's own axis and the hand wraps the body. It was
+// measured by screenshotting candidates and reading the model's own pixels against the hand's (scratch/handy_sweep.py,
+// scratch/handy_grip.py, scratch/handy_hand.py); PT_HANDY_MODEL_POS=x,y,z overrides it.
 constexpr glm::vec3 kHandyModelOffset{-0.105f, 0.020f, -0.045f};
 
 float NextRandom(uint32_t& state) {
@@ -73,6 +87,8 @@ bool Game::Init(const GameConfig& config) {
     RunSetupScript("as/sh/level_asset/chara/gimmick/ShGimmickSetUp.lua");
     RunSetupScript("as/sh/sound/scripts/motion/setup.lua");
     objects_.ResolveModels();
+    // the theater's session shares the player's animation set the first game loaded (its globals hold what the first game's
+    // player plays, which a second load would replace under it)
     if (!config.theater) {
         LoadPlayerAnimation(vfs_);
     }
@@ -82,6 +98,7 @@ bool Game::Init(const GameConfig& config) {
         fox_rng_ = config.seed;
         SetFixedRandomSeed(config.seed);
     } else {
+        // the Fox generator is seeded once per boot from the time (0xA5AF60), so every play rolls its own f160 light and blur pulses
         /* Seeded from the clock once per boot like the original (0xA5AF60): the f160 light and blur pulses are meant to differ from play to play. */
         fox_rng_ = ReadTsc() | 1u;
     }
@@ -167,6 +184,7 @@ void Game::OnStageUnloading(Stage& stage) {
     if (audio_) {
         audio_->OnStageUnloading(stage);
     }
+    // ShGimmick RemoveLocators (0x1253D50) sets flag 0x40, and the next ShGimmick update runs 0x953FE0; AddLocators sets nothing
     locators_dirty_ = true;
 }
 
@@ -182,9 +200,11 @@ void Game::SpawnPlayer(Stage& stage) {
 }
 
 void Game::Update(float dt, const InputState& pad_input) {
+    // a save dialog is a system dialog on the PS4: it takes the pad, the game gets no input while it is open
     static const InputState kNoInput{};
     const InputState& input = save_dialog_ || EndingOutroInputBlocked(controller_.Step()) ? kNoInput : pad_input;
     if (loop_reload_pending_) {
+        // the loop browser's pick: the screen fades out first, then the session the browser was used in is stopped
         browse_fade_wait_ -= dt;
         if (browse_fade_wait_ <= 0.0f) {
             loop_reload_pending_ = false;
@@ -196,6 +216,8 @@ void Game::Update(float dt, const InputState& pad_input) {
     if(progress_reset_pending_) {
         progress_reset_pending_=false;
         LogInfo("save: confirmed reset restarts the current game session");
+        // the reset is a new game as a fresh boot without a save starts it: nothing of the session it was made in carries over
+        // (its demos, speech, sounds, Lisa's kill and the player's body), as for a loop browser pick
         TearDownSession();
         controller_.ChangeGameStep("FinishEndingRestartGame");
     }
@@ -211,6 +233,7 @@ void Game::Update(float dt, const InputState& pad_input) {
     grain_time_ += dt;
     game_frame_tick_ = grain_time_ + 1e-6 >= kGameFrame;
     if (game_frame_tick_) {
+        // 0x9398E0: grain noise offset per game frame
         grain_time_ = std::fmod(grain_time_ + 1e-6, kGameFrame);
         effects_.grain_offset = glm::vec2(NextRandom(grain_seed_), NextRandom(grain_seed_));
     }
@@ -231,6 +254,10 @@ void Game::Update(float dt, const InputState& pad_input) {
     messages_.Dispatch();
     demos_.Update(dt);
     messages_.Dispatch();
+    // The next hallway copy is loaded when the player passes the clock. Its collision worlds are built on a worker and taken
+    // kCollisionBuildTicks ticks (half a second) later, always on that tick, while the new stage is still behind the closed end
+    // door: the synchronous rebuild there took 25 ms of the main thread, which with the stage load made the hitch at the clock
+    // on every loop
     constexpr uint64_t kCollisionBuildTicks = 30;
     if (stages_.CollisionBuildRunning() && frame_ >= collision_take_frame_) {
         stages_.FinishCollisionBuild(collision_, &surfaces_, line_collision_, reflection_collision_);
@@ -246,6 +273,8 @@ void Game::Update(float dt, const InputState& pad_input) {
         }
         collision_generation_ = stages_.CollisionGeneration();
     } else if (geom_generation_ != stages_.GeomGeneration()) {
+        // a door or the clock's models switching their collision (demo scripts, several times a loop): owner flags, not a
+        // rebuild of every loaded stage's triangles (6 to 25 ms each)
         const auto start = std::chrono::steady_clock::now();
         stages_.UpdateCollisionActive(collision_, &surfaces_, &line_collision_, &reflection_collision_);
         geom_generation_ = stages_.GeomGeneration();
@@ -271,6 +300,8 @@ void Game::Update(float dt, const InputState& pad_input) {
         context.peephole_theater = nazo_.IsPeepholeTheaterActive();
         if (!demo_control) {
             player_.Update(dt, input, collision_, context);
+            // the camera plugin's zoom-out branch (0x984A62) calls AbortPeephole once in every game frame the zoom falls; the
+            // port's zoom runs per tick, so a fall in either tick of the frame aborts once, on the next frame tick
             zoom_fell_ = zoom_fell_ || player_.ZoomFalling();
         }
         if (zoom_fell_ && game_frame_tick_) {
@@ -295,6 +326,7 @@ void Game::Update(float dt, const InputState& pad_input) {
             }
         }
         trap_dt_ += dt;
+        // once per game frame: at the player's frame end, and while a demo holds the player (who is not updated) on the frame tick
         if ((demo_control ? game_frame_tick_ : player_.FrameEnds()) && (!config_.theater || theater_.traps)) {
             traps_.Update(trap_dt_);
             trap_dt_ = 0.0f;
@@ -343,6 +375,7 @@ uint32_t Game::SurfaceMaterial(const glm::vec3& feet) const {
             material = t.material;
         }
     }
+    // the street walk: the road and sidewalks carry no footstep material (no movement hull), their steps sound as concrete
     if (material == 0 && street_walk_) {
         material = 0x5F263606;
     }
@@ -369,16 +402,26 @@ void Game::CollectDraws(std::vector<DrawItem>& out) {
             out.push_back(item);
         }
     }
+    // Game+ tier 2: Lisa's left side drawn as hsh0's (GamePlusArm); after the mockup draws, so smodel's bind pose Lisa shows it too
     if (GamePlusTier() >= 2 && game_plus_arm_.Prepare(models_)) {
         game_plus_arm_.Apply(out);
     }
 }
 
+// The player's own body in the mirror. The MirrorCapture views (view index 1) draw it and the camera view does not: floor_f060
+// 3420 to 3500 and the user's PS4 screenshot of 30.09 show the player's hood, jacket, shirt and chin in the mirror, after
+// gc_p00_030 had shown MESH_arm and hidden MESH_ROOT (0x945620), so in play the model has its parts' groups again (MESH_arm,
+// the first-person arms, hidden). It is posed by the walk and stand clips that place the camera (PlayerBody) and drawn only
+// while a capture runs (0x959FD0), no demo holds the player and the peephole theater does not carry the camera away from the
+// body (the user: the player is not seen while peeking through the hole). The camera view's shadow maps leave it out
+// (hidden_views bit 0); the mirror view's MirrorLight takes it as a caster (RecordShadows).
 void Game::AddMirrorBody(std::vector<DrawItem>& out) {
+    // PT_MIRROR_BODY=0 drops the player's body alone from the capture, so a shot with and one without show its share
     static const bool body_off = [] {
         const char* off = std::getenv("PT_MIRROR_BODY");
         return off && *off == '0';
     }();
+    // the free camera's and the third person view's body (BodyShown) needs no mirror: it draws in the camera view too
     const bool third_person_transition = third_person_ && !FreeView() && third_person_weight_ > 0.0f && player_.handy_light.enable;
     if (body_off || !player_.spawned || (!BodyShown() && !third_person_transition && (!effects_.mirror_capture || mirror_viewport_bits_ == 0 || demos_.ControlsPlayer() ||
         nazo_.IsPeepholeTheaterActive()))) {
@@ -393,12 +436,23 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     const ModelEntry* entry = file.empty() ? nullptr : models_.Get(file);
     const std::shared_ptr<const anim::HelpBones> help = demos_.PlayerHelpBones();
     const std::shared_ptr<const anim::SimRig> sim = demos_.PlayerSimRig();
+    // The free camera and the photo mode show the body from outside, holding the flashlight. The light arm is one pose
+    // (0xFC517D57B3A9F1EE: the fist raised to the chin) that does not follow the view's pitch, while the light turns with the view
+    // about the wrist (HandyLightPose). There the hand takes the light's frame: its pose against the light at kGripPitch, with
+    // the view's pitch and the aim now (two bone IK of the arm, PlayerBody::ReachLeftHand), and the flashlight (0.23 m long, as
+    // the player parts' lig0_main0_def) lies in the fist along the beam. The light then leaves its lens, 0.12 m ahead of where
+    // the light stands in play (the original's flash point is at the fist's front, which a body that long would push into the
+    // face). The mirror keeps the original's arm
     handy_lens_valid_ = false;
     glm::mat4 grip_hand(1.0f);
     glm::mat4 grip_prop(1.0f);
     bool gripped = false;
     const PlayerBody::HandReach reach = [&](const glm::mat4& hand_model, glm::mat4& target_model) {
         constexpr float kGripPitch = -15.0f;
+        // the fist's hollow in the hand bone's frame (x along the fingers, y from the finger tips to the back of the hand, z across
+        // it): the fingers' first joints stand at x 0.085 to 0.090, y 0.013 to 0.018, the middle ones at x 0.10 to 0.12, y -0.01,
+        // the last ones curled back to x 0.11, y -0.035 to -0.041 (PT_GRIP_LOG); the flashlight runs across the hand there. At
+        // (0.088, -0.030) it lay on the finger tips with the palm open above it (the user's still of 06.10)
         constexpr glm::vec3 kFist{0.095f, -0.013f, -0.005f};
         constexpr float kHoldAt = 0.06f;
         constexpr float kGripRaise = 25.0f;
@@ -407,7 +461,14 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         };
         const glm::mat4 body = player_.PoseTransform();
         const glm::mat4 hand_world = body * hand_model;
+        // The hand is posed against the light's frame of the view, but the body (and the arm's shoulder) follows the view's yaw
+        // eased (10.3): in a fast turn it lags the view by up to 150 degrees, and a hand put where the view's frame says swung
+        // round the head and into it. The frame here keeps within kGripLag of the body's facing; the light still shines along
+        // the view (it leaves the lens, so in such a turn the beam leaves the flashlight at an angle for a moment)
         constexpr float kGripLag = 0.4363323f;
+        // the drawn eye: the body is drawn half a step behind the logic on a frame's last tick (Player::DrawnOffset); posed against
+        // the logic's eye the hand shook by that half step every other tick while walking (the light leaves its lens: the beam
+        // shook with it)
         Camera own = player_.MakeCamera();
         own.position += player_.DrawnOffset();
         const float lag = std::remainder(player_.CameraFoxYaw() - player_.BodyFoxYaw(), 6.28318531f);
@@ -419,11 +480,18 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         glm::vec3 ref_flash, ref_dir, ref_right, ref_up;
         HandyLightPose(reference, reference.position + reference.Forward() * 5.0f, 0.0f, 0.0f, ref_flash, ref_dir, &ref_right, &ref_up);
         glm::vec3 flash, dir, right, up;
+        // the aim point turned with the frame about the eye
         const glm::vec3 aim = own.position + glm::angleAxis(yaw_back, glm::vec3(0.0f, 1.0f, 0.0f)) * (light_aim_ - own.position);
         HandyLightPose(own, aim, handy_hold_, handy_demo_, flash, dir, &right, &up);
         const glm::mat4 aim_reference = glm::inverse(frame(ref_right, ref_up, ref_dir, ref_flash));
         grip_hand = frame(right, up, dir, flash) * aim_reference * hand_world;
         const glm::vec3 fist(aim_reference * hand_world * glm::vec4(kFist, 1.0f));
+        // The fist's hollow runs along the hand bone's -z (the fingers' joints line up across z, PT_GRIP_LOG). Carried by the
+        // light's frame the hand kept the light arm's pose, whose hollow stands about 22 degrees off the beam (prop axis
+        // (-0.36 -0.14 -0.92) in the hand's frame), so the flashlight, laid along the beam, crossed the fingers diagonally: its
+        // head over the knuckles and its tail out past the palm, read as lying on the hand rather than held. The hand turns
+        // about the fist's hollow until that hollow runs along the beam; the hollow's point stays, so the flashlight keeps its
+        // place and only the hand closes round it
         {
             const glm::vec3 hollow_point(grip_hand * glm::vec4(kFist, 1.0f));
             const glm::vec3 hollow = glm::normalize(glm::vec3(grip_hand * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
@@ -431,7 +499,10 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                                    glm::translate(glm::mat4(1.0f), -hollow_point);
             grip_hand = turn * grip_hand;
         }
+        // the fist holds the body near its tail (local z -0.06 of -0.114), so the tail clears the face at every pitch
         grip_prop = glm::inverse(grip_hand) * frame(glm::cross(up, dir), up, dir, flash + right * fist.x + up * fist.y + dir * (fist.z + kHoldAt));
+        // looking up past kGripRaise the hand would follow the view over the head: it stays where kGripRaise puts it and only
+        // turns the light up
         const Camera view = own;
         if (view.pitch > glm::radians(kGripRaise)) {
             Camera raised = view;
@@ -439,6 +510,10 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
             const glm::quat lower(view.Forward(), raised.Forward());
             grip_hand[3] = glm::vec4(view.position + lower * (glm::vec3(grip_hand[3]) - view.position), 1.0f);
         }
+        // The flashlight (0.23 m, its tail 0.114 m behind its middle) must not pass through the head: looking up, and in a turn
+        // the body has not caught up with, the light's frame put its tail into the forehead and the hair. The hand moves out of
+        // the head's way along the line from the head's middle (SKL_004_HEAD raised by kHeadCentre) to the flashlight's nearest
+        // point, until that point is kHeadClear from it
         constexpr float kHeadClear = 0.17f;
         constexpr float kHeadCentre = 0.09f;
         if (glm::mat4 head_model; player_.BoneModel("SKL_004_HEAD", head_model)) {
@@ -463,6 +538,8 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         return;
     }
     if (gripped) {
+        // the flashlight follows the hand as it was reached (grip_prop: its place in the hand's frame), so it stays in the fist
+        // where the arm falls short
         glm::mat4 hand_model;
         if (player_.BoneModel("SKL_013_LHAND", hand_model)) {
             grip_prop = player_.PoseTransform() * hand_model * grip_prop;
@@ -484,6 +561,7 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                 LogInfo("grip: prop mid ({:.3f} {:.3f} {:.3f}) axis ({:.3f} {:.3f} {:.3f}){}", c.x, c.y, c.z, axis.x, axis.y, axis.z, text);
             }
         }
+        // the light leaves just past the lens (the model's tip at +0.1159)
         handy_lens_ = glm::vec3(grip_prop * glm::vec4(0.0f, 0.0f, 0.12f, 1.0f));
         handy_lens_valid_ = true;
     }
@@ -505,9 +583,16 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     item.hidden_meshes = HiddenMeshes(*item.mesh, demos_.PlayerDefaultHidden());
     item.hidden_views = BodyShown() ? 0u : 1u;
     out.push_back(item);
+    // the flashlight in the hand while it is lit: the bathroom's flashlight model (kHandyModel) at the light's origin, turned to
+    // its beam (the light comes from the hand, HandyLightPose); PT_HANDY_MODEL_TURN=x,y,z (degrees) turns the model in its frame
     static constexpr const char* kHandyModel = "/Assets/sh/environ/object/shsb/light/shsb_lght005/scenes/shsb_lght005.fmdl";
+    // PT_HANDY_MODEL_HIDE=1 drops the prop alone, leaving the light on: the shot with it minus the shot without it is the
+    // model's own pixels (scratch/handy_iso.py)
     static const bool handy_model_hidden = std::getenv("PT_HANDY_MODEL_HIDE") != nullptr;
     if (!handy_model_hidden && player_.handy_light.enable && glm::length(handy_direction_) > 0.5f) {
+        // The model is in pt14_hallway.fpk. A loop browser pick past f060 starts in the start room with the light picked up,
+        // before the hallway's package is mounted, and a failed load stays failed in the model cache (no flashlight in the hand
+        // for the whole session): the cache is asked only once the file can be read
         if (!handy_model_readable_ && frame_ >= handy_model_probe_frame_) {
             handy_model_readable_ = vfs_.ReadFile(kHandyModel).has_value();
             handy_model_probe_frame_ = frame_ + 30;
@@ -525,6 +610,11 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
             glm::vec3 x = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), z);
             x = glm::length(x) > 1.0e-6f ? glm::normalize(x) : glm::vec3(1.0f, 0.0f, 0.0f);
             const glm::vec3 y = glm::cross(z, x);
+            // kHandyModelOffset: the model's mid point in the beam's own frame (x right of the beam, y up, z along it), measured
+            // from the flash point the cone leaves (HandyLightPose, RenderSceneBuilder::AddHandyLight). The hand holds the
+            // flashlight at its body between the thumb and the fingers, so the body spans the flash point: with the offset below
+            // the head and its lit lens stand just past the flash point on the beam's own axis and the hand wraps the tail.
+            // PT_HANDY_MODEL_POS=x,y,z overrides it (measured with scratch/handy_sweep.py, scratch/handy_grip.py).
             static const glm::vec3 pos = [] {
                 glm::vec3 v(kHandyModelOffset);
                 if (const char* e = std::getenv("PT_HANDY_MODEL_POS")) std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z);
@@ -539,6 +629,12 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
             prop.transform = frame;
             prop.hidden_views = item.hidden_views;
             out.push_back(prop);
+            // the lit lens: a small emissive disc at the head end (model local +Z tip, z = +0.116), facing the
+            // beam. The housing is a closed metal body lit from the inside, so it draws near-black; the lens
+            // has to be emissive to read as the source of the light (PT_HANDY_BONES measures the lens dark).
+            // Unlit + kKindConstant goes through the forward emissive pipeline (scene_frame.cpp RecordForward)
+            // with depth testing, so the housing occludes it from behind and it shows from the front.
+            // PT_HANDY_LENS_HIDE=1 drops the disc alone.
             static const bool lens_hidden = std::getenv("PT_HANDY_LENS_HIDE") != nullptr;
             if (!lens_hidden) {
                 if (!handy_lens_mesh_) {
@@ -611,11 +707,34 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     }
 }
 
+// 0x1282C50 (the player body's update phase 5, 0x98BC70; phase 6, 0x127F6B0 and 0x12810C0, then sets the light): the handy
+// light's look target ray starts at the body's feet + (0, 1.65, 0.15) turned by the body (0x1429DF0) and runs 10 m
+// (0x1429A30) along the view (the camera component's pitch and yaw) turned by the light stick s (Player::LightStick) through
+// the unnormalized quaternion (0.28125 s.y, -0.375 s.x, 0, 1), half of (-0.5625 s.y, -0.75 s.x) (0x1429A28, 0x1429A2C)
+// crossed with +Z; the target is its first hit with mask 0x700 or its end, eased by 1 - 0.9375^(dt * 60) (0x1429A34,
+// 0x1429A38) into the body's +0x90 and +0x70, where 0x12810C0 aims the light. The light follows that target through a second
+// easing that keeps 0.32 per 30 Hz frame (fitted: mirror_f060 5123-5127 within 0.3 degrees, where the eased target alone
+// runs about 0.7 frames ahead; the arm's aim in the skeleton path of 0x12810C0 was not traced). Per game tick, as the
+// original's player update, so headless runs keep its easing.
 void Game::UpdateHandyTarget(float dt) {
     constexpr glm::vec3 kRayOrigin{0.0f, 1.65f, 0.15f};
     constexpr float kRayLength = 10.0f;
     constexpr float kTargetKeep = 0.9375f;
     constexpr float kAimKeep = 0.32f;
+    // After the flashlight pickup (gc_p00_030) the original's hand keeps another pose: floor_f060 stands 2 cm lower from the
+    // hand-back (2740) with the light 0.19 m further back and 6 cm lower than in play at that pitch (3075-3085, -22.17 degrees),
+    // through the turns of 3384-3400 and the walk to the sink, and from the look at the sink at 3534-3540 the camera height and
+    // the pose are those of play again (3585-3595). tub_f060_light keeps it from the pickup to its end (3552) through looks
+    // down to -55 degrees and two short walks, its pose following the pitch (HandyLightPose), so the pitch does not end it (the
+    // port ended it on an 8 degree change). It ends with the look at the sink, which starts gc_p01_090 (likely: the demo the
+    // look at the baby position starts; what the original switches was not traced), or when the player leaves the floor
+    // The light's pose around the pickup itself (pickup_release_f060: the Spot_Mask constants and the camera of every frame from
+    // 2639 to 3700, the light's offset from the camera, left, down, forward). While gc_p00_030's camera is on screen the light
+    // stands 0.165, 0.131, 0.185 from it every frame (2639 to 2720, the camera rising from 0.83 to 1.62 m): 0x12810C0's branch
+    // for the camera object of 0x970DE0 +0xC0, under which 0x1282C50 scales the light stick by 0.2 and does not ease the look
+    // target. From the demo's hand-back (2740) the pickup pose comes in over about 20 frames (2760: 0.190, 0.052, 0.148), stays
+    // through a yaw turn (3143 to 3172) and goes over about 20 frames when it ends (3234 to 3256). The port had put the light
+    // in the play pose during the demo and switched the poses in one frame (a 0.19 to 0.20 m jump)
     constexpr float kPoseBlendSeconds = 20.0f / 30.0f;
     const float pose_step = std::max(dt, 0.0f) / kPoseBlendSeconds;
     const bool demo_camera = player_.handy_light.enable && demos_.HasActiveCamera();
@@ -636,19 +755,27 @@ void Game::UpdateHandyTarget(float dt) {
         handy_hold_ = std::max(0.0f, handy_hold_ - pose_step);
         handy_hold_release_ = handy_hold_ > 0.0f;
     }
+    // the free camera (Extras) does not move the light: it follows the player's own view
     const Camera camera = detached_view_ && camera_override_ ? player_.MakeCamera() : GetCamera();
+    // the view without the camera's roll: the ray takes the camera component's pitch and yaw (+0x1C8, +0x1CC)
     const glm::vec3 forward = camera.Forward();
     glm::vec3 right = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
     right = glm::length(right) > 1e-4f ? glm::normalize(right) * (glm::dot(right, camera.Right()) < 0.0f ? -1.0f : 1.0f) : camera.Right();
     const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+    // demos that drive the player hold every lock, and the ending outro holds the player's light-stick offset at zero
     const glm::vec2 s = demos_.ControlsPlayer() || EndingOutroInputBlocked(controller_.Step())
                             ? glm::vec2(0.0f)
                             : player_.LightStick() * (demo_camera ? 0.2f : 1.0f);
     const float a = 0.28125f * s.y;
     const float b = 0.375f * s.x;
     const float n2 = 1.0f + a * a + b * b;
+    // the quaternion turns +Z and scales it by its squared length: the direction (0.75 s.x, -0.5625 s.y, 1 - a^2 - b^2) / n2
+    // (x right, y up) and a ray of 10 n2 m
     const glm::vec3 direction = (right * (0.75f * s.x) - up * (0.5625f * s.y) + forward * (1.0f - a * a - b * b)) / n2;
     const float length = kRayLength * n2;
+    // The body point sits a few cm from the player's camera (about 5 cm behind it at the mirror, 9 cm ahead of it at the
+    // sink). The ray keeps that offset from the shown camera, turned by its yaw, so that it starts at the body point in play
+    // and where the body would stand behind a scripted, demo or peephole camera
     const glm::vec3 body_point(player_.BodyTransform() * glm::vec4(kRayOrigin, 1.0f));
     const glm::vec3 own_forward = player_.CameraForward();
     const glm::vec3 own_right(-own_forward.z, 0.0f, own_forward.x);
@@ -663,6 +790,11 @@ void Game::UpdateHandyTarget(float dt) {
     if (line_collision_.Raycast(origin, direction, length, hit)) {
         raw = hit.point;
     }
+    // after a teleport or a camera cut the target starts at the new one (the original eases it from wherever it was): a
+    // camera that moves more than 0.25 m or turns more than 15 degrees in a tick (the look turns at most 176 degrees a
+    // second), and every tick of an input script camera (scamera: a reference pose that the port's own view did not follow,
+    // so the target is taken there as the focus is); compare_ref --replay's shot camera is where the view already is (its look
+    // follows the capture's camera every tick) and keeps the eased target, the lag the captures show in fast turns
     if (!light_target_valid_ || demo_camera || (camera_override_ && !camera_override_follows_view_) || glm::distance(origin, light_origin_) > 3.0f ||
         glm::distance(camera.position, light_camera_) > 0.25f || glm::dot(forward, light_forward_) < 0.9659f) {
         light_target_ = light_aim_ = raw;
@@ -675,6 +807,16 @@ void Game::UpdateHandyTarget(float dt) {
     light_aim_ += (light_target_ - light_aim_) * (1.0f - std::pow(kAimKeep, std::max(dt, 0.0f) * 30.0f));
 }
 
+// 0x9359D0, from the handy light's frame update 0x124F980 while the light is on (0x124FBF0 sets the module's switch +0x42DC with
+// the light). The beam runs from the light along its axis for its outer range (+0x42CC, written by 0x124FE00) and takes its first
+// hit with mask 0x80700 and query tag inclusions 0x80 and 0x10, 2 cm into the surface along the hit normal, or 2 cm past its
+// end (the end minus 0.02 times the normalized end-to-start vector). When that point moves less than 1.01 times the range but
+// more than 1 m in depth (0.3 m inside a trapKind 1 box, which no test reaches, see HandyReflection::spot_share), the second
+// pair takes the previous point at full weight and the first starts at 0, and the weights cross at 3 per second; a longer
+// move puts both there at once. Before the axis the module casts four rays at half the penumbra around it (315, 45, 225 and
+// 135 degrees, 0x13CE7E4) with the same filter: their hits (or ends) are the screen corners of the Draw2D_ShSpotLightReflection
+// quad whose read back colour tints the lights (HandyReflection::samples, readback), and their normals (the ray reversed
+// when it hits nothing) with the axis's, averaged, ease the spots' axis +0x90 by a third a frame.
 void Game::UpdateHandyReflection(float dt) {
     HandyReflection& r = handy_reflection_;
     if (!player_.spawned || !player_.handy_light.enable) {
@@ -694,10 +836,12 @@ void Game::UpdateHandyReflection(float dt) {
     handy_origin_ = origin;
     handy_direction_ = direction;
     const float outer = std::max(p.outer_range, 0.0001f);
+    // the light's frame (0x937C00 and 0x938000 with up (0, 1, 0)): +Z the axis; the sign of X is a guess
     const glm::vec3 axis_z = direction;
     glm::vec3 axis_x = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), axis_z);
     axis_x = glm::length(axis_x) > 1.0e-6f ? glm::normalize(axis_x) : glm::vec3(1.0f, 0.0f, 0.0f);
     const glm::vec3 axis_y = glm::cross(axis_z, axis_x);
+    // ray i: cos(t) Z + sin(t) (-sin(a) X + cos(a) Y), t the half penumbra (+0x42D0), a from 0x13CE7E4
     static constexpr float kSampleAngles[4] = {315.0f, 45.0f, 225.0f, 135.0f};
     const float tilt = glm::radians(p.penumbra_angle * 0.5f);
     glm::vec3 normal_sum(0.0f);
@@ -722,6 +866,7 @@ void Game::UpdateHandyReflection(float dt) {
         normal_sum -= direction;
     }
     if (std::getenv("PT_REFLECT_LOG")) {
+        // Accepted surfaces along the reflection beam, retaining original winding and double-sided shape flags.
         glm::vec3 from = origin;
         float left = outer;
         for (int n = 0; n < 8 && left > 0.0f; ++n) {
@@ -738,12 +883,15 @@ void Game::UpdateHandyReflection(float dt) {
     }
     const glm::vec3 forward = camera.Forward();
     const auto depth = [&](const glm::vec3& point) { return glm::dot(point - camera.position, forward); };
+    // a camera cut, a teleport or an input script camera starts the lights at the new hit, as UpdateHandyTarget starts the
+    // look target there: a reference pose the port's own view did not follow would fade from wherever the beam was before
     if ((camera_override_ && !camera_override_follows_view_) || glm::distance(camera.position, r.camera) > 0.25f ||
         glm::dot(forward, r.forward) < 0.9659f) {
         r.primed = false;
     }
     r.camera = camera.position;
     r.forward = forward;
+    // the average of the five normals (0.2 times their sum, normalized)
     const glm::vec3 average = glm::length(normal_sum) > 1.0e-6f ? glm::normalize(normal_sum) : -direction;
     if (!r.primed) {
         r.previous = r.second = position;
@@ -753,6 +901,7 @@ void Game::UpdateHandyReflection(float dt) {
         r.normal = average;
         r.primed = true;
     } else {
+        // +0x90 = normalize(0.67 +0x90 + 0.33 average), once an original frame
         const float keep = std::pow(0.67f, std::max(dt, 0.0f) * kOriginalFrameRate);
         const glm::vec3 eased = r.normal * keep + average * (1.0f - keep);
         r.normal = glm::length(eased) > 1.0e-6f ? glm::normalize(eased) : average;
@@ -781,6 +930,7 @@ void Game::UpdateHandyReflection(float dt) {
             r.fading = false;
         }
     }
+    // the reflection trap boxes the hit is in (ShSpotLightReflectionTrap, registered in the eight slot table 0x1C91900)
     bool kind0 = false;
     bool kind1 = false;
     static const float trap_extent = [] {
@@ -829,6 +979,8 @@ void Game::UpdateHandyReflection(float dt) {
     r.first_attenuation = attenuation(r.position);
     r.second_attenuation = attenuation(r.second);
     r.active = true;
+    // the free camera's and the photo mode's view is not the player's: the colour stays the one read from the player's view
+    // (RenderSceneBuilder::AddHandyReflection samples nothing then)
     if (!detached_view_) {
         ++r.readback_age;
     }
@@ -839,7 +991,14 @@ Camera Game::GetCamera() const {
         return *camera_override_;
     }
     Camera camera = player_.MakeCamera();
+    // the drawn camera trails the logic's by half a step on a frame's last tick (Player::UpdateBody), the traps' in-view
+    // tests keep the logic's (InViewNdc)
     camera.position += player_.DrawnOffset();
+    // 0x983B20 (0x984DC2 to 0x984E94): while the peephole theater plays (nazo word 2 bit 8) the camera plugin writes
+    // the camera component's +0xB0 (its interface +0x90), the position 0x978450 hands to the camera entity, with the
+    // `Peephole` asset translation + rotate(look, +Z): 1 m past the hole along the view. In maze B the bathroom's inner
+    // wall stands 1.03 m behind the corridor wall, so the view starts just behind it (its back face) and looks into the
+    // bathroom; the zoom (2.0 while the action is armed) and the rotation stay the player's
     glm::vec3 hole(0.0f);
     if (nazo_.IsPeepholeTheaterActive() && nazo_.PeepholePosition(hole)) {
         camera.position = hole + camera.Forward();
@@ -859,6 +1018,20 @@ Camera Game::PeepholeTurn(const Camera& turned) const {
     return out;
 }
 
+// The third person view (Extras; not in the original, gameplay.md 10.6). The camera looks along the player's own view from
+// behind the right shoulder: kThirdShoulder to the right of the head point (the drawn body's feet raised by kThirdHeight, so the
+// walk's head bob and the head's roll stay out of it) and kThirdLift above it, then back along the view by a distance that
+// depends on the pitch (closer looking down, where the camera rises over the head, and closer looking up, where it sinks toward
+// the floor). Each part is kept clear of the surfaces the camera's line checks hit (mask 0x700, LineCollision, as the focus ray):
+// the shoulder offset and the lift by rays from the head, the distance by five rays back from the shoulder point (the middle and
+// four 0.8 kThirdProbe off it, a box the near plane fits in). A surface that comes closer pulls the camera in at once (it never
+// stands inside one); room behind lets it out again over about half a second. Where the corridor is narrower than kThirdWide
+// the distance and the shoulder offset shrink (the short pull in through the hallway's doorways). Where little is left behind
+// the shoulder (the back to a wall across the hallway) the camera first moves out to the side, up to kThirdCloseShoulder more
+// (a close over-the-shoulder view at 0.5 to 0.7 m from the head); only where less than kThirdTooClose is left behind the
+// shoulder point, or the camera would come within kThirdHeadClear of the head's middle (the near plane would cut the hood),
+// the view goes to first person until kThirdRoomAgain and a little more than that are free. A character drawn in the view
+// (Lisa, GameObjects::DrawnCharacters) is a column of kThirdCharacterRadius the camera keeps out of as out of a wall.
 namespace {
 constexpr float kThirdHeight = 1.60f;
 constexpr float kThirdShoulder = 0.36f;
@@ -872,6 +1045,9 @@ constexpr float kThirdTooClose = 0.12f;
 constexpr float kThirdRoomAgain = 0.3f;
 constexpr float kThirdHeadClear = 0.3f;
 constexpr float kThirdCloseShoulder = 0.22f;
+// The camera looks at the point the player's own view looks at (its line check hit, at most kThirdAimFar away), so the middle
+// of the frame is the middle of the first person view: what the zoom and the nazo actions aim at (the peephole, the photo
+// pieces, the phone) is aimed at the same way. The turn this takes from the view's direction is at most kThirdAimTurn
 constexpr float kThirdAimFar = 12.0f;
 constexpr float kThirdAimNear = 0.4f;
 constexpr float kThirdAimTurn = 0.35f;
@@ -880,6 +1056,7 @@ constexpr float kThirdCharacterRadius = 0.42f;
 constexpr float kThirdCharacterHeight = 1.85f;
 constexpr float kThirdEnterSeconds = 0.6f;
 constexpr float kThirdLeaveSeconds = 0.25f;
+// the camera this far from the player's eye shows the body and the flashlight in the hand
 constexpr float kThirdShowBody = 0.35f;
 
 glm::vec3 LookForward(float yaw, float pitch) {
@@ -890,6 +1067,7 @@ float WrapAngle(float a) {
     return std::remainder(a, 6.28318531f);
 }
 
+// Camera::Right of an unrolled camera
 glm::vec3 LookRight(float yaw) {
     return glm::vec3(std::cos(yaw), 0.0f, -std::sin(yaw));
 }
@@ -901,6 +1079,7 @@ void Game::SetThirdPerson(bool on) {
         return;
     }
     third_person_ = on;
+    // PT_THIRD_DRAWPOSE=0 draws the logic's body instead of the drawn pose (A/B of the feet)
     static const bool drawn_pose = [] {
         const char* e = std::getenv("PT_THIRD_DRAWPOSE");
         return !e || *e != '0';
@@ -940,6 +1119,9 @@ Camera Game::ViewCamera() const {
         camera.yaw += (yaw - camera.yaw) * s;
         camera.pitch += (pitch - camera.pitch) * s;
     }
+    // PT_THIRD_ORBIT="yaw pitch distance [height]" (degrees, metres; tests of the drawn body's feet and hands): the view looks at
+    // the drawn body's point that high (0.6 m: the hips; below 0: the left hand) from that yaw about it (0 behind, 90 its right) and that pitch down,
+    // ignoring walls
     static const glm::vec4 orbit = [] {
         glm::vec4 v(0.0f, 0.0f, 0.0f, 0.6f);
         if (const char* e = std::getenv("PT_THIRD_ORBIT")) std::sscanf(e, "%f %f %f %f", &v.x, &v.y, &v.z, &v.w);
@@ -947,6 +1129,7 @@ Camera Game::ViewCamera() const {
     }();
     if (orbit.z > 0.0f) {
         glm::vec3 target = glm::vec3(player_.PoseTransform()[3]) + glm::vec3(0.0f, orbit.w, 0.0f);
+        // a negative height looks at the left hand (the flashlight's grip)
         if (glm::mat4 hand; orbit.w < 0.0f && player_.BoneModel("SKL_013_LHAND", hand)) {
             target = glm::vec3(player_.PoseTransform() * hand[3]);
         }
@@ -979,6 +1162,8 @@ void Game::UpdateThirdPerson(float dt) {
     glm::vec3 demo_position(0.0f);
     glm::quat demo_rotation(1.0f, 0.0f, 0.0f, 0.0f);
     float demo_fov = 0.0f;
+    // demos and cutscenes keep their own cameras, the script cameras and the free camera theirs; the peephole carries the view
+    // through the hole. Each is a cut to first person, and the view comes back from there when it ends
     if (!third_person_ || !player_.spawned || camera_override_ || demos_.ControlsPlayer() || demos_.CameraWorld(demo_position, demo_rotation, demo_fov) ||
         nazo_.IsPeepholeTheaterActive()) {
         third_person_weight_ = 0.0f;
@@ -997,6 +1182,7 @@ void Game::UpdateThirdPerson(float dt) {
     };
     const float right_room = room(head, right, kThirdWide);
     const float left_room = room(head, -right, kThirdWide);
+    // the corridor's width eases (a doorway or a side opening passing by would jerk the distance), the walls themselves do not
     const float tight_now = std::clamp((kThirdWide - right_room - left_room) / (0.5f * kThirdWide), 0.0f, 1.0f);
     third_person_tight_ = third_person_primed_ ? third_person_tight_ + (tight_now - third_person_tight_) * (1.0f - std::exp(-4.0f * std::max(dt, 0.0f)))
                                               : tight_now;
@@ -1004,6 +1190,8 @@ void Game::UpdateThirdPerson(float dt) {
     const float pitch_share = view.pitch < 0.0f ? -view.pitch / Player::kPitchDown : view.pitch / Player::kPitchUp;
     float want = glm::mix(kThirdDistance, view.pitch < 0.0f ? kThirdDistanceDown : kThirdDistanceUp, std::clamp(pitch_share, 0.0f, 1.0f));
     want *= 1.0f - 0.3f * tight;
+    // the aim (ViewCamera): the first person view's line check hit, eased in its logarithm so an edge passing the middle of the
+    // view does not swing the camera
     {
         RayHit hit;
         float aim = kThirdAimFar;
@@ -1015,10 +1203,12 @@ void Game::UpdateThirdPerson(float dt) {
                                                  : aim;
     }
     const float shoulder_room = std::max(0.0f, right_room - kThirdProbe);
+    // the distance found last tick: little room behind moves the camera out to the side
     const float close = third_person_primed_ ? std::clamp((kThirdCloseFrom - third_person_distance_) / (kThirdCloseFrom - kThirdTooClose), 0.0f, 1.0f) : 0.0f;
     const float shoulder_target = std::min(kThirdShoulder * (1.0f - 0.4f * tight) + kThirdCloseShoulder * close, shoulder_room);
     const float lift_room = std::max(0.0f, room(head, glm::vec3(0.0f, 1.0f, 0.0f), kThirdLift + kThirdProbe) - kThirdProbe);
     const float lift_target = std::min(kThirdLift, lift_room);
+    // in quickly where a surface comes closer (and never inside it, `limit`), out again with a half life of about 0.2 s
     const auto ease = [&](float& value, float target, float limit) {
         if (!third_person_primed_) {
             value = target;
@@ -1040,6 +1230,7 @@ void Game::UpdateThirdPerson(float dt) {
             free = std::min(free, hit.distance - (i == 0 ? kThirdProbe : 0.05f));
         }
     }
+    // characters: the ray against a vertical column round each one's feet
     characters_.clear();
     objects_.DrawnCharacters(characters_);
     for (const glm::vec3& feet : characters_) {
@@ -1072,6 +1263,7 @@ void Game::UpdateThirdPerson(float dt) {
     }
     ease(third_person_distance_, free, free);
     third_person_primed_ = true;
+    // the zoom (with it the photo pieces, the phone and the peephole, taken while it is held) looks in first person
     const bool first_person = player_.zoom > 1.0001f || player_.zooming || third_person_blocked_;
     const float step = std::max(dt, 0.0f) / (first_person ? kThirdLeaveSeconds : kThirdEnterSeconds);
     third_person_weight_ = std::clamp(third_person_weight_ + (first_person ? -step : step), 0.0f, 1.0f);
@@ -1107,6 +1299,7 @@ uint32_t Game::PostSoundIdAt(uint32_t id, const glm::vec3& position) {
 
 uint32_t Game::PostSoundIdOnOcho(uint32_t id, const glm::vec3& position) {
     LogInfo("sound: id {:#x} on Lisa at ({:.2f} {:.2f} {:.2f})", id, position.x, position.y, position.z);
+    // Lisa's slot of the ShGimmick sound control is her record's sound object (record 1, GimmickType::Ocho)
     return audio_ ? audio_->PostRecordEventId(1, id, position) : 0;
 }
 
@@ -1148,9 +1341,11 @@ void Game::FloorEnvironment() {
     }
     const bool ending = floor_.IsCurrentFloorName("ending");
     effects_.film_grain_strength = ending ? 0.0f : 1.0f;
+    // the REFLECT_MAP plugin's blend constants (0x922C60 -> plugin +0x68/+0x6C/+0x70 -> 0xCB26B0 -> 0xDDFD60 registers 0xA5, 0xB5)
     effects_.reflect_scale = ending ? 3.0f : 2.0f;
     effects_.reflect_bias = ending ? 0.05f : 0.0f;
     effects_.reflect_edge = ending;
+    // view +0x460 mask bit of the SUBSURFACE_SCATTER plugin (0xCAF3E0)
     effects_.subsurface_scatter = ending;
     effects_.colour_banding_canceller = false;
     effects_.screen_distortion = !ending;
@@ -1175,6 +1370,8 @@ void Game::ShowCaption(uint32_t message_id) {
     effects_.caption_time = 0.0f;
 }
 
+// a loop transition drops the previous loop's speech: queued subtitles and the caption never reach the next loop, and the
+// UI clears what is already playing when it consumes the flag
 void Game::ClearPendingSubtitles() {
     subtitle_requests_.clear();
     effects_.caption_id = 0;
@@ -1183,6 +1380,11 @@ void Game::ClearPendingSubtitles() {
 }
 
 bool Game::InViewNdc(const glm::vec3& position, float area) const {
+    // 0x917B30 / 0x918560 divide the clip point by w and test ndc.z > -1, |ndc.x| and |ndc.y| < area. The original's projection
+    // (captured, reference_captures.md 8) has w = depth along the view and ndc.z = -f / (f - n) + n f / ((f - n) depth), which
+    // is below -1 for a point behind the camera (depth < 0) and for one past the far clip: "ndc.z > -1" means 0 < depth < far.
+    // Written out in camera space: a GL style matrix gives ndc.z > 1 behind the camera, which passed, and a target behind the
+    // player counted as in view (the HELLO letter H beside the corridor's end).
     const Camera camera = player_.MakeCamera();
     const glm::vec3 offset = position - camera.position;
     const float depth = glm::dot(offset, camera.Forward());
@@ -1209,6 +1411,8 @@ void Game::SetMirrorViewportBit(int bit, bool on) {
 
 void Game::CallBgm(std::string_view event) {
     bgm_playing_.insert(std::string(event));
+    // Game+ tier 3: on f060, the loop that locks the player in the bathroom with the baby in the sink, unrest01 replaces the
+    // herald01 bed the baby's trap calls, until the loop ends (UpdateGamePlusSounds)
     if (GamePlusTier() >= kTierBathroomMusic && event == "Play_bgm_herald01" && floor_.IsCurrentFloorName("f060")) {
         if (!(gp_unrest_ && audio_ && audio_->IsPlaying(gp_unrest_))) {
             gp_unrest_ = PostSound("Play_bgm_unrest01", glm::vec3(0.0f), false);
@@ -1217,6 +1421,7 @@ void Game::CallBgm(std::string_view event) {
         LogInfo("game+: unrest01 in place of herald01 (f060, frame {})", frame_);
         return;
     }
+    // Game+ tier 3: in the red maze (f110) mystery01 replaces the corridor_f110 bed its lights' trap calls
     if (GamePlusTier() >= kTierMazeMusic && event == "Play_bgm_corridor_f110") {
         if (!(gp_maze_ && audio_ && audio_->IsPlaying(gp_maze_))) {
             gp_maze_ = PostSound("Play_bgm_mystery01", glm::vec3(0.0f), false);
@@ -1283,6 +1488,13 @@ float Game::PlayerHeightAboveStageRoot() const {
     return player_.Feet().y - root_y;
 }
 
+// The street walk (gameplay.md, street walk). The ending stage was never walked in the original: its road, sidewalks and buildings
+// have no movement hull (geom node 0), only the detailed node 1 surfaces over the models' vertices, which the walk adds to the
+// player's world (StageManager::PrepareWalkSurfaces) inside invisible walls around the straight street (the ground ends 1.5 m past
+// both short sides, and the side streets and the bend lead out of the visible street). The look is the ending demo's: it is held
+// as silent scenery at the frame of its wide street shot (DemoSystem::PlayScenery: its lights, fog, tone and exposure, cars and
+// effects; no camera, characters, texts or fades). The player is the outro's man in first person: the walk clips of
+// ShPlayer_layers.mtar move the camera as in the hallway.
 bool Game::StartStreetWalk() {
     if (!floor_.IsCurrentFloorName("ending") || !stages_.IsActive("current")) {
         LogWarn("street: no ending stage to walk");
@@ -1300,6 +1512,8 @@ bool Game::StartStreetWalk() {
             const glm::vec2 b = corners[(i + 1) % 4];
             const glm::vec3 a0(a.x, -3.0f, a.y), a1(a.x, 6.0f, a.y), b0(b.x, -3.0f, b.y), b1(b.x, 6.0f, b.y);
             for (auto t : {std::array{a0, b0, b1}, std::array{a0, b1, a1}}) {
+                // the world's triangles are one sided: each wall faces the street. Both windings would push a player touching the
+                // wall both ways at once, and he stuck there
                 if (glm::dot(glm::cross(t[1] - t[0], t[2] - t[0]), center - t[0]) < 0.0f) {
                     std::swap(t[1], t[2]);
                 }
@@ -1320,6 +1534,8 @@ bool Game::StartStreetWalk() {
     player_.Warp(kStreetSpawn, 0.0f);
     player_.pitch = player_.target_pitch = 0.0f;
     street_safe_feet_ = kStreetSpawn;
+    // the ending demo's first sound (0xdfba4d10) sets its cutscene state, under which the game's own sounds are silent; the
+    // original leaves it to the restart's OnPreOpeningDemo, which posts this
     if (audio_) {
         audio_->PostEvent("Set_state_in_game", nullptr);
     }
@@ -1335,6 +1551,7 @@ void Game::UpdateStreetWalk(float dt) {
     if (!street_walk_) {
         return;
     }
+    // the screen stays black while the scenery runs to its frame, then fades in
     if (demos_.SceneryReady() && effects_.FadeShown().a > 0.5f && !effects_.IsFadeProcessing()) {
         effects_.CallFadeIn(1.5f);
         LogInfo("street: scenery ready, fade in");
@@ -1345,6 +1562,7 @@ void Game::UpdateStreetWalk(float dt) {
     const glm::vec3 feet = player_.Feet();
     const bool inside = feet.x > kStreetMin.x && feet.x < kStreetMax.x && feet.z > kStreetMin.y && feet.z < kStreetMax.y;
     if (feet.y < -5.0f || !inside) {
+        // a gap in the street's surfaces or a way past the walls: back to the last place stood on
         LogWarn("street: left the street at ({:.2f} {:.2f} {:.2f}); back to ({:.2f} {:.2f} {:.2f})", feet.x, feet.y, feet.z,
                 street_safe_feet_.x, street_safe_feet_.y, street_safe_feet_.z);
         player_.Warp(street_safe_feet_ + glm::vec3(0.0f, 0.05f, 0.0f), player_.BodyFoxYaw());
@@ -1452,6 +1670,7 @@ void Game::NoteBrowseReached(int index) {
 
 void Game::SpeedrunStartGame() {
     if (!speedrun_.Enabled() || speedrun_.GetState() == SpeedrunTimer::State::Running) return;
+    // a loop browser pick is not a run (its own picks abandon one)
     if (browse_save_suppressed_ || browse_waiting_entry_) return;
     bool solved = false;
     for (NazoId id : {NazoId::XMark, NazoId::Hello, NazoId::Peephole, NazoId::Photo, NazoId::TrueEnd}) solved = solved || nazo_.IsCleared(id);
@@ -1476,6 +1695,13 @@ void Game::AnswerSpeedrunMenu() {
     LogInfo("speedrun: return to menu (option screen first)");
 }
 
+// Game+ tier 1 (docs/gameplay.md, Game+): the unused headless Lisa in the bathtub (shsb_bath001_ocho001, hidden by its entity
+// flags 6 in the hallway and maze C, no script shows her) sits in the tub of the bathroom whose sink holds the baby, in every
+// loop and only while the baby is there (the Baby gimmick drawn; its locators are in the sinks: hallway and maze C environ
+// (-1.56, 0.94, -18.27), mazes A and B (-27.8, 0.94, -4.25)). Each tub is a placement of shsb_bath001.fmdl (the hallway's at
+// identity, maze B's shsb_bath001_0001 turned 180 degrees), and her vertices share the tub model's frame, so her draw takes the
+// placement of the tub nearest the baby (her middle within 3.5 m of it: 2.2 m in every bathroom). An extra stage draw without an
+// entity, visual only, no collision; the mesh is the model cache's (from the hallway or maze C, or read directly).
 namespace {
 constexpr const char* kTubModel = "/shsb_bath001.fmdl";
 constexpr const char* kTubLisaModel = "/Assets/sh/environ/object/shsb/bath/shsb_bath001/scenes/shsb_bath001_ocho001.fmdl";
@@ -1548,12 +1774,26 @@ void Game::StopGamePlusSound(uint32_t& id, float fade) {
     id = 0;
 }
 
+// Game+ tier 3 (docs/gameplay.md, Game+): the original's unused sound events, posted as the original posts its own (their banks'
+// bus, volume and 2D or 3D positioning; the pause menu's Pause_All and a game over's Stop_ALL reach them as every sound), each
+// with one playing id so none stacks or repeats:
+// - the unnamed 56 s music bed 0x1A95368D loops under the street walk;
+// - Play_bgm_mystery01 replaces corridor_f110 on f110, the red maze (Game::CallBgm), and fades when the loop ends;
+// - Play_bgm_unrest01 replaces herald01 on f060 (Game::CallBgm) and fades when the loop ends;
+// - Play_radio_voice_06, 07 and 08 follow the radio's broadcast on both f050 passes (the loops in which Lisa haunts the player
+//   from behind, the second the gouge loop), at the radio, back to back, with their own subtitles (tria1000_1d1010, 1e1010,
+//   1f1010, started by the media's markers as the broadcast's are); 08 ("You, what did you do? ... MURDERER!") answers 07's "by your own hand", so it comes last;
+// - Play_sfx_heartbeat (its own layered loop) under the stand-up gc_p00_020 after a game over;
+// - Lisa's laughs at the HELL writing (HELL_Ican, f070 to f100): the first visit of a session takes laughs 2 then 3 of
+//   Play_voice_ene_laugh_01's six as one sound, the next visit 4 then 6, alternating (a visit: coming within 2.5 m; leaving
+//   past 4 m ends it).
 void Game::UpdateGamePlusSounds() {
     if (!audio_) return;
     const int tier = GamePlusTier();
     auto alive = [&](uint32_t id) { return id != 0 && audio_->IsPlaying(id); };
     const int step = controller_.Step();
     const std::string floor = floor_.CurrentFloorName();
+    // the street walk's bed
     const bool street = tier >= kTierStreetAmbience && street_walk_ && demos_.SceneryReady();
     if (street && !alive(gp_street_)) {
         gp_street_ = audio_->PostEventId(0x1A95368Du, nullptr);
@@ -1561,13 +1801,17 @@ void Game::UpdateGamePlusSounds() {
     } else if (!street && gp_street_) {
         StopGamePlusSound(gp_street_, 1.5f);
     }
+    // the red maze's bed (Game::CallBgm) ends with the loop
     if (gp_maze_ && (floor != "f110" || step != 15)) {
         StopGamePlusSound(gp_maze_, 2.0f);
     }
+    // the bathroom loop's bed ends with the loop
     if (gp_unrest_ && (floor != "f060" || step != 15)) {
         StopGamePlusSound(gp_unrest_, 2.0f);
         gp_unrest_wanted_ = false;
     }
+    // the stand-up after a game over
+    // (the game over's steps 16 to 20; the boot's own gc_p00_020 is not one)
     if (step >= 16 && step <= 20) gp_heartbeat_armed_ = true;
     const bool standing_up = demos_.IsPlaying("gc_p00_020");
     if (tier >= kTierHeartbeat && gp_heartbeat_armed_ && standing_up && !gp_heartbeat_) {
@@ -1578,6 +1822,7 @@ void Game::UpdateGamePlusSounds() {
         StopGamePlusSound(gp_heartbeat_, 0.8f);
         gp_heartbeat_armed_ = false;
     }
+    // the radio's extra lines on f050
     const int pass = floor_.LoopCount();
     if (floor != gp_radio_floor_ || pass != gp_radio_pass_) {
         StopGamePlusSound(gp_radio_line_, 0.5f);
@@ -1589,6 +1834,7 @@ void Game::UpdateGamePlusSounds() {
     if (tier >= kTierRadioLines && floor == "f050" && step == 15) {
         const bool broadcast = audio_->IsEventPlaying("Play_radio_f050");
         if (broadcast) gp_radio_seen_ = true;
+        // the radio of the hallway copy the player is in: the nearest of the active stages' radios
         glm::vec3 radio(0.0f);
         float radio_distance = 1e30f;
         stages_.ForEachStage([&](Stage& stage) {
@@ -1615,6 +1861,7 @@ void Game::UpdateGamePlusSounds() {
             }
         }
     }
+    // Lisa's laughs at the HELL writing
     glm::vec3 writing(0.0f);
     const bool hell_floor = floor == "f070" || floor == "f080" || floor == "f090" || floor == "f100";
     if (tier >= kTierLaughs && step == 15 && hell_floor && nazo_.ControlAssetPosition("HELL_Ican", writing)) {
@@ -1623,6 +1870,7 @@ void Game::UpdateGamePlusSounds() {
             gp_laugh_near_ = true;
             const bool first = gp_laugh_visits_ % 2 == 0;
             ++gp_laugh_visits_;
+            // Play_voice_ene_laugh_01's takes 2 and 3 (media 748023997, 1065241238), or 4 and 6 (73183476, 823343976)
             std::vector<uint32_t> takes = first ? std::vector<uint32_t>{748023997u, 1065241238u} : std::vector<uint32_t>{73183476u, 823343976u};
             gp_laugh_ = audio_->PostEventMedia("Play_voice_ene_laugh_01", std::move(takes), &writing);
             LogInfo("game+: Lisa laughs at the HELL writing ({} pair, visit {}, frame {})", first ? "first" : "second", gp_laugh_visits_, frame_);
@@ -1632,6 +1880,10 @@ void Game::UpdateGamePlusSounds() {
     }
 }
 
+// Game+ tier 4 (docs/gameplay.md, Game+): the original's unused demos, each started with the used demo it was made beside, by
+// that demo's own trap and at its origin (they share its frame): gc_p03_012's 13 roaches with gc_p03_011's (f060, round the
+// bathroom's toilet and walls), gc_p04_330's 7 with gc_p04_320's (f050, the lobby wall and the first corridor's end),
+// gc_p04_200's 7 with gc_p04_120 (f070, down the basement stairs at the lobby's end); looping as their sibling does
 void Game::OnTrapDemo(std::string_view demo_id, const glm::mat4& origin, bool loop) {
     if (GamePlusTier() < kTierDemos) return;
     static constexpr std::pair<std::string_view, std::string_view> kSiblings[] = {
@@ -1646,6 +1898,9 @@ void Game::OnTrapDemo(std::string_view demo_id, const glm::mat4& origin, bool lo
     }
 }
 
+// Game+ tier 4: on f100 the man's footsteps, gc_p04_290 (an effect and Play_man_fs_f100_01), once a loop, a few seconds into
+// it, in the frame f070's gc_p04_280 plays in (its demo element's demoCenterLink, in the hallway's first corridor), of the hallway
+// copy the player is in
 void Game::UpdateGamePlusDemos() {
     const int step = controller_.Step();
     const std::string floor = floor_.CurrentFloorName();
@@ -1719,6 +1974,7 @@ void Game::NoteGameFinished() {
 
 void Game::OnFloorReached(std::string_view floor, int pass) {
     NoteArchive("floor:" + std::string(floor));
+    // a pick of the loop browser is not play: its own floors unlock nothing
     if (browse_save_suppressed_ || browse_waiting_entry_) {
         return;
     }
@@ -1738,6 +1994,7 @@ bool Game::ArchiveUnlocked(const ArchiveEntry& entry) const {
     if (!config_.release_locks) {
         return true;
     }
+    // the loop browser's rule (BrowseUnlocked): nothing before the game was finished once, then what play reached
     if (!game_finished_) {
         return false;
     }
@@ -1748,14 +2005,17 @@ bool Game::ArchiveUnlocked(const ArchiveEntry& entry) const {
 bool Game::ResetProgress() {
     if(!save_store_.Enabled()) return false;
     const bool reset=save_store_.Reset();
+    // A live restart must resume saving; Reset() disables the old save job.
     if(reset) {
         save_store_.SetDirectory(config_.save_path.parent_path(),"PT_Save_Data");
         game_plus_=false;
         finishes_ = 0;
+        // the reset runs the ending's restart (step 30), which keeps the save floor as the original does; a reset starts at f000
         floor_.SetSaveFloorName("f000");
         browse_save_suppressed_ = browse_waiting_entry_ = browse_door_placed_ = false;
         browse_arrived_ = true;
         browse_loop_ = -1;
+        // a pick still fading out is superseded by the reset
         loop_reload_pending_ = false;
         browse_fade_wait_ = 0.0f;
         progress_reset_pending_=true;
@@ -1777,6 +2037,9 @@ void Game::TearDownSession() {
     controller_.ClearPadEnable();
 }
 
+// What a boot sets up before its first floor and the session then changes, outside the gimmick records (GameObjects::Reset)
+// and Lisa (OchoLogic::Setup): the stages are unloaded (step 20), the floor and the puzzles come next from the reset itself
+// (step 30) or the browser (ApplyBrowseReload). Options, the save store, Game+ and the browser's own state stay.
 void Game::ResetSessionState() {
     nazo_.ResetSession();
     demos_.ResetPlayerBody();
@@ -1856,6 +2119,7 @@ void Game::ResetSaveBlocks() {
     floor_.SetFloorLevel("f000");
     floor_.ResetLoopCount();
     nazo_.ResetAllStates();
+    // Options_StaticInit (0x91D7B0): the defaults follow the system language; a save read next replaces them (RequestLoad)
     const std::string system_language = SystemLanguageTag();
     options_ = DefaultOptionsForLocale(system_language);
     LogInfo("options: defaults for system language {}: subtitles {} language {}", system_language, options_.subtitles,
@@ -1866,6 +2130,9 @@ void Game::ResetSaveBlocks() {
 
 bool Game::BrowseLoop(int index) {
     if (index < 0 || index >= static_cast<int>(kBrowseLoops.size())) return false;
+    // only from the running game, the start room's opening, the ending demo or the street walk (steps 15, 13, 28 and 31), which a
+    // reset leaves as a game over does: a pick during a reset, a game over, the preface, the first boot's option screen or the
+    // end of the credits would restart a sequence the controller is still running
     const int step = controller_.Step();
     if ((step != 13 && step != 15 && step != 28 && step != 31) || controller_.RequestedStep() != step || loop_reload_pending_) {
         LogInfo("loop browser: {} refused at controller step {}", kBrowseLoops[index].floor, step);
@@ -1914,6 +2181,7 @@ bool Game::ApplyBrowseReload() {
     floor_.ResetLoopCount();
     if (browse_loop_ >= 8) nazo_.ForceClear(NazoId::XMark);
     if (browse_loop_ >= 12) nazo_.ForceClear(NazoId::Hello);
+    // f110's peephole sends the player on to f120; a browsed f120 or later starts with it solved, as played progress would
     if (browse_loop_ >= 14) nazo_.ForceClear(NazoId::Peephole);
     nazo_.CancelPendingClearSound();
     controller_.first_boot = false;
@@ -1923,6 +2191,7 @@ bool Game::ApplyBrowseReload() {
         browse_arrived_ = true;
     }
     if (loop.floor == "ending" || loop.floor == "street") {
+        // the street entry loads the ending stage as the ending does and starts the walk in place of its demo (step 27)
         street_pending_ = loop.floor == "street";
         floor_.SetFloorLevel("ending");
         browse_waiting_entry_ = false;
@@ -1941,6 +2210,8 @@ void Game::OnBrowseFloorEntered() {
     browse_waiting_entry_ = false;
     browse_arrived_ = true;
     if (loop.floor == "f160") {
+        // the final loop is only reached through Endf120, whose checkpoint saves f120 with every puzzle before it solved; f160's
+        // exit door saves nothing, so without this the browsed final loop (and the ending after it) would never save again
         EndBrowseSuppression("entered f160 (the Endf120 checkpoint)");
         floor_.SetSaveFloorName("f120");
         RequestSave();
@@ -1963,17 +2234,42 @@ void Game::EndBrowseSuppression(std::string_view why) {
     LogInfo("loop browser: {}; normal saving resumed", why);
 }
 
+// A browsed loop starts as a save made when its loop began would boot: the reset (ApplyBrowseReload) loads the start room on
+// the loop's previous floor, the floor such a save holds (GoNextFloor stores the floor it leaves, FloorLevel::GoNextFloor), with
+// the puzzles of the floors before it solved, and the start room's door then advances into the loop (NextFloor,
+// OnBrowseFloorEntered). The handy light comes from the same path: OnPreGame (step 14) sends SetupFlashLight, and the start
+// room's gameControllFlashLight.lua lights it only when the current floor is f060, f070, f080, f090, f120 or f160
+// (gameplay.md 4.6). That script must read the start room's floor. Its message is delivered a game frame after OnPreGame
+// (MessageSystem::PostControllerMessage), and the door, taken at once, advanced the floor first, so the script read the
+// browsed floor: the f060 hallway (the bathroom aftermath, where gc_p00_030 hands the player the light from the toilet) and
+// f120 started lit, the f050 passes, f100 and f110 dark. The player is therefore put in the door only once OnPreGame's posts
+// are delivered, as a player who walks to the door always is.
+// What a resume cannot replay is the pickup itself: in one sitting from f000's StartGame the light stays on from gc_p00_030
+// on f060 (demo functor 0x36A45BC5DA0B) until maze A turns it off on f110 (trapFlashLightControl.lua); Endf120's restart runs
+// StartGame on f120 again. So a loop whose floor comes after f060 and up to f110 in the floor table (both f050 passes, f070,
+// f080, f090, f100, f110) is entered lit, as after the pickup: f070 and f110 follow start rooms on f050 and f100, which
+// SetupFlashLight leaves dark (a resumed game is dark there, a played one is not), and f110 turns it off itself at maze A.
+// Every other loop keeps what SetupFlashLight sets for its previous floor. Per loop: dark for f000 to f060 (f060 keeps its
+// pickup), lit for the f050 passes to f100, lit into f110 until maze A, dark on f120 (after maze A), lit on f160.
 bool Game::BrowseLightPickedUp(std::string_view floor) const {
     const int index = floor_.IndexOf(floor);
     return index > floor_.IndexOf("f060") && index <= floor_.IndexOf("f110");
 }
 
+// A browsed loop leaves the start room through its exit door: the player is put in that door's trap box (the start room trap whose
+// ShDemoExec has nextFloorDemo), facing the door, so the trap itself plays the door demo and calls GoNextFloor in the next trap update,
+// as when the player walks in (TrapSystem::ExecDemo: gc_p00_160 on f000, gc_p00_010 on later floors, no save). Playing the demo here
+// instead would let the trap fire again when the demo carries the player through the box: its gc_p00_010 skips every running demo
+// and a second GoNextFloor could advance two floors
 void Game::BrowseEnterHallway() {
     if (!BrowseEntryPending() || browse_door_placed_) return;
+    // OnPreGame's SetupFlashLight (and any other post of the start) is read on the start room's floor first (see above); a
+    // queue that never empties gives up after a second
     if (messages_.Pending() && ++browse_door_wait_ < 60) return;
     browse_door_placed_ = true;
     const auto& loop = kBrowseLoops[browse_loop_];
     if (BrowseLightPickedUp(loop.floor) && !player_.handy_light.enable) {
+        // the f060 pickup (gc_p00_030's functor 0x36A45BC5DA0B, the handy light's SetEnable(true)) was played earlier in this sitting
         player_.handy_light.enable = true;
         LogInfo("loop browser: {} is after the f060 flashlight pickup, handy light on", loop.floor);
     }
@@ -1997,14 +2293,19 @@ void Game::BrowseEnterHallway() {
                     const glm::vec3 feet = player_.Feet();
                     const glm::vec3 to_door(box.x - feet.x, 0.0f, box.z - feet.z);
                     const float fox_yaw = glm::length(to_door) > 1e-3f ? std::atan2(to_door.x, to_door.z) : player_.BodyFoxYaw();
+                    // the browsed loop starts as a respawn in the start room (the stand-up), and the player walks out
+                    // through the door himself; the auto-walk warp below breaks the trap demo, so tester builds keep it gated
                     if (!std::getenv("PT_BROWSE_DOOR")) {
                         player_.Warp(feet, fox_yaw);
                         LogInfo("loop browser: walk through the start room door");
                         return;
                     }
+                    // the player-side edge of the trap box, so the player walks/falls into the box rather than spawning
+                    // inside its geometry
                     const glm::vec3 edge =
                         glm::length(to_door) > 1e-3f ? box - (to_door / glm::length(to_door)) * 0.4f : box;
                     player_.Warp(glm::vec3(edge.x, player_.controller.position.y, edge.z), fox_yaw);
+                    // the walk to the door crosses trap_activateNextStage first; the warp may not
                     if (!stages_.IsActive("next")) {
                         stages_.RequestActivate("next");
                     }
@@ -2043,6 +2344,9 @@ void Game::RequestSave() {
     OnSaveWritten(save_store_.Save(file));
 }
 
+// SaveRequest_Update (0x9476D0) state 10 on a failed write: the job's result 9 (no space) opens the system's dialog the first time
+// (states 0xD, 0xE) and then writes again (state 8, SaveAll); any other result, or a second failure, shows sys_save_failed_4
+// (states 0xF, 0x10) and the request ends without a save.
 void Game::OnSaveWritten(bool ok) {
     if (ok) {
         save_retries_ = 0;
@@ -2069,12 +2373,17 @@ void Game::CloseSaveDialog() {
     save_dialog_.reset();
     LogInfo("save: dialog {} closed", dialog.key);
     if (dialog.then != SaveDialog::Then::Nothing) {
+        // states 0xE and 0x14 go on to state 8, SaveAll: a full save of the state of the moment
         RequestSave();
     }
 }
 
+// The original's pause menu saves only its options block (gameplay.md 3.1, block 3; 3.3). A full save here wrote the
+// puzzle states of the moment next to the last checkpoint floor, so a state reached mid transition (a peephole marked
+// cleared before its exit message) was kept by every later menu close and survived a restart.
 void Game::RequestOptionsSave() {
     if (!saved_progress_) {
+        // first boot: nothing saved or loaded yet, so the progress written is the fresh one
         RequestSave();
         return;
     }
@@ -2101,7 +2410,11 @@ void Game::RequestLoad() {
         options_ = file->options;
         game_plus_ = file->progress.game_plus;
         finishes_ = file->progress.finishes;
+        // 0x9280E0 sets only the floor index (0x923B40); g_SaveFloorName keeps its value (f000 at boot) until a GoNextFloor or Endf120
         floor_.SetFloorLevel(file->progress.floor);
+        // A resume on f050 starts without the flashlight, as in the original: OnPreGame's SetupFlashLight
+        // (gameControllFlashLight.lua) lights it only on f060, f070, f080, f090, f120 and f160 (reference_captures.md,
+        // floor_f050b: the capture booted from sv_x_f050 walks f050 dark).
         for (int i = 0; i < NazoManager::kCount; ++i) {
             const NazoId id = static_cast<NazoId>(i);
             if (file->progress.cleared[i] == 1) {
@@ -2116,14 +2429,17 @@ void Game::RequestLoad() {
         controller_.first_boot = false;
         LogInfo("save: loaded floor {}", file->progress.floor);
     } else if (result.status == SaveLoadStatus::Broken) {
+        // 0x947C60: result 0xD -> state 0x13: sys_load_failed_3, then a new save over it (state 0x14 -> 8); not a first boot
         controller_.first_boot = false;
         save_dialog_ = SaveDialog{"sys_load_failed_3", SaveDialog::Then::NewSave};
         LogInfo("save: broken save data, dialog {} shown", save_dialog_->key);
     } else if (result.status == SaveLoadStatus::Unreadable) {
+        // results 0x13 (newer version), 0x14 (wrong magic) and the rest -> state 0x11: sys_load_failed_2, nothing written
         controller_.first_boot = false;
         save_dialog_ = SaveDialog{"sys_load_failed_2", SaveDialog::Then::Nothing};
         LogInfo("save: unreadable save data, dialog {} shown", save_dialog_->key);
     } else if (result.status == SaveLoadStatus::Old) {
+        // a version below 3 is cleared and reported as 0: nothing applied, nothing shown, no first boot
         controller_.first_boot = false;
         LogInfo("save: old save data ignored");
     } else {

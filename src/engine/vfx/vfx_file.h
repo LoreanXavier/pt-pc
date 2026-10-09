@@ -66,6 +66,9 @@ struct File {
 
 bool ParseFile(std::span<const uint8_t> data, File& out, std::string* error = nullptr);
 
+// FxSoundCallProgramEffectNode as its factory 0xB6DCB0 reads it: soundEvent and soundStop, the stop fade 0xD2ECAC68 (seconds) and its
+// curve 0xE3A9CADA (AkCurveInterpolation), and flag bit 2 (0x37CD447C): the node's release 0xB6E0F0 stops a sound still playing when the
+// effect instance goes over that fade and curve when the flag is set, else posts soundStop when it is set, else lets it play out
 struct SoundNode {
     std::string play;
     std::string stop;
@@ -74,6 +77,7 @@ struct SoundNode {
     uint32_t curve = 4;
 };
 
+// the first FxSoundCallProgramEffectNode of an effect file with a soundEvent
 bool ReadSoundNode(std::span<const uint8_t> data, SoundNode& out);
 
 }

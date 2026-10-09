@@ -90,6 +90,7 @@ bool AtomicPublishNoReplace(const std::filesystem::path& temp,
         ec = std::error_code(errno, std::generic_category());
         return false;
     }
+    // Older Linux kernels may lack renameat2; link is the atomic no-replace fallback.
     if (::link(temp.c_str(), target.c_str()) == 0) {
         if (::unlink(temp.c_str()) != 0) {
             ec = std::error_code(errno, std::generic_category());
@@ -101,6 +102,7 @@ bool AtomicPublishNoReplace(const std::filesystem::path& temp,
     ec = std::error_code(errno, std::generic_category());
     return false;
 #else
+    // POSIX filesystems with hard-link support can publish without replacing an existing entry.
     if (::link(temp.c_str(), target.c_str()) == 0) {
         if (::unlink(temp.c_str()) != 0) {
             ec = std::error_code(errno, std::generic_category());
@@ -322,7 +324,7 @@ void CopyTree(const std::filesystem::path& source, const std::filesystem::path& 
                 AddError(report, "Destination directory blocks legacy file", to,
                          std::make_error_code(std::errc::file_exists));
             }
-            continue;
+            continue; // Existing destination entries always win.
         }
         const auto parentRelative = relative.parent_path();
         if (!EnsureDestinationDirectories(destination, parentRelative, report)) continue;
@@ -332,7 +334,7 @@ void CopyTree(const std::filesystem::path& source, const std::filesystem::path& 
             std::error_code statusError;
             const auto publishedStatus = std::filesystem::symlink_status(to, statusError);
             if (!statusError && std::filesystem::exists(publishedStatus)) {
-                ec.clear();
+                ec.clear(); // A concurrent writer published first; preserve its entry.
             } else {
                 AddError(report, "Cannot migrate user data file", to, ec);
                 ec.clear();
@@ -342,7 +344,7 @@ void CopyTree(const std::filesystem::path& source, const std::filesystem::path& 
     if (ec) AddError(report, "Cannot finish scanning legacy data directory", source, ec);
 }
 
-}
+} // namespace
 
 UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination,
                                        const std::filesystem::path& legacy,
@@ -407,7 +409,7 @@ UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination
             report.warnings.push_back("Legacy and destination data paths are the same; skipped self-migration");
         } else {
             CopyTree(legacy, destination, report);
-            if (!report.errors.empty()) return report;
+            if (!report.errors.empty()) return report; // Retry partial work next launch.
             report.migrated_legacy = true;
         }
     }
@@ -426,4 +428,4 @@ UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination
     return report;
 }
 
-}
+} // namespace pt::platform

@@ -13,6 +13,9 @@ layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_blur;
 layout(location = 1) out vec4 out_sum;
 
+// One bloom iteration's second Kawase pass and its add to the sum in one draw (scene_post.cpp): out_blur is kawase.frag with
+// the clamp, out_sum (additive) is what the add pass, kawase.frag with offset 0 and pass.f1.x as its weight, read back from the
+// stored blur: the four taps of one texel of the 8-bit sRGB target, so the value goes through that storage first.
 void main() {
     uint source = pass.ids.x;
     vec2 texel = 1.0 / ImgSize(source);

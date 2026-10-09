@@ -35,6 +35,7 @@ void ScreenEffects::CallFadeOut(float seconds) {
     fade_strong = false;
     fade_state = 2;
     fade_remaining = std::clamp(seconds, 0.01f, 10.0f);
+    // 0x7D2050: from a clear screen the fade takes its colour at once and ramps only the alpha
     if (fade_current.a <= 0.0f) {
         const glm::vec4 target = fade_ignore ? glm::vec4(0.0f) : fade_color;
         fade_current = glm::vec4(glm::vec3(target), fade_current.a);
@@ -77,6 +78,7 @@ void ScreenEffects::Update(float dt) {
         }
     }
     if (fade_shown_hold > 0.0f) {
+        // the hold counts from the tick after the call, as a demo's first clock advance does from its start (DemoSystem::Update)
         if (fade_shown_called) {
             fade_shown_called = false;
         } else {

@@ -12,4 +12,4 @@ inline InputState GateEndingOutroInput(int controller_step, const InputState& in
     return EndingOutroInputBlocked(controller_step) ? InputState{} : input;
 }
 
-}
+}  // namespace pt::game

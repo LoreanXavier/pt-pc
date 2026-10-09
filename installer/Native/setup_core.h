@@ -1,4 +1,7 @@
 #pragma once
+// The installer's platform-independent part, shared by the Windows setup (setup.cpp) and the Linux one (setup_linux.cpp):
+// what the player gives it, how P.T. is recognised, the copy of a dump's archives, the payload format and the target folder
+// rules (docs/installer.md). The front ends supply progress and cancel through Hooks.
 #include <zlib.h>
 
 #include <algorithm>
@@ -18,15 +21,17 @@ namespace pt::setup {
 namespace fs = std::filesystem;
 
 struct Hooks {
-    std::function<void(const std::string&)> report;
+    std::function<void(const std::string&)> report;  // UTF-8 progress text
     std::function<bool()> cancelled;
-    std::function<void(uint64_t, uint64_t)> progress;
+    std::function<void(uint64_t, uint64_t)> progress;  // bytes written so far, and the bytes the whole install writes
 };
 inline Hooks hooks;
 inline void Report(const std::string& text) { if (hooks.report) hooks.report(text); }
 inline void CheckCancel() {
     if (hooks.cancelled && hooks.cancelled()) throw std::runtime_error("Installation cancelled.");
 }
+// The install measured in bytes: the payload's files and the game archives, counted as they are written. The total is
+// fixed before the first byte, so the percentage only rises; `At` sets the count from outside (the helper's output files).
 struct Progress {
     uint64_t done = 0, total = 0;
     void Begin(uint64_t bytes) { done = 0; total = bytes; Notify(); }
@@ -40,6 +45,7 @@ struct Progress {
     void Notify() const { if (hooks.progress) hooks.progress(done, total); }
 };
 inline Progress progress;
+// The bytes the extraction helper has written so far, polled while it runs: its files grow in `assets`
 inline uint64_t FolderBytes(const fs::path& dir) {
     uint64_t sum = 0;
     std::error_code error;
@@ -49,6 +55,7 @@ inline uint64_t FolderBytes(const fs::path& dir) {
     }
     return sum;
 }
+// For the --install command line of both setups: every progress call counted and checked to only rise (the tests read it)
 struct ProgressTrace {
     uint64_t events = 0, last_done = 0, last_total = 0;
     bool monotonic = true;
@@ -73,6 +80,7 @@ inline std::string PathUtf8(const fs::path& path) {
     return std::string(text.begin(), text.end());
 }
 
+// A payload or archive path below root: no absolute path, drive, "..", "." or ':'
 inline fs::path Contained(const fs::path& root, const std::string& name) {
     const fs::path relative = Utf8Path(name);
     if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) throw std::runtime_error("Unsafe payload path.");
@@ -83,6 +91,10 @@ inline fs::path Contained(const fs::path& root, const std::string& name) {
     return root / relative;
 }
 
+// What the player gives setup (docs/installer.md): a fake PKG (fPKG), or a folder that already holds the decrypted game files
+// (a dump from their own console, an extracted fPKG, an emulator's install folder). Setup refuses only an encrypted PKG it
+// cannot open (the helper's message) and input that is not P.T.; every release of P.T. installs, and what differs from the
+// tested US data is written to install-notes.txt. Nothing here or in the helper decrypts Sony-encrypted content.
 inline constexpr const char* kGameArchives[] = {"chunk1.psarc", "texture.qar", "pathid_list_ps4.bin"};
 enum class SourceKind { Package, Folder };
 struct GameFiles {
@@ -115,6 +127,7 @@ inline bool IsPathList(const fs::path& file) {
     const auto size = fs::file_size(file, error);
     return !error && size >= 32 && size < 64ull * 1024 * 1024;
 }
+// TITLE_ID from a dump's sce_sys/param.sfo, empty when there is none (an extracted fPKG may lack it)
 inline std::string TitleId(const fs::path& folder) {
     std::error_code error;
     const fs::path sfo = folder / "sce_sys" / "param.sfo";
@@ -145,6 +158,8 @@ inline std::string Lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     return text;
 }
+// The archives in one folder, found by their own headers: the names the port reads first, else the largest file of that
+// kind (a release or dump tool that names them differently). Encrypted copies have no valid header and are not found.
 inline GameFiles FindArchives(const fs::path& folder) {
     GameFiles found;
     std::error_code error;
@@ -166,6 +181,7 @@ inline GameFiles FindArchives(const fs::path& folder) {
     found.pathid = pick("pathid_list_ps4.bin", [](const fs::path& p) { return Lower(PathUtf8(p.filename())).find("pathid_list") != std::string::npos; }, IsPathList);
     return found;
 }
+// P.T. by content: P.T.'s level names in the path list, or a known P.T. title ID. Without either the folder is another game.
 inline bool ConfirmPt(GameFiles& files) {
     std::string list;
     if (!files.pathid.empty()) {
@@ -184,6 +200,8 @@ inline bool ConfirmPt(GameFiles& files) {
 }
 inline constexpr const char* kNotPt =
     "No P.T. game data was found here. Select the folder that holds chunk1.psarc and texture.qar (decrypted, from your own console's dump), or your P.T. fake PKG.";
+// A file or folder as the player picked it. Folders are searched two levels down for the game root (CUSA01127,
+// CUSA01127-app, a dumper's output folder); a folder without the archives but with exactly one PKG uses that PKG.
 inline Source ResolveSource(const fs::path& input) {
     std::error_code error;
     if (input.empty() || !fs::exists(input, error)) throw std::runtime_error("Select your P.T. game: a fake PKG, or the game folder from your console dump.");
@@ -219,6 +237,7 @@ inline Source ResolveSource(const fs::path& input) {
     if (packages.size() > 1) throw std::runtime_error("This folder has several PKG files. Select the P.T. package itself.");
     throw std::runtime_error(kNotPt);
 }
+// Copies the archives out of a dump folder under the names the port reads; the player's folder is only read.
 inline constexpr uint64_t kIconMaxBytes = 8ull * 1024 * 1024;
 inline bool IsPng(const std::string& bytes) { return bytes.size() >= 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0; }
 inline uint32_t Be32(const std::string& bytes, size_t at) {
@@ -321,6 +340,7 @@ inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
     source << "title_id=" << files.title << "\nregion=" << (region ? region : "unknown") << "\nsource=folder\n";
     for (const auto& note : files.notes) source << "warning=" << note << "\n";
 }
+// The notes of an install: the folder's, plus the helper's "warning: " lines for a PKG; written to install-notes.txt
 inline std::vector<std::string> WriteNotes(const Source& source, const fs::path& staging) {
     std::vector<std::string> notes = source.files.notes;
     if (source.kind == SourceKind::Package) {
@@ -337,6 +357,9 @@ inline std::vector<std::string> WriteNotes(const Source& source, const fs::path&
     return notes;
 }
 
+// The payload: "PTSETUP1", a u32 file count, then per file a u16 name length, the UTF-8 name, u64 size, u64 packed size,
+// 64 hex chars of SHA-256 and the zlib data (tools/prepare_native_installer.py). Every file is written, then read back and
+// hashed by `hash_file`.
 struct Reader {
     const unsigned char* p;
     size_t left;
@@ -356,15 +379,18 @@ struct Reader {
         return s;
     }
 };
+// a program file of an install: its path below the install folder ('/' separated) and SHA-256
 struct InstalledFile {
     std::string path;
     std::string sha256;
 };
+// The installed runtime may never classify or replace the player's data folder as program content.
 inline bool IsUserDataPath(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
     const size_t slash = path.find('/');
     std::string first = path.substr(0, slash);
 #ifdef _WIN32
+    // Win32 treats trailing dots and spaces in path components as absent, so these alias `data`.
     while (!first.empty() && (first.back() == '.' || first.back() == ' ')) first.pop_back();
 #endif
     return Lower(std::move(first)) == "data";
@@ -408,6 +434,7 @@ inline void RequireProgramFiles(const std::vector<InstalledFile>& files, const s
         if (std::none_of(files.begin(), files.end(), [&](const InstalledFile& file) { return Lower(file.path) == Lower(path); }))
             throw std::runtime_error("The installer payload is missing required runtime file " + path + ".");
 }
+// The bytes the payload unpacks to (its headers only), for the progress total before anything is written
 inline uint64_t PayloadBytes(const unsigned char* data, size_t size) {
     Reader reader{data, size};
     if (reader.String(8) != "PTSETUP1") throw std::runtime_error("Invalid installer payload.");
@@ -448,6 +475,7 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
         reader.left -= packed;
         const fs::path path = Contained(root, name);
         if (IsUserDataPath(name)) throw std::runtime_error("The installer payload cannot contain files under data/.");
+        // the status names the folder being written (shaders, voice, extractor); the files at the root are "program files"
         const std::string folder = path.parent_path() == root ? "program files" : PathUtf8(*Utf8Path(name).begin());
         if (folder != group) {
             group = folder;
@@ -473,6 +501,10 @@ inline std::vector<InstalledFile> UnpackPayload(const unsigned char* data, size_
     return written;
 }
 
+// ---- Installs and in-place updates (docs/installer.md, "Updating an install") ----
+// An install folder holds pt-install-manifest.txt from now on: the version and every program file the setup wrote, with
+// its SHA-256. The game archives in CUSA01127, pt.ini, saves, mods, logs and anything else are not program files: an update
+// never writes or removes them (the archives are only put back when they are missing or fail their header check).
 inline constexpr const char* kManifestName = "pt-install-manifest.txt";
 #ifdef _WIN32
 inline constexpr const char* kGameExe = "pt.exe";
@@ -480,9 +512,9 @@ inline constexpr const char* kGameExe = "pt.exe";
 inline constexpr const char* kGameExe = "pt";
 #endif
 struct ExistingInstall {
-    bool found = false;
+    bool found = false;         // a P.T. port install (manifest, or the older layout)
     bool has_manifest = false;
-    std::string version;
+    std::string version;        // empty for an older install without a manifest
     std::vector<InstalledFile> files;
 };
 inline void WriteManifest(const fs::path& dir, const std::string& version, const std::vector<InstalledFile>& files) {
@@ -500,10 +532,25 @@ inline bool ArchivesUsable(const fs::path& assets) {
     return fs::is_regular_file(assets / "chunk1.psarc", error) && IsPsarc(assets / "chunk1.psarc") &&
            fs::is_regular_file(assets / "texture.qar", error) && IsQar(assets / "texture.qar");
 }
+// What is in a folder the player chose: nothing (a new install), a P.T. port install (with or without a manifest), or
+// something else (refused, as before).
+// An existing empty folder counts as a new installation folder: file managers and the folder pickers create the folder
+// before the setup sees it, and players then got "This folder holds something else" for the folder they had just made.
+inline bool EmptyDirectory(const fs::path& dir) {
+    std::error_code error;
+    return fs::is_directory(dir, error) && !fs::is_symlink(dir, error) && fs::directory_iterator(dir, error) == fs::directory_iterator() && !error;
+}
+// The command line test modes write their verdict to the last argument. A mistyped command (godlike64 in issue #36 passed a game
+// file) truncated whatever that argument named, so a result path is only written when it is new or a small earlier result.
+inline bool ResultPathWritable(const fs::path& file) {
+    std::error_code error;
+    if (!fs::exists(file, error)) return true;
+    return fs::is_regular_file(file, error) && fs::file_size(file, error) <= 64 * 1024 && !error;
+}
 inline ExistingInstall InspectInstall(const fs::path& dir) {
     ExistingInstall install;
     std::error_code error;
-    if (!fs::exists(dir, error)) return install;
+    if (!fs::exists(dir, error) || EmptyDirectory(dir)) return install;
     if (!fs::is_directory(dir, error) || fs::is_symlink(dir, error)) throw std::runtime_error("Choose a new installation folder. Existing folders are never overwritten.");
     std::ifstream manifest(dir / kManifestName, std::ios::binary);
     std::string line;
@@ -513,12 +560,14 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
             if (line.starts_with("version=")) install.version = line.substr(8);
             if (line.starts_with("file=") && line.size() > 5 + 65) {
                 InstalledFile file{line.substr(5 + 65), line.substr(5, 64)};
+                // a manifest path is checked like a payload path before anything acts on it
                 Contained(dir, file.path);
                 if (!IsUserDataPath(file.path)) install.files.push_back(std::move(file));
             }
         }
         return install;
     }
+    // installs from before the manifest: the game executable and the installed archives
     const bool exe = fs::is_regular_file(dir / kGameExe, error) || fs::is_regular_file(dir / "pt.exe", error);
     const bool archives = fs::is_regular_file(dir / "CUSA01127" / "chunk1.psarc", error) && fs::is_regular_file(dir / "CUSA01127" / "texture.qar", error);
     if (exe && archives) {
@@ -527,16 +576,22 @@ inline ExistingInstall InspectInstall(const fs::path& dir) {
     }
     throw std::runtime_error("This folder holds something else. Choose a new installation folder, or a folder with a P.T. install to update it.");
 }
+// Program files of an install without a manifest that a new version may drop: only names the setup itself ships
 inline bool KnownProgramFile(const std::string& path) {
     static const char* const kNames[] = {"pt.exe", "pt", "amd_fidelityfx_vk.dll", "nvngx_dlss.dll", "libxess.dll", "README-UPDATE.txt", "manifest.json"};
     for (const char* name : kNames)
         if (path == name) return true;
+    // the PocketSphinx and Vosk voice files of the builds before whisper.cpp (formats/voice.md)
     if (path == "voice/cmudict-en-us.dict" || path.starts_with("voice/en-us/") || path.starts_with("voice/vosk/")) return true;
     return (path.starts_with("shaders/") && path.ends_with(".spv")) || path.starts_with("extractor/");
 }
 struct SwapResult {
     int replaced = 0, added = 0, removed = 0;
 };
+// Moves the new program files from `staging` (same parent folder, so every move is a rename) into `dest`. Each file the
+// update replaces or removes goes to a backup folder first; when anything fails, every step is undone in reverse and the
+// install is as it was. `extra` are further files of `staging` to put in place (restored game archives, notes), kept out of
+// the manifest. `fail_at` makes step N fail, for the tests.
 inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest, const std::vector<InstalledFile>& files,
                                    const std::vector<std::string>& extra, const ExistingInstall& old, const fs::path& backup, int fail_at = -1) {
     ValidateProgramFiles(files);
@@ -544,8 +599,8 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
         if (IsUserDataPath(path)) throw std::runtime_error("The installer cannot replace files under data/.");
     struct Step {
         std::string path;
-        bool placed;
-        bool backed;
+        bool placed;   // a new file now at dest/path, from staging/path
+        bool backed;   // the old dest/path is in backup/path
     };
     std::vector<Step> journal;
     SwapResult result;
@@ -576,6 +631,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
             journal.back().placed = true;
             existed ? ++result.replaced : ++result.added;
         }
+        // program files the new version no longer ships: those of the old manifest, or known names of an older install
         std::vector<std::string> obsolete;
         auto shipped = [&](const std::string& path) { return std::find(all.begin(), all.end(), path) != all.end(); };
         if (old.has_manifest) {
@@ -599,6 +655,7 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
         }
         tick();
     } catch (...) {
+        // undo in reverse: new files back to staging, old ones back from the backup
         for (auto it = journal.rbegin(); it != journal.rend(); ++it) {
             std::error_code error;
             if (it->placed) fs::rename(Contained(dest, it->path), Contained(staging, it->path), error);
@@ -609,25 +666,29 @@ inline SwapResult SwapProgramFiles(const fs::path& staging, const fs::path& dest
     return result;
 }
 
+// The platform parts of an install, given by each front end
 struct InstallSteps {
-    std::string version;
-    std::string unique_id;
-    std::function<void(const fs::path&)> check_parents;
-    std::function<void()> verify_integrity;
-    std::function<uint64_t()> payload_bytes;
-    std::function<std::vector<InstalledFile>(const fs::path&)> unpack;
-    std::function<void(const std::vector<InstalledFile>&)> validate_runtime;
-    std::function<void(const fs::path&, const fs::path&)> extract;
-    std::function<void(const fs::path&)> shortcut;
+    std::string version;                                                    // this setup's version (PT_VERSION)
+    std::string unique_id;                                                  // for the staging and backup folder names
+    std::function<void(const fs::path&)> check_parents;                     // no junctions or links above the target
+    std::function<void()> verify_integrity;                                 // the setup file against a corrupt download
+    std::function<uint64_t()> payload_bytes;                                // what the payload unpacks to (PayloadBytes), for the progress total
+    std::function<std::vector<InstalledFile>(const fs::path&)> unpack;      // the payload into staging
+    std::function<void(const std::vector<InstalledFile>&)> validate_runtime; // platform-specific files required by the executable
+    std::function<void(const fs::path&, const fs::path&)> extract;          // staging, package: the helper
+    std::function<void(const fs::path&)> shortcut;                          // a fresh install's shortcut
 };
 struct InstallOutcome {
     bool updated = false;
     bool had_manifest = false;
-    std::string old_version;
+    std::string old_version;  // empty: an older install without a manifest
     bool archives_restored = false;
     SwapResult swap;
     std::vector<std::string> notes;
 };
+// A new install, or an update in place when `destination` holds one (the front end asks the player first). An update keeps
+// the game archives unless they are missing or fail their header check (then `input` must name the game again), keeps every
+// file that is not a program file, and is undone completely when any step fails.
 inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bool shortcut, const InstallSteps& steps) {
     if (destination.empty()) throw std::runtime_error("Choose an installation folder.");
     steps.check_parents(destination);
@@ -657,12 +718,15 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
     const fs::path backup = parent / (".pt-update-old-" + steps.unique_id);
     if (!fs::create_directory(staging)) throw std::runtime_error("Could not create staging directory.");
     auto remove_ours = [&](const fs::path& dir) {
+        // only the folders this run created, next to the target
         std::error_code error;
         if (fs::exists(dir, error) && dir.parent_path() == parent && !fs::is_symlink(dir, error) &&
             (PathUtf8(dir.filename()).starts_with(".pt-install-") || PathUtf8(dir.filename()).starts_with(".pt-update-")))
             fs::remove_all(dir, error);
     };
     try {
+        // the progress total: the payload's files, then the archives (a folder's sizes; a PKG counts as its own size, the
+        // helper's output is polled against it and the phase is completed when the helper ends)
         uint64_t total = steps.payload_bytes ? steps.payload_bytes() : 0, archives = 0;
         if (source) {
             auto size = [](const fs::path& file) -> uint64_t {
@@ -709,6 +773,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         WriteManifest(staging, steps.version, files);
         CheckCancel();
         if (!update) {
+            if (EmptyDirectory(destination)) fs::remove(destination);
             if (fs::exists(destination)) throw std::runtime_error("Choose a new installation folder. Existing folders are never overwritten.");
             fs::rename(staging, destination);
             if (shortcut) steps.shortcut(destination);
@@ -731,6 +796,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         return outcome;
     } catch (...) {
         remove_ours(staging);
+        // after a failed swap the backup is empty again (everything moved back); a leftover means a step could not be undone
         bool kept = false;
         std::error_code error;
         for (fs::recursive_directory_iterator it(backup, error), end; !error && it != end; it.increment(error))
@@ -739,6 +805,7 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
         throw;
     }
 }
+// The question the front ends ask before an update; empty for a new install
 inline std::string UpdateQuestion(const ExistingInstall& old, const std::string& version) {
     if (!old.found) return {};
     if (old.has_manifest && old.version == version)
@@ -747,6 +814,8 @@ inline std::string UpdateQuestion(const ExistingInstall& old, const std::string&
            version + "? The game files, settings, saves and anything else you added stay.";
 }
 
+// The update checks of both setups' --self-test: a synthetic old install with a manifest and one without, the player's
+// files kept, obsolete program files removed, and a failure in the middle undone. Returns the failures, empty when none.
 inline std::string SelfTestUpdate(const fs::path& root) {
     std::string failures;
     auto write = [](const fs::path& file, const std::string& bytes) {
@@ -820,6 +889,7 @@ inline std::string SelfTestUpdate(const fs::path& root) {
             failures += std::string(" swap") + label + ": " + e.what();
         }
     }
+    // a failure after some files moved: everything back as it was
     for (int fail_at : {0, 2, 5}) {
         const fs::path dest = root / ("rollback" + std::to_string(fail_at)) / "PT", staging = dest.parent_path() / ".pt-update-t",
                        backup = dest.parent_path() / ".pt-update-old-t";
@@ -842,11 +912,23 @@ inline std::string SelfTestUpdate(const fs::path& root) {
         if (!thrown || before != after) failures += " rollback at step " + std::to_string(fail_at);
         if (read(staging / kGameExe) != "new exe") failures += " staging restored at step " + std::to_string(fail_at);
     }
+    // a folder with something else stays refused; an empty name is a new install
     write(root / "other" / "notes.txt", "x");
     bool refused = false;
     try { InspectInstall(root / "other"); } catch (...) { refused = true; }
     if (!refused) failures += " other-folder-accepted";
     if (InspectInstall(root / "nothing").found) failures += " new-folder";
+    {
+        std::error_code error;
+        fs::create_directories(root / "empty", error);
+        try {
+            if (InspectInstall(root / "empty").found) failures += " empty-folder-as-install";
+        } catch (...) { failures += " empty-folder-refused"; }
+        write(root / "result.txt", "PASS old");
+        if (!ResultPathWritable(root / "result.txt") || !ResultPathWritable(root / "new-result.txt")) failures += " result-refused";
+        write(root / "big.bin", std::string(128 * 1024, 'x'));
+        if (ResultPathWritable(root / "big.bin") || ResultPathWritable(root / "empty")) failures += " result-overwrites-user-file";
+    }
     {
         const fs::path dest = root / "reserved-data" / "PT", staging = root / "reserved-data" / ".pt-update-t",
                        backup = root / "reserved-data" / ".pt-update-old-t";
@@ -992,6 +1074,7 @@ inline std::string SelfTestUnicodePaths(const fs::path& root) {
         failures += std::string(" source:") + e.what();
     }
 
+    // Exercise manifest inspection, program replacement, and rollback beneath a Unicode install parent.
     try {
         const fs::path live = dest / "PT";
         const fs::path stage = dest / ".pt-update-test";

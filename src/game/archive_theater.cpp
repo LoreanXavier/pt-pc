@@ -21,15 +21,21 @@ namespace pt::game {
 namespace {
 
 constexpr double kDemoFps = 59.94;
+// the ending's narration over black ends and the street fades in (gc_p06_010_final's FadeIn at frame 2415): the teaser starts there
 constexpr double kTeaserFrame = 2410.0;
 constexpr float kTeaserRate = 30.0f;
+// the boot of the theater's session gives up after this long without reaching its picture
 constexpr double kBootLimit = 90.0;
+// a demo that has not started this long after its play gives up
 constexpr double kStartLimit = 15.0;
+// the model viewer's spot: this far from the start room's player start toward its door, under the light over the door
 constexpr float kSpotAhead = 1.0f;
+// a model lower than this stands this high, at a table's height
 constexpr float kTableBelow = 0.6f;
 constexpr float kTableHeight = 0.85f;
 constexpr const char* kTrapDemo = "ShTrapExecRelativeStageDemoPlayCallbackDataElement";
 
+// the walk of the loop browser's previews (main.cpp LoopPreviewRoute): out of the start room through its door, then the hallway
 constexpr const char* kWalkRoute =
     "20 sstep 15\n20 swait 5\n20 sfree\n20 goto 0 0 12.5 900\n20 swait 10\n20 sfree\n20 sbrowsed 900\n20 sstep 15\n20 swait 5\n20 sfree\n";
 
@@ -56,6 +62,7 @@ ArchiveTheater::ArchiveTheater(Vfs& vfs, ModelCache& models, const ArchiveEntry&
     } else if (entry.extra == "teaser") {
         kind_ = Kind::Teaser;
     } else {
+        // a hallway demo; "lit": with the flashlight on, as it is after the f060 pickup
         kind_ = Kind::Hallway;
     }
 }
@@ -167,11 +174,13 @@ void ArchiveTheater::Update(float dt, const InputState& input) {
     if (!game_ || phase_ == Phase::Done) return;
     ++frame_;
     phase_time_ += dt;
+    // the player's subtitles in the player's language, as the menu has them now
     game_->Options().subtitles = settings_.options.subtitles;
     game_->Options().subtitle_language = settings_.options.subtitle_language;
     game_->Options().brightness = settings_.options.brightness;
     GameController& controller = game_->Controller();
     if (browse_index_ > 0 && !prepared_ && controller.Step() >= 1) {
+        // after the boot's save step, which sets the floor and the puzzles of a new game
         game_->PrepareTheaterLoop(browse_index_);
         prepared_ = true;
     }
@@ -190,6 +199,7 @@ void ArchiveTheater::Update(float dt, const InputState& input) {
             return;
         }
         if (kind_ == Kind::Model || kind_ == Kind::Room) {
+            // in play, after StartGame's fade in (OnPreGame)
             const ScreenEffects& fx = game_->Effects();
             const bool faded_in = !fx.IsFadeProcessing() && fx.FadeShown().a < 0.004f;
             if (step == 15 && controller.RequestedStep() == 15 && faded_in && ++settle_ticks_ >= 10) {
@@ -206,12 +216,14 @@ void ArchiveTheater::Update(float dt, const InputState& input) {
             }
         } else if (kind_ == Kind::Ending || kind_ == Kind::Teaser) {
             if (step == 15 && controller.RequestedStep() == 15) {
+                // as the f160 exit door's demo does at its Finish on the ending floor (demoScriptGotoEnding): the ending loads
                 game_->Floor().SetFloorLevel("ending");
                 controller.ChangeGameStep("GotoEnding");
                 phase_ = Phase::Playing;
                 phase_time_ = 0.0;
             }
         } else if (script_ && script_->Idle() && game_->BrowseArrived() && step == 15 && !demos.ControlsPlayer()) {
+            // through the door and in the hallway, its entrance traps run (light set, doors, sound)
             if (++settle_ticks_ >= 30) Present();
         }
         break;
@@ -227,6 +239,7 @@ void ArchiveTheater::Update(float dt, const InputState& input) {
             if (kind_ == Kind::Teaser && playing) {
                 const double frame = demos.PlayTime(asset) * kDemoFps;
                 if (frame < kTeaserFrame && !teaser_fast_ && frame > 0.0) {
+                    // the narration over black runs silent and fast; the street, the reveal and the credits play as they are
                     teaser_fast_ = true;
                     demos.time_scale = kTeaserRate;
                     if (sound_) sound_->System().SetMasterVolume(0.0f);
@@ -255,6 +268,9 @@ void ArchiveTheater::Update(float dt, const InputState& input) {
     }
 }
 
+// the place the level data plays the demo at: a ShDemoExec trap of the entry's floor (its demo center or its own transform, as
+// TrapSystem::ExecDemo sets it) and that trap's box as the player's place; else a script that plays it (demoScriptPlayDemo after
+// another demo, or gamePlayDemo on a message) with its demo center, and the place of the demo that leads to it
 bool ArchiveTheater::FindPlacement(const std::string& demo, glm::mat4& transform, glm::vec3* viewpoint) {
     bool found = false;
     bool found_on_floor = false;
@@ -319,6 +335,7 @@ bool ArchiveTheater::FindPlacement(const std::string& demo, glm::mat4& transform
     return found;
 }
 
+// the middle of what the demo moves (its models, or its place before they appear), eased so a swinging door turns the view slowly
 void ArchiveTheater::UpdateAim(float dt) {
     glm::vec3 sum(0.0f);
     int count = 0;
@@ -340,6 +357,7 @@ void ArchiveTheater::UpdateAim(float dt) {
     } else {
         look_target_ += (sum / static_cast<float>(count) - look_target_) * std::min(1.0f, dt * 3.0f);
     }
+    // the session's own camera, so its handy light and its view turn together; a demo camera, when one shows, takes over
     Camera demo_camera;
     if (game_->Demos().CameraOverride(demo_camera)) {
         game_->SetCameraOverride(std::nullopt);
@@ -363,13 +381,16 @@ void ArchiveTheater::Present() {
     DemoSystem& demos = game_->Demos();
     Player& player = game_->GetPlayer();
     if (kind_ == Kind::Kill) {
+        // Lisa's kill stands at the player as OchoLogic::Kill puts it
         const float yaw = player.BodyFoxYaw();
         demos.SetDemoTransform(demo, glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f)), player.Feet());
     } else {
         if (kind_ == Kind::Room && !game_->Stages().IsActive("next")) {
+            // the hallway behind the start room's door, which the door's trap shows as the player walks up to it
             game_->Stages().RequestActivate("next");
         }
         if (entry_.extra == "lit") {
+            // after the f060 pickup (gc_p00_030) in one sitting the flashlight is on
             player.handy_light.enable = true;
         }
         glm::mat4 transform(1.0f);
@@ -386,6 +407,7 @@ void ArchiveTheater::Present() {
         }
         aim_ = kind_ == Kind::Hallway;
         if (has_view) {
+            // a demo without a camera of its own is seen from where its trap is walked into, looking at it
             const glm::vec3 feet(viewpoint.x, player.Feet().y, viewpoint.z);
             const glm::vec3 to(transform[3].x - feet.x, 0.0f, transform[3].z - feet.z);
             const float yaw = glm::length(to) > 0.2f ? std::atan2(to.x, to.z) : player.BodyFoxYaw();
@@ -398,11 +420,13 @@ void ArchiveTheater::Present() {
     phase_time_ = 0.0;
 }
 
+// the model at the start room's player start, facing where the player faces, in the room's light; the camera turns around it
 void ArchiveTheater::StartModel() {
     game_->Theater().traps = false;
     game_->Theater().ocho = false;
     model_mode_ = true;
     const Player& player = game_->GetPlayer();
+    // a metre from the player start toward the door, under the light over the door
     spot_yaw_ = player.BodyFoxYaw();
     spot_ = player.Feet() + FoxForward(spot_yaw_) * kSpotAhead;
     const glm::mat4 place = glm::translate(glm::mat4(1.0f), spot_) * glm::mat4_cast(glm::angleAxis(spot_yaw_, glm::vec3(0.0f, 1.0f, 0.0f)));
@@ -420,6 +444,8 @@ void ArchiveTheater::StartModel() {
             lo = g.mesh->bounds_min;
             hi = g.mesh->bounds_max;
         }
+        // standing on the floor at the spot, whatever the model's own origin (the fridge and the lamp hang from their tops); Lisa
+        // stands on her own origin, which her bind pose's bounds do not show
         if (type != GimmickType::Ocho) {
             const glm::vec3 center = (lo + hi) * 0.5f;
             model_offset_ = glm::translate(glm::mat4(1.0f), glm::vec3(-center.x, -lo.y, -center.z));
@@ -437,6 +463,7 @@ void ArchiveTheater::StartModel() {
     } else if (const ModelEntry* model = models_.Get(std::string(entry_.asset))) {
         lo = model->mesh->bounds_min;
         hi = model->mesh->bounds_max;
+        // standing on the floor at the spot, whatever the file's own origin
         const glm::vec3 center = (lo + hi) * 0.5f;
         DrawItem item;
         item.mesh = model->mesh.get();
@@ -452,6 +479,7 @@ void ArchiveTheater::StartModel() {
     const glm::vec3 extent = glm::max(hi - lo, glm::vec3(0.02f));
     const float size = std::max({extent.x, extent.y, extent.z});
     if (extent.y < kTableBelow) {
+        // a small thing stands at a table's height, as the radio and the phone do in the hallway, nearer the room's light
         const glm::vec3 lift(0.0f, kTableHeight, 0.0f);
         for (DrawItem& item : model_draws_) item.transform = glm::translate(glm::mat4(1.0f), lift) * item.transform;
         if (gimmick_) model_offset_ = glm::translate(glm::mat4(1.0f), lift) * model_offset_;
@@ -467,9 +495,12 @@ void ArchiveTheater::StartModel() {
     model_radius_ = size * 0.5f;
     distance_ = std::clamp(size * 1.9f + 0.05f, 0.1f, 6.0f);
     min_distance_ = std::max(0.08f, size * 0.6f);
+    // the model alone on black: the floor's auto exposure would meter the black, so the exposure is held where the room's
+    // lit surfaces read as in play (Settings::model_ev; the thumbnail capture holds it higher)
     game_->Effects().ev_pinned = true;
     game_->Effects().pinned_ev = settings_.model_ev;
     max_distance_ = std::max(distance_ * 2.0f, 1.5f);
+    // in front of the model: looking back along its facing
     const glm::vec3 facing = FoxForward(spot_yaw_);
     yaw_ = std::atan2(facing.x, facing.z);
     pitch_ = -0.12f;
@@ -478,6 +509,7 @@ void ArchiveTheater::StartModel() {
 
 void ArchiveTheater::UpdateModel(float dt, const InputState& input) {
     if (gimmick_) {
+        // the motion again from its start at its end (OchoDash and BagTalk hold their last frame in play), the model at the spot
         const GimmickType type = static_cast<GimmickType>(gimmick_type_);
         Gimmick& g = game_->Objects().GetGimmick(type);
         const float length = game_->Demos().Gimmicks().MotionSeconds(g.motion);
@@ -486,6 +518,7 @@ void ArchiveTheater::UpdateModel(float dt, const InputState& input) {
         g.world = place * model_offset_;
         if (type == GimmickType::Ocho) game_->Objects().SetOchoTransform(g.world);
     }
+    // the left stick (WASD) pans; the right stick and D-pad (arrows) turn; the triggers zoom
     float turn = input.right_stick.x;
     float tilt = input.right_stick.y;
     if (input.raw_held & kRawLeft) turn -= 1.0f;

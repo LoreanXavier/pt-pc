@@ -13,10 +13,13 @@ namespace {
 
 constexpr const char* kModelPath = "/Assets/sh/ui/ModelAsset/sys_loadicon/Scenes/UI_sys_loadicon.uif";
 constexpr const char* kLayoutPath = "/Assets/sh/ui/LayoutAsset/sys_loading/UI_sys_loading.uilb";
+// 0x1284E00 looks these up by name in the layout, and the text nodes 0x575A0BDC8C71 and 0x2DB5A5C54ED4 of the model
 constexpr const char* kSetin = "UI_sys_loadicon_setin";
 constexpr const char* kLoop = "UI_sys_loadicon_lp";
 constexpr const char* kSetout = "UI_sys_loadicon_setout";
+// 0x1285030: setout waits until the job is done and the icon has shown this long
 constexpr float kMinimumShown = 2.0f;
+// the UI animations step once per 30 Hz game frame, as the option menu's
 constexpr float kGameFrame = 1.0f / 30.0f;
 
 }
@@ -49,6 +52,7 @@ bool SaveIcon::Init(UiAssets& assets) {
     for (const ui::UilbAnimation& a : layout.Animations()) {
         animations_[a.name] = {load(a.main), load(a.shader), a.speed};
     }
+    // the layout places the model: its nodes all sit at the origin
     if (!layout.Models().empty()) {
         root_offset_ = glm::vec2(layout.Models().front().translate);
     }
@@ -85,6 +89,8 @@ void SaveIcon::Start(bool loading) {
     if (!model_) {
         return;
     }
+    // 0x1284F40: the text nodes get the text of "Saving" or "Loading", keys the language files do not have (theirs are sys_saving and
+    // sys_loading), so the captures show the circles alone
     for (size_t i = 0; i < model_->Nodes().size(); ++i) {
         if (model_->Nodes()[i].type == ui::UifNodeType::Text) {
             view_.StateAt(i).text = std::string();

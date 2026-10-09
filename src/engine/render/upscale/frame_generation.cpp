@@ -460,6 +460,7 @@ private:
     }
 
     bool Check(std::string& reason) {
+        // the hardware first, so a GPU that could never run it says so whatever the window (upscale.cpp, FsrFrameGenHardware)
         /* GPU check before the window check, so a GPU that can never run it says so even in a headless run. */
         if (!FsrFrameGenHardware(ctx_.physical, ctx_.properties, reason)) {
             return false;
