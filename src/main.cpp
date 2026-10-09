@@ -747,7 +747,7 @@ std::filesystem::path UserDataDir() {
 }
 
 std::filesystem::path LegacyUserDataDir() {
-#ifdef __APPLE__
+#if defined(__APPLE__)
     return {};
 #elif defined(_WIN32)
     PWSTR roaming = nullptr;
@@ -758,14 +758,15 @@ std::filesystem::path LegacyUserDataDir() {
     }
     CoTaskMemFree(roaming);
     const auto value = pt::os::GetEnv("APPDATA");
+    return value.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(value) / "pt-port" / "pt";
 #else
     const auto value = pt::os::GetEnv("XDG_DATA_HOME");
     if (value.empty()) {
         const auto home = pt::os::GetEnv("HOME");
         return home.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(home) / ".local" / "share" / "pt-port" / "pt";
     }
+    return pt::os::PathFromUtf8(value) / "pt-port" / "pt";
 #endif
-    return value.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(value) / "pt-port" / "pt";
 }
 
 bool LooksLikeGameDir(const std::filesystem::path& dir) {
