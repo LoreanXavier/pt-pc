@@ -9,7 +9,7 @@ rebuilt in C++ from the original's behaviour and the renderer is written on Vulk
 script and cutscene is read at run time from your own copy of the PS4 game. There is no game data in this repository
 and none in the installer.
 
-I made this in my spare time, with AI tools (see About AI at the end), because P.T. deserved to keep existing
+I made this in my spare time, with AI tools (see AI Disclosure at the end), because P.T. deserved to keep existing
 somewhere other than on consoles that still have it installed. It plays the whole teaser from the first wake-up to
 the street, with the voice part included.
 
@@ -136,16 +136,10 @@ executable.
 The port's own code is under the MIT license (see LICENSE). The third-party pieces listed above keep their own
 licenses.
 
-## About AI
+## AI Disclosure
 
-I'm open about using AI, and I don't think developers should feel they have to hide it. AI coding tools were used
-heavily throughout this project: to work through the decompiled code, to write and debug large parts of the port and
-its tools, to build and run the tests, and to track down problems when I got stuck. A project of this size would not
-have come together this quickly without them.
+AI coding tools were used in developing and debugging this port. My focus has been on matching the original P.T.:
+comparing builds with PS4 references, identifying discrepancies, testing gameplay and prioritizing fixes.
 
-What AI did not replace is knowing what to build. The direction, the architecture, the decisions about what has to
-match the original and what can differ, and the checking of the results against the real game are mine, and they rest
-on my years of reverse engineering and of playing and modding P.T. There is a big difference between using AI to
-solve a problem you understand and asking it to make something you don't: recreating a game whose engine source is
-not available, its graphics and its exact behaviour, cannot be done by blind prompting. Every change is tested
-against the original before it ships, and bug reports are always welcome.
+The project uses the original game assets from the player's own PS4 copy. Optional enhanced textures use
+machine-learning upscaling on existing textures.
