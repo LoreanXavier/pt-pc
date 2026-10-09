@@ -26,17 +26,23 @@ jobs:
             libshaderc-dev \
             libvulkan-dev \
             vulkan-tools \
-            libxtst-dev \
             libx11-dev \
             libxext-dev \
             libxrandr-dev \
             libxcursor-dev \
             libxi-dev \
             libxinerama-dev \
+            libxtst-dev \
+            libxss-dev \
+            libxxf86vm-dev \
+            libxfixes-dev \
+            libxrender-dev \
             libwayland-dev \
             libxkbcommon-dev \
             libasound2-dev \
-            libpulse-dev
+            libpulse-dev \
+            libdbus-1-dev \
+            libudev-dev
 
       - name: Extract version
         id: version
@@ -54,7 +60,8 @@ jobs:
         run: |
           cmake -G Ninja -B build/linux \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DSDL_X11_XTEST=OFF
+            -DSDL_X11_XTEST=OFF \
+            -DSDL_X11_XSCRNSAVER=OFF
           cmake --build build/linux --target pt pt_release
 
       - name: Package portable game files
