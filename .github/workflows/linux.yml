@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build tools and compile dependencies
+      - name: Install build tools and SDL3 dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -54,7 +54,7 @@ jobs:
           fi
           echo "version=${version:-1.0.2}" >> "$GITHUB_OUTPUT"
 
-      - name: Configure and build
+      - name: Configure CMake and build
         env:
           PT_VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -66,13 +66,7 @@ jobs:
 
       - name: Package portable game files
         run: |
-          # Use repository packager if available, otherwise assemble portable directory
-          if [ -f "tools/package.py" ]; then
-            python3 tools/package.py --build build/linux || true
-          fi
-
           mkdir -p dist/P.T.PC.Port-Linux-x64
-          # Select release executable or base build
           if [ -f "build/linux/pt_release" ]; then
             cp build/linux/pt_release dist/P.T.PC.Port-Linux-x64/pt
           else
@@ -80,7 +74,6 @@ jobs:
           fi
           chmod +x dist/P.T.PC.Port-Linux-x64/pt
 
-          # Copy compiled runtime folders (shaders, fonts, etc.)
           for dir in shaders fonts textures; do
             if [ -d "build/linux/$dir" ]; then
               cp -r "build/linux/$dir" dist/P.T.PC.Port-Linux-x64/
@@ -90,7 +83,7 @@ jobs:
           cd dist
           zip -r P.T.PC.Port-Linux-x64.zip P.T.PC.Port-Linux-x64
 
-      - name: Upload artifact
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: P.T.PC.Port-Linux-x64-${{ steps.version.outputs.version }}
