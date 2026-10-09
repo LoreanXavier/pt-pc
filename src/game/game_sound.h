@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -16,6 +18,48 @@
 
 namespace pt::game {
 
+class OneShotObjectPool {
+public:
+    OneShotObjectPool(audio::GameObjectId base, uint32_t initial_count) : base_(base), initial_count_(initial_count), slots_(initial_count) {}
+
+    template <typename IsPlaying>
+    audio::GameObjectId Acquire(IsPlaying&& is_playing) {
+        for (uint32_t offset = 0; offset < slots_.size(); ++offset) {
+            const uint32_t index = (next_ + offset) % static_cast<uint32_t>(slots_.size());
+            auto& playing = slots_[index];
+            std::erase_if(playing, [&](audio::PlayingId id) { return !is_playing(id); });
+            if (playing.empty()) {
+                next_ = index + 1;
+                return base_ + index;
+            }
+        }
+        const uint32_t index = static_cast<uint32_t>(slots_.size());
+        slots_.emplace_back();
+        next_ = index + 1;
+        return base_ + index;
+    }
+
+    void Track(audio::GameObjectId object, audio::PlayingId playing) {
+        if (playing && object >= base_ && object - base_ < slots_.size()) {
+            slots_[static_cast<size_t>(object - base_)].push_back(playing);
+        }
+    }
+
+    void Reset() {
+        slots_.resize(initial_count_);
+        for (auto& playing : slots_) playing.clear();
+        next_ = 0;
+    }
+
+    size_t Size() const { return slots_.size(); }
+
+private:
+    audio::GameObjectId base_;
+    uint32_t initial_count_;
+    std::vector<std::vector<audio::PlayingId>> slots_;
+    uint32_t next_ = 0;
+};
+
 class GameSound final : public GameAudio {
 public:
     static constexpr audio::GameObjectId kPlayerObject = 0x200;
@@ -29,7 +73,7 @@ public:
 
     explicit GameSound(Game& game) : game_(game) {}
 
-    bool Init(bool open_device, std::string_view language);
+    bool Init(bool open_device, std::string_view language, bool surround = false);
     void Shutdown();
     audio::SoundSystem& System() { return system_; }
     bool Ready() const { return ready_; }
@@ -133,7 +177,7 @@ private:
     Game& game_;
     audio::SoundSystem system_;
     bool ready_ = false;
-    uint32_t next_one_shot_ = 0;
+    OneShotObjectPool one_shot_objects_{kOneShotBase, kOneShotCount};
     audio::GameObjectId next_emitter_ = 0x20000;
     audio::GameObjectId next_anim_object_ = kAnimEventBase;
     std::map<uint64_t, AnimObject> anim_objects_;

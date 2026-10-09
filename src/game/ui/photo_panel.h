@@ -4,16 +4,19 @@
 #include <string>
 #include <vector>
 
+#include "game/ui/photo_preset.h"
+
 namespace pt::game {
 
 class Game;
+class GameAudio;
 
 float LetterboxAspect(int choice);
 
 struct PhotoSettings {
     static constexpr int kExposureZero = 6;
 
-    int fov = 60;
+    float focal_length_mm = 12.0f;
     int roll = 0;
     int speed = 1;
     bool depth_of_field = true;
@@ -24,7 +27,9 @@ struct PhotoSettings {
     bool bloom = true;
     bool grain = true;
     bool grading = true;
-    int letterbox = 0;
+    int aspect = static_cast<int>(PhotoAspectPreset::Off);
+    PhotoResolution resolution = PhotoResolution::Native;
+    PhotoColorFilter filter = PhotoColorFilter::Off;
     bool body = true;
     bool flashlight = true;
 
@@ -32,7 +37,7 @@ struct PhotoSettings {
     float Aperture() const;
     float ExposureEv() const { return static_cast<float>(exposure - kExposureZero) * 0.5f; }
     float SpeedScale() const;
-    float LetterboxAspect() const;
+    float AspectRatio(float source_aspect) const;
 };
 
 struct PhotoPanelRow {
@@ -48,6 +53,7 @@ struct PhotoPanelRow {
 struct PhotoPanelView {
     bool panel = false;
     float letterbox = 0.0f;
+    PhotoCropRect crop;
     int language = 0;
     std::vector<PhotoPanelRow> rows;
     std::string note;
@@ -65,15 +71,16 @@ public:
 
     void Open(const PhotoSettings& settings);
     Action Update(Game& game, const Input& input, float dt);
+    Action Update(GameAudio* audio, const Input& input, float dt);
     PhotoSettings& Settings() { return settings_; }
     const PhotoSettings& Settings() const { return settings_; }
-    PhotoPanelView View(int language, const std::string& status) const;
+    PhotoPanelView View(int language, const std::string& status, float source_aspect = 16.0f / 9.0f) const;
 
 private:
-    enum Row { kTakePhoto, kFov, kRoll, kSpeed, kReset, kDof, kFocus, kAperture, kExposure, kBloom, kLens, kGrain, kGrading,
-               kLetterbox, kBody, kFlashlight, kRowCount };
+    enum Row { kTakePhoto, kFocalLength, kRoll, kSpeed, kReset, kDof, kFocus, kAperture, kExposure, kBloom, kLens, kGrain,
+               kGrading, kAspect, kResolution, kFilter, kBody, kFlashlight, kRowCount };
 
-    void Change(Game& game, int delta);
+    void Change(GameAudio* audio, int delta);
     int Value(int row) const;
     int Steps(int row) const;
     std::string ValueText(int row, int language) const;

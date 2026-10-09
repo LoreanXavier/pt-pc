@@ -131,7 +131,12 @@ struct Curl {
     curl_slist* (*slist_append)(curl_slist*, const char*) = nullptr;
     void (*slist_free_all)(curl_slist*) = nullptr;
     Curl() {
+#ifdef __APPLE__
+        /* macOS ships libcurl with the system */
+        for (const char* name : {"/usr/lib/libcurl.4.dylib", "libcurl.4.dylib", "libcurl.dylib"}) {
+#else
         for (const char* name : {"libcurl.so.4", "libcurl-gnutls.so.4", "libcurl.so"}) {
+#endif
             if ((library = dlopen(name, RTLD_NOW | RTLD_LOCAL))) break;
         }
         if (!library) return;

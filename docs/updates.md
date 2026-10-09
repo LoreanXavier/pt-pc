@@ -1,38 +1,43 @@
 # Update check
 
-The game and the installer each look for a newer release once, in the background, and show a small notice when there is
-one. Nothing waits for the answer: offline or with the check turned off, everything works as before.
+The game and the Windows/Linux installers each look for a newer release once, in the background. The version and update
+endpoint are compiled into them; no separate update JSON file is required (see the one-time 1.0.2 compatibility asset below). macOS uses the same checker in its app.
+Offline, with updates disabled, or when GitHub is unavailable/rate-limits the request, gameplay and installation continue normally.
 
-## Where it is set
+## Configuration
 
-`CMakeLists.txt` holds both values:
+`CMakeLists.txt` sets `PT_VERSION` and the metadata endpoint `PT_UPDATE_MANIFEST_URL` (the historical variable name is retained
+for existing build/test overrides). The default endpoint is `https://api.github.com/repos/LoreanXavier/pt-pc/releases/latest`.
+`cmake/version.cmake` writes these values into the generated header at build time. `tools/ci/release.py --version` supplies the
+release version; `PT_VERSION_OVERRIDE` and `PT_UPDATE_MANIFEST_URL_OVERRIDE` are per-build overrides. The environment variable
+`PT_UPDATE_MANIFEST_URL` overrides the endpoint at runtime for tests; HTTPS only. A `.invalid` host disables the request.
 
-- `PT_VERSION` (`1.0.0`, raised for each release). `tools/ci/release.py --version` sets it through the environment and
-  `cmake/version.cmake` writes `generated/pt_version.h` at every build; the cache variable `PT_VERSION_OVERRIDE` sets it
-  for one build folder.
-- `PT_UPDATE_MANIFEST_URL` (default `https://github.com/LoreanXavier/pt-pc/releases/latest/download/latest.json`). GitHub
-  answers `releases/latest/download/<asset>` with a redirect to the newest release's asset, so the address is the same
-  for every release. A host on the reserved `.invalid` domain is a placeholder for which no request is made at all.
+## Release discovery
 
-The environment variable `PT_UPDATE_MANIFEST_URL` overrides the built-in address at run time (HTTPS only).
+The checker reads GitHub's `tag_name`, `html_url`, `body` and asset `name`/`browser_download_url` fields. It ignores drafts,
+prereleases, nonnumeric release tags and API errors. It compares numeric versions with the embedded current version and selects:
 
-## The manifest
+| Platform | Release asset |
+| --- | --- |
+| Windows | `P.T.PC.Port.Setup.exe` |
+| Linux | `P.T.PC.Port.Setup-linux` |
+| Apple silicon | `P.T.PC.Port-macOS-arm64.zip` |
+| Intel Mac | `P.T.PC.Port-macOS-x64.zip` |
 
-`tools/ci/release.py` writes it into the release folder as `latest.json`; it goes up as a release asset next to the setup:
+Windows portable ZIPs remain available as an additional download, but the notification points to the installer. If the matching
+asset is not present yet (for example, while the macOS workflow is building), the notice points to the release page. Custom Linux
+installer names also fall back to the release page; use the canonical name above for a direct link. Only HTTPS asset links are used.
+The first line of the release body supplies a short log note. The response limit is 512 KiB; timeout is 5 seconds.
 
-    {
-      "version": "1.0.0",
-      "notes": "",
-      "url": "https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.0",
-      "platforms": {
-        "windows": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/P.T.PC.Port.Setup.exe"},
-        "linux": {"url": "https://github.com/LoreanXavier/pt-pc/releases/download/v1.0.0/<linux setup name>"}
-      }
-    }
+The release pipeline produces only platform packages as upload candidates. Its build journal is local tooling output, outside the
+release asset directory. The macOS workflow uploads its two app ZIPs without downloading, editing or uploading a manifest.
+Legacy/custom manifest responses are still accepted by the parser for endpoint overrides, but no published manifest is required.
 
-`version` is required; the platform's `url` is used when present, else the top `url`. Versions compare by their numbers
-(`0.10.0` is newer than `0.9.2`, a leading `v` is ignored, `0.2.0-rc1` is older than `0.2.0`). The answer is limited to
-64 KB and HTTPS only; 5 s per request.
+1.0.2 is the final compatibility release: pass `--legacy-update-manifest` to `tools/ci/release.py` to add one last
+`latest.json` asset so existing 1.0.1 games/installers can announce 1.0.2. They fetch it automatically over HTTPS;
+players never need a local copy. New 1.0.2 binaries already use the GitHub API and ignore that asset.
+For 1.0.3 and later, omit the flag and publish only platform packages. The flag is rejected for every version except 1.0.2.
+Users still on 1.0.1 after the compatibility asset is removed will need a manual download.
 
 ## Behaviour
 

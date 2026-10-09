@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <string_view>
 #include <utility>
@@ -10,7 +11,7 @@ namespace pt {
 enum class LogLevel { Debug, Info, Warn, Error };
 
 void LogWrite(LogLevel level, std::string_view text);
-void LogSetFile(const char* path);
+void LogSetFile(const std::filesystem::path& path);
 void LogSetTick(uint64_t tick);
 
 template <typename... Args>

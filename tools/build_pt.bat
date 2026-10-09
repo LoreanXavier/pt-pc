@@ -20,6 +20,9 @@ if not "%DEPS%"=="" if exist "%DEPS%\sdl3-src" (
   set "SHARED=-DFETCHCONTENT_SOURCE_DIR_SDL3=%DEPS%\sdl3-src -DFETCHCONTENT_SOURCE_DIR_ZLIB=%DEPS%\zlib-src -DFETCHCONTENT_SOURCE_DIR_VOLK=%DEPS%\volk-src -DFETCHCONTENT_SOURCE_DIR_VMA=%DEPS%\vma-src -DFETCHCONTENT_SOURCE_DIR_GLM=%DEPS%\glm-src -DFETCHCONTENT_SOURCE_DIR_IMGUI=%DEPS%\imgui-src -DFETCHCONTENT_SOURCE_DIR_STB=%DEPS%\stb-src -DFETCHCONTENT_SOURCE_DIR_LUA51=%DEPS%\lua51-src -DFETCHCONTENT_SOURCE_DIR_OGG=%DEPS%\ogg-src -DFETCHCONTENT_SOURCE_DIR_VORBIS=%DEPS%\vorbis-src -DPT_UPSCALER_SDK_DIR=%DEPS%\upscaler-sdks"
 )
 if not "%DEPS%"=="" if exist "%DEPS%\whisper-src" set "SHARED=%SHARED% -DFETCHCONTENT_SOURCE_DIR_WHISPER=%DEPS%\whisper-src"
-if not exist "%BUILD_DIR%\CMakeCache.txt" cmake --preset %PRESET% -B "%BUILD_DIR%" %SHARED% || exit /b 2
+rem PT_CMAKE_ARGS (tools/ci/release.py): configure again with these cache values, so a release never inherits a test build's
+if not "%PT_CMAKE_ARGS%"=="" (
+  cmake --preset %PRESET% -B "%BUILD_DIR%" %SHARED% %PT_CMAKE_ARGS% || exit /b 2
+) else if not exist "%BUILD_DIR%\CMakeCache.txt" cmake --preset %PRESET% -B "%BUILD_DIR%" %SHARED% || exit /b 2
 cmake --build "%BUILD_DIR%" --parallel %NUMBER_OF_PROCESSORS% %TARGET_ARGS% || exit /b 3
 echo BUILD_OK %CD%\%BUILD_DIR%\pt.exe

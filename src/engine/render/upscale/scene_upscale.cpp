@@ -54,6 +54,16 @@ void UpdateDlssFrameGeneration(Renderer& renderer, bool wanted) {
     if (!renderer.hudless) {
         renderer.hudless = PresentFrameGeneration;
     }
+    if (!renderer.frame_start) {
+        renderer.frame_start = [](bool swapchain_recreation_pending) {
+            FrameGeneration* dlss = UpscaleHost::Get().DlssFrameGenImpl();
+            return dlss ? dlss->FrameStart(swapchain_recreation_pending) : FrameStartAction::Continue;
+        };
+        renderer.swapchain_failed = [] {
+            FrameGeneration* dlss = UpscaleHost::Get().DlssFrameGenImpl();
+            return dlss && dlss->SwapchainFailed();
+        };
+    }
     if (fg->Update(wanted)) {
         renderer.Resize(0, 0);
     }
@@ -412,7 +422,8 @@ void SceneRenderer::RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& vi
     }();
     static const float demod_floor = [] {
         const char* e = std::getenv("PT_HANDY_DEMOD_FLOOR");
-        return e ? static_cast<float>(std::atof(e)) : kHandyDemodFloor;
+        const float value = e ? static_cast<float>(std::atof(e)) : kHandyDemodFloor;
+        return std::isfinite(value) && value >= 1.0e-4f ? value : kHandyDemodFloor;
     }();
     uint32_t handy = gpu::kInvalid;
     bool handy_shadow = false;

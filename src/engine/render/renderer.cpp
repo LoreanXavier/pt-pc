@@ -9,12 +9,18 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 #include "engine/core/log.h"
-#include "engine/render/upscale/streamline.h"
+#include "engine/core/crash_report.h"
+#include "engine/render/hdr_output.h"
+#include "engine/render/pipeline_cache_store.h"
+#include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/streamline.h"
 #include "engine/render/upscale/upscale.h"
 
@@ -29,6 +35,31 @@ void ImGuiCheck(VkResult result) {
     }
 }
 
+float HalfToFloat(uint16_t h) {
+    const uint32_t sign = uint32_t(h & 0x8000u) << 16;
+    uint32_t exponent = (h >> 10) & 0x1fu;
+    uint32_t mantissa = h & 0x03ffu;
+    uint32_t bits = 0;
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            bits = sign;
+        } else {
+            int shift = 0;
+            while ((mantissa & 0x0400u) == 0) {
+                mantissa <<= 1;
+                ++shift;
+            }
+            mantissa &= 0x03ffu;
+            bits = sign | (uint32_t(127 - 15 - shift) << 23) | (mantissa << 13);
+        }
+    } else if (exponent == 0x1fu) {
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    } else {
+        bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
+    }
+    return std::bit_cast<float>(bits);
+}
+
 }
 
 bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
@@ -36,8 +67,9 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
     if (const char* brightness = std::getenv("PT_OUTPUT_BRIGHTNESS")) {
         brightness_override_ = static_cast<float>(std::atof(brightness));
     }
+    ctx_.pipeline_cache_dir = settings.pipeline_cache_dir;
     window_ = settings.headless ? nullptr : window;
-    if (!ctx_.Init(window_, settings.validation)) {
+    if (!ctx_.Init(window_, settings.validation, settings.hdr && !settings.headless)) {
         return false;
     }
     uint32_t width = settings.width;
@@ -49,22 +81,26 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         SDL_GetWindowSizeInPixels(window_, &w, &h);
         width = static_cast<uint32_t>(w);
         height = static_cast<uint32_t>(h);
-        if (!ctx_.CreateSwapchain(width, height, settings.vsync)) {
+        if (!ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr)) {
             /* DLSS-G's swapchain hook can refuse the window (borderless fullscreen on some setups); the game goes on without it. */
-            if (!streamline::UnloadFrameGen()) {
+            if (!streamline::DisableFrameGenFeature()) {
                 return false;
             }
             LogError("frame generation: DLSS Frame Generation refused the swapchain, turned off for this run");
             UpscaleHost::Get().SetDlssFrameGenFailed(true);
-            if (!ctx_.CreateSwapchain(width, height, settings.vsync)) {
+            if (!ctx_.CreateSwapchain(width, height, settings.vsync, settings.hdr)) {
                 return false;
             }
         }
         output_format = ctx_.swapchain.format;
+        output_mode_ = ctx_.swapchain.color_space == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
+                           ? RendererOutputMode::ScRgb
+                           : ctx_.swapchain.color_space == VK_COLOR_SPACE_HDR10_ST2084_EXT ? RendererOutputMode::Hdr10 : RendererOutputMode::Sdr;
         width = ctx_.swapchain.extent.width;
         height = ctx_.swapchain.extent.height;
     }
     output_format_ = output_format;
+    final_format_ = output_mode_ == RendererOutputMode::Sdr ? output_format_ : VK_FORMAT_R16G16B16A16_SFLOAT;
     for (Frame& frame : frames_) {
         VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pool_info.queueFamilyIndex = ctx_.queue_family;
@@ -110,7 +146,7 @@ bool Renderer::InitImGui(SDL_Window* window) {
     io.IniFilename = "pt_imgui.ini";
     ImGui::StyleColorsDark();
     ImGui_ImplSDL3_InitForVulkan(window);
-    g_imgui_format = ctx_.swapchain.format;
+    g_imgui_format = final_format_;
     ImGui_ImplVulkan_InitInfo info{};
     info.ApiVersion = VK_API_VERSION_1_3;
     info.Instance = ctx_.instance;
@@ -136,7 +172,7 @@ bool Renderer::InitImGui(SDL_Window* window) {
 
 bool Renderer::CreateTargets(uint32_t width, uint32_t height) {
     const VkExtent3D extent{width, height, 1};
-    if (!ctx_.CreateImage(scene_color_, kSceneColorFormat, extent,
+    if (!ctx_.CreateImage(scene_color_, SceneColorFormat(), extent,
                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
         return false;
     }
@@ -148,15 +184,16 @@ bool Renderer::CreateTargets(uint32_t width, uint32_t height) {
     if (!settings_.headless) {
         const VkFormat format = ctx_.swapchain.format;
         const bool capture = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_UNORM ||
-                             format == VK_FORMAT_R8G8B8A8_SRGB;
+                             format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                             format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         if (!capture) {
-            LogWarn("renderer: swapchain format {} has no 8-bit layout, windowed screenshots disabled", static_cast<int>(format));
+            LogWarn("renderer: swapchain format {} has no screenshot readback path", static_cast<int>(format));
         } else if (!ctx_.CreateImage(output_, format, extent, usage)) {
             LogWarn("renderer: no capture image, windowed screenshots disabled");
         }
     }
-    if (!ctx_.CreateImage(final_, output_format_, extent, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+    if (!ctx_.CreateImage(final_, final_format_, extent, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
         return false;
     }
     WriteCompositeSets();
@@ -280,7 +317,12 @@ bool Renderer::CreateCompositePipeline(VkFormat output_format) {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = composite_layout_;
-    const bool ok = vk::Check(vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &info, nullptr, &composite_pipeline_), "composite pipeline");
+    bool ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &composite_pipeline_), "composite pipeline");
+    if (ok && final_format_ != output_format) {
+        rendering.pColorAttachmentFormats = &final_format_;
+        ok = vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &final_composite_pipeline_),
+                       "composite intermediate pipeline");
+    }
     vkDestroyShaderModule(ctx_.device, vert, nullptr);
     vkDestroyShaderModule(ctx_.device, frag, nullptr);
     return ok;
@@ -298,6 +340,7 @@ void Renderer::Shutdown() {
         imgui_ready_ = false;
     }
     DestroyXr();
+    if (final_composite_pipeline_) vkDestroyPipeline(ctx_.device, final_composite_pipeline_, nullptr);
     vkDestroyPipeline(ctx_.device, composite_pipeline_, nullptr);
     vkDestroyPipelineLayout(ctx_.device, composite_layout_, nullptr);
     vkDestroyDescriptorPool(ctx_.device, composite_pool_, nullptr);
@@ -326,8 +369,17 @@ void Renderer::Resize(uint32_t, uint32_t) {
 
 bool Renderer::BeginFrame(bool present) {
     Frame& frame = frames_[frame_index_];
-    streamline::BeginFrame();
     ctx_.CheckDeviceLost(vkWaitForFences(ctx_.device, 1, &frame.in_flight, VK_TRUE, UINT64_MAX), "frame fence wait");
+    bool keep_current_swapchain = false;
+    if (window_ && present && frame_start) {
+        const FrameStartAction action = frame_start(swapchain_dirty_);
+        if (action == FrameStartAction::RecreateSwapchain) {
+            swapchain_dirty_ = true;
+        } else if (action == FrameStartAction::KeepCurrentSwapchain) {
+            keep_current_swapchain = true;
+        }
+    }
+    streamline::BeginFrame();
     grain[0] = 0.0f;
     if (render_extent_.width > 0 && render_extent_.height > 0 &&
         (scene_color_.extent.width != render_extent_.width || scene_color_.extent.height != render_extent_.height)) {
@@ -340,14 +392,17 @@ bool Renderer::BeginFrame(bool present) {
     }
     presenting_ = window_ && present;
     if (presenting_) {
-        if (swapchain_dirty_) {
+        if (swapchain_dirty_ && !keep_current_swapchain) {
             int w = 0;
             int h = 0;
             SDL_GetWindowSizeInPixels(window_, &w, &h);
             if (w == 0 || h == 0) {
                 return false;
             }
-            if (!ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync)) {
+            if (!ctx_.CreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h), settings_.vsync, settings_.hdr)) {
+                if (ctx_.swapchain_refused && swapchain_failed) {
+                    swapchain_failed();
+                }
                 return false;
             }
             DestroyTargets();
@@ -367,6 +422,10 @@ bool Renderer::BeginFrame(bool present) {
             return false;
         }
         if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
+            if (keep_current_swapchain) {
+                FatalError("DLSS Frame Generation could not safely change the swapchain, and the retained swapchain is no longer usable. Restart P.T. and try again.",
+                           window_ != nullptr);
+            }
             swapchain_dirty_ = true;
             return false;
         }
@@ -401,19 +460,21 @@ bool Renderer::BeginFrame(bool present) {
     return true;
 }
 
-void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkOffset2D offset) {
+void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format, VkOffset2D offset) {
     VkViewport viewport{static_cast<float>(offset.x), static_cast<float>(offset.y), static_cast<float>(extent.width), static_cast<float>(extent.height),
                         0.0f, 1.0f};
     VkRect2D scissor{offset, extent};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_pipeline_);
+    const VkPipeline pipeline = target_format == final_format_ && final_format_ != output_format_ ? final_composite_pipeline_ : composite_pipeline_;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_layout_, 0, 1, &set, 0, nullptr);
     const float brightness = std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
     /* The grain tiles three times across the original 16:9 frame; scaling by the window's width in 16:9 frames keeps the grain texel size on ultrawide. */
     const float across = extent.height ? (static_cast<float>(extent.width) / static_cast<float>(extent.height)) / (16.0f / 9.0f) : 1.0f;
-    const float push[16] = {exposure, brightness, mode, 0.0f, fade[0], fade[1], fade[2], fade[3],
-                            grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across, 0.0f};
+    const float push[16] = {exposure, brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
+                            grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across,
+                            static_cast<float>(output_mode_)};
     vkCmdPushConstants(cmd, composite_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
@@ -444,9 +505,19 @@ void Renderer::EndFrame(bool draw_ui) {
     rendering.pColorAttachments = &color;
     const vk::Image* hud = presenting_ && hudless && !xr ? hudless(image_index_) : nullptr;
     vkCmdBeginRendering(cmd, &rendering);
-    Composite(cmd, composite_set_, 0.0f, extent);
+    Composite(cmd, composite_set_, 0.0f, extent, final_format_);
     if (overlay && !hud && (!xr || xr_frame_.overlay_on_frame)) {
         overlay(cmd, final_.view, extent);
+    }
+    if (output_mode_ != RendererOutputMode::Sdr && draw_ui && imgui_ready_ && presenting_) {
+        ImDrawData* data = ImGui::GetDrawData();
+        if (data && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
+            const ImVec2 saved_scale = data->FramebufferScale;
+            data->FramebufferScale = ImVec2(static_cast<float>(extent.width) / data->DisplaySize.x,
+                                            static_cast<float>(extent.height) / data->DisplaySize.y);
+            ImGui_ImplVulkan_RenderDrawData(data, cmd);
+            data->FramebufferScale = saved_scale;
+        }
     }
     vkCmdEndRendering(cmd);
     vk::ImageBarrier(cmd, final_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -458,7 +529,7 @@ void Renderer::EndFrame(bool draw_ui) {
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         color.imageView = hud->view;
         vkCmdBeginRendering(cmd, &rendering);
-        Composite(cmd, final_set_, 1.0f, extent);
+        Composite(cmd, final_set_, 1.0f, extent, hud->format);
         vkCmdEndRendering(cmd);
         vk::ImageBarrier(cmd, hud->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -501,12 +572,12 @@ void Renderer::EndFrame(bool draw_ui) {
             const float scale = std::min(static_cast<float>(window_extent.width) / static_cast<float>(extent.width),
                                          static_cast<float>(window_extent.height) / static_cast<float>(extent.height));
             const VkExtent2D shown{std::max(1u, static_cast<uint32_t>(extent.width * scale)), std::max(1u, static_cast<uint32_t>(extent.height * scale))};
-            Composite(cmd, final_set_, 1.0f, shown,
+            Composite(cmd, final_set_, 1.0f, shown, ctx_.swapchain.format,
                       {static_cast<int32_t>((window_extent.width - shown.width) / 2), static_cast<int32_t>((window_extent.height - shown.height) / 2)});
         } else {
-            Composite(cmd, final_set_, 1.0f, extent);
+            Composite(cmd, final_set_, 1.0f, extent, window_ ? ctx_.swapchain.format : output_.format);
         }
-        if (draw_ui && imgui_ready_) {
+        if (output_mode_ == RendererOutputMode::Sdr && draw_ui && imgui_ready_) {
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
         }
         vkCmdEndRendering(cmd);
@@ -527,6 +598,23 @@ void Renderer::EndFrame(bool draw_ui) {
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
+        output_ready_ = true;
+    } else if (presenting_ && output_.image && fitted) {
+        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        color.imageView = output_.view;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        rendering.renderArea = {{0, 0}, extent};
+        vkCmdBeginRendering(cmd, &rendering);
+        Composite(cmd, final_set_, 1.0f, extent, output_.format);
+        vkCmdEndRendering(cmd);
+        vk::ImageBarrier(cmd, output_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vk::ImageBarrier(cmd, target_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                          VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0, ctx_.PresentLayout());
         output_ready_ = true;
     } else if (presenting_) {
@@ -578,35 +666,74 @@ void Renderer::EndFrame(bool draw_ui) {
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
 }
 
-bool Renderer::SaveScreenshot(const std::filesystem::path& path) {
+bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop) {
     if (!output_.image || !output_ready_) {
         LogError("screenshot {} not written: {}", path.string(), output_.image ? "no frame rendered yet" : "no capture image");
         return false;
     }
     vkDeviceWaitIdle(ctx_.device);
-    const uint32_t width = output_.extent.width;
-    const uint32_t height = output_.extent.height;
+    const uint32_t source_width = output_.extent.width;
+    const uint32_t source_height = output_.extent.height;
+    render::PixelRect crop_rect;
+    if (!render::MakePixelCrop(source_width, source_height, crop, crop_rect)) {
+        LogError("screenshot {} not written: crop is empty", path.string());
+        return false;
+    }
+    const uint32_t x0 = crop_rect.x;
+    const uint32_t y0 = crop_rect.y;
+    const uint32_t width = crop_rect.width;
+    const uint32_t height = crop_rect.height;
+    const VkFormat format = output_.format;
+    const VkDeviceSize bytes_per_pixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
     vk::Buffer readback;
-    if (!ctx_.CreateBuffer(readback, VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
+    if (!ctx_.CreateBuffer(readback, VkDeviceSize(width) * height * bytes_per_pixel, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true)) {
         return false;
     }
     ctx_.Submit([&](VkCommandBuffer cmd) {
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0};
         region.imageExtent = {width, height, 1};
         vkCmdCopyImageToBuffer(cmd, output_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
     });
     vmaInvalidateAllocation(ctx_.allocator, readback.allocation, 0, VK_WHOLE_SIZE);
-    uint8_t* pixels = static_cast<uint8_t*>(readback.mapped);
-    const bool bgra = output_.format == VK_FORMAT_B8G8R8A8_UNORM || output_.format == VK_FORMAT_B8G8R8A8_SRGB;
-    for (size_t i = 0, n = size_t(width) * height; i < n; ++i) {
-        uint8_t* p = pixels + i * 4;
-        if (bgra) {
-            std::swap(p[0], p[2]);
-        }
-        p[3] = 255;
+    if (!readback.mapped) {
+        ctx_.DestroyBuffer(readback);
+        LogError("screenshot {} not written: readback buffer is not mapped", path.string());
+        return false;
     }
-    const int ok = stbi_write_png(path.string().c_str(), static_cast<int>(width), static_cast<int>(height), 4, pixels, static_cast<int>(width * 4));
+    uint8_t* pixels = static_cast<uint8_t*>(readback.mapped);
+    std::vector<uint8_t> cropped(size_t(width) * height * 4);
+    const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            const size_t src = (size_t(y) * width + x) * bytes_per_pixel;
+            uint8_t* dst = cropped.data() + (size_t(y) * width + x) * 4;
+            if (format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+                const uint16_t* half = reinterpret_cast<const uint16_t*>(pixels + src);
+                for (int c = 0; c < 3; ++c) dst[c] = render::LinearToSrgb8(HalfToFloat(half[c]) * (80.0f / 203.0f));
+            } else if (format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+                uint32_t packed;
+                std::memcpy(&packed, pixels + src, sizeof(packed));
+                float r = render::PqDecodeNits(float(packed & 0x3ffu) / 1023.0f);
+                float g = render::PqDecodeNits(float((packed >> 10) & 0x3ffu) / 1023.0f);
+                float b = render::PqDecodeNits(float((packed >> 20) & 0x3ffu) / 1023.0f);
+                const float r709 = 1.660491f * r - 0.587641f * g - 0.072850f * b;
+                const float g709 = -0.124550f * r + 1.132900f * g - 0.008349f * b;
+                const float b709 = -0.018151f * r - 0.100579f * g + 1.118730f * b;
+                dst[0] = render::LinearToSrgb8(r709 / 203.0f);
+                dst[1] = render::LinearToSrgb8(g709 / 203.0f);
+                dst[2] = render::LinearToSrgb8(b709 / 203.0f);
+            } else {
+                const uint8_t* p = pixels + src;
+                dst[0] = p[bgra ? 2 : 0];
+                dst[1] = p[1];
+                dst[2] = p[bgra ? 0 : 2];
+            }
+            dst[3] = 255;
+        }
+    }
+    const int ok = stbi_write_png(path.string().c_str(), static_cast<int>(width), static_cast<int>(height), 4, cropped.data(), static_cast<int>(width * 4));
     ctx_.DestroyBuffer(readback);
     if (ok) {
         LogInfo("screenshot written to {}", path.string());
@@ -631,7 +758,7 @@ void Renderer::RecordXr(VkCommandBuffer cmd) {
     }
     if (xr_frame_.hud) {
         if (!hud_.image) {
-            if (!ctx_.CreateImage(hud_, output_format_, {kHudExtent.width, kHudExtent.height, 1},
+            if (!ctx_.CreateImage(hud_, final_format_, {kHudExtent.width, kHudExtent.height, 1},
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
                 return;
             }
@@ -779,7 +906,7 @@ VkPipeline Renderer::XrPipeline(VkFormat format) {
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
         info.layout = xr_layout_;
-        if (!vk::Check(vkCreateGraphicsPipelines(ctx_.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), "xr copy pipeline")) {
+        if (!vk::Check(vk::CreateGraphicsPipelinesCached(ctx_.device, 1, &info, nullptr, &pipeline), "xr copy pipeline")) {
             pipeline = VK_NULL_HANDLE;
         }
     }

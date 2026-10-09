@@ -1,0 +1,64 @@
+# the Museum with a pad only (DualSense): Circle leaves the model viewer, Cross does not; Cross and Circle stop a cutscene
+sui menu pc
+swait 150
+sui menukey up
+swait 4
+sui menukey up
+swait 4
+sexpect pcrow pc_extras
+sui menukey accept
+swait 20
+sui menukey down
+swait 4
+sexpect pcrow pc_archive
+sui menukey accept
+swait 20
+sui menukey down
+swait 4
+sexpect pcrow pc_archive_cutscenes
+sui menukey accept
+swait 20
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sui menukey right
+swait 4
+sexpect archive door 1
+pattach 0 ps5
+swait 4
+sarchive lisa_stand
+swait 240
+stap 0 cross
+swait 30
+sexpect viewer 1
+stap 0 circle
+swait 30
+sexpect viewer 0
+sarchived 600
+swait 10
+sexpect menu 1
+sexpect page 1
+sarchive door
+swait 30
+sexpect viewer 1
+stap 0 cross
+swait 30
+sexpect viewer 0
+sarchived 600
+swait 10
+sexpect menu 1
+sexpect page 1
+sarchive door
+swait 30
+sexpect viewer 1
+stap 0 circle
+swait 30
+sexpect viewer 0
+sarchived 600
+swait 10
+sexpect menu 1
+sexpect page 1
+slog

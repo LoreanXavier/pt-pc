@@ -388,6 +388,7 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             }
             const uint32_t kind = MaterialKindOf(m);
             sub.kind = static_cast<uint8_t>(kind);
+            sub.layer = static_cast<uint8_t>((info.render_flags >> 20) & 0xF);
             const uint32_t f = info.render_flags;
             sub.shadow = (f & 0x140) == 0 && ((f & 0x10) == 0 || (f & 0xF) == 0);
             if (LisaHairShadow(path, m)) {

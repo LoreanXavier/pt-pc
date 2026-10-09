@@ -1,5 +1,7 @@
 #include "engine/render/vfx_pass.h"
 
+#include "engine/render/pipeline_cache_store.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -316,7 +318,7 @@ VkPipeline VfxPass::Pipeline(const PipelineKey& key) {
     info.pDynamicState = &dynamic;
     info.layout = layout_;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (!vk::Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline), "vfx pipeline")) {
+    if (!vk::Check(vk::CreateGraphicsPipelinesCached(device_, 1, &info, nullptr, &pipeline), "vfx pipeline")) {
         pipeline = VK_NULL_HANDLE;
     }
     pipelines_.emplace_back(key, pipeline);

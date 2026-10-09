@@ -16,13 +16,16 @@ struct AppSettings {
         bool pause_on_focus_loss = true;
         bool mute_in_background = false;
         int fps_limit = 0;
+        bool hdr = false;
         int letterbox = 0;
     } display;
     struct Input {
         float mouse_sensitivity = 1.0f;
+        float gamepad_sensitivity = 1.0f;
         /* 26/255 is the DualShock 4 dead zone the original applies per axis. */
         float gamepad_dead_zone = 26.0f / 255.0f;
         bool rumble = true;
+        int rumble_profile = 0;
     } input;
     struct Camera {
         float roll = 1.0f;
@@ -30,6 +33,9 @@ struct AppSettings {
     } camera;
     struct Audio {
         float volume = 1.0f;
+        bool surround = false;
+        bool controller_speaker = false;
+        float controller_speaker_volume = 0.5f;
     } audio;
     struct Network {
         bool check_updates = true;
@@ -85,6 +91,8 @@ struct AppSettings {
         float snap_degrees = 30.0f;
         float smooth_speed = 90.0f;
         float resolution_scale = 1.0f;
+        float height_offset = 0.0f;
+        float world_scale = 1.0f;
         bool operator==(const Vr&) const = default;
     } vr;
     std::map<std::string, bool> mods;

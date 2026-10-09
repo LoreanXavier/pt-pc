@@ -37,8 +37,9 @@ void Shutdown();
 bool DlssSupported();
 bool FrameGenSupported(std::string* reason);
 bool FrameGenNeedsVsyncOff();
-/* Unloads sl.dlss_g for this run, so its swapchain hook is gone; false when Streamline is not active. */
-bool UnloadFrameGen();
+bool IsFrameGenLoaded(bool& loaded);
+/* Disables sl.dlss_g's feature hooks for this run; the Streamline plug-in module remains process-loaded. */
+bool DisableFrameGenFeature();
 
 void BeginFrame();
 void SetMarker(Marker marker);

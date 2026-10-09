@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <shobjidl.h>
+#include <shlobj.h>
 #undef small
 #endif
 #include <imgui.h>
@@ -46,6 +47,8 @@
 #include "engine/fs/vfs.h"
 #include "engine/physics/collision_world.h"
 #include "engine/platform/input.h"
+#include "engine/platform/controller_speaker.h"
+#include "engine/platform/controller_feedback.h"
 #include "engine/platform/livesplit.h"
 #include "engine/render/model_cache.h"
 #include "engine/render/renderer.h"
@@ -59,6 +62,10 @@
 #include "engine/ui/asset_browser.h"
 #include "engine/core/resource_path.h"
 #include "engine/platform/settings.h"
+#include "engine/platform/display_modes.h"
+#include "engine/platform/os.h"
+#include "engine/platform/sdl_diag.h"
+#include "engine/platform/user_data.h"
 #include "engine/platform/graphics_presets.h"
 #include "engine/platform/virtual_pad.h"
 #include "engine/voice/microphone.h"
@@ -67,6 +74,7 @@
 #include "game/archive_theater.h"
 #include "game/debug_panel.h"
 #include "game/game.h"
+#include "game/outro_input.h"
 #include "game/loop_browser.h"
 #include "game/render_mouse.h"
 #include "game/game_sound.h"
@@ -162,10 +170,10 @@ struct OptionSpec {
 constexpr OptionSpec kOptionSpecs[] = {
     {"--help", 0, "print this list and exit (also -h)"},
     {"--game", 1, "<folder> the extracted CUSA01127 folder"},
-    {"--settings", 1, "<file> pt.ini to use instead of the one in the user folder"},
+    {"--settings", 1, "<file> pt.ini to use instead of data/pt.ini next to the executable"},
     {"--save-dir", 1, "<folder> where saves go"},
     {"--no-save", 0, "never write a save"},
-    {"--log", 1, "<file> the log file (default: pt.log in the user folder, or the working folder for tools)"},
+    {"--log", 1, "<file> the log file (default: data/pt.log next to the executable, or the working folder for tools and --headless)"},
     {"--mods", 1, "<folder> the mods folder"},
     {"--no-mods", 0, "load no mods"},
     {"--no-update-check", 0, "do not look for a newer release"},
@@ -241,8 +249,8 @@ int OptionValues(std::string_view arg) {
 
 Options ParseOptions(int argc, char** argv) {
     Options options;
-    if (const char* env = std::getenv("PT_GAME_DIR")) {
-        options.game_dir = env;
+    if (const std::string env = pt::os::GetEnv("PT_GAME_DIR"); !env.empty()) {
+        options.game_dir = pt::os::PathFromUtf8(env);
         options.game_dir_given = true;
     }
     for (int i = 1; i < argc; ++i) {
@@ -264,7 +272,7 @@ Options ParseOptions(int argc, char** argv) {
         } else if (arg == "--anim-only") {
             ++i;
         } else if (arg == "--game" && has_value) {
-            options.game_dir = argv[++i];
+            options.game_dir = pt::os::PathFromUtf8(argv[++i]);
             options.game_dir_given = true;
         } else if (arg == "--debug") {
             options.debug_panel = true;
@@ -290,7 +298,7 @@ Options ParseOptions(int argc, char** argv) {
                 std::fprintf(stderr, "%s needs a value\n", arg.c_str());
                 std::exit(2);
             }
-            if (arg == "--voice-test") options.voice_test = argv[++i];
+            if (arg == "--voice-test") options.voice_test = pt::os::PathFromUtf8(argv[++i]);
             else options.voice_listen = std::strtof(argv[++i], nullptr);
             if (arg == "--voice-listen" && !(options.voice_listen > 0.0f)) {
                 std::fprintf(stderr, "--voice-listen needs a number of seconds\n");
@@ -301,7 +309,7 @@ Options ParseOptions(int argc, char** argv) {
         } else if (arg == "--script-test") {
             options.script_test = true;
         } else if (arg == "--input-script" && has_value) {
-            options.input_script = argv[++i];
+            options.input_script = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--input" && has_value) {
             options.input_text = argv[++i];
         } else if (arg == "--lua" && has_value) {
@@ -318,11 +326,11 @@ Options ParseOptions(int argc, char** argv) {
         } else if (arg == "--third-person") {
             options.third_person = true;
         } else if (arg == "--make-loop-previews" && has_value) {
-            options.make_loop_previews = argv[++i];
+            options.make_loop_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--make-museum-previews" && has_value) {
-            options.make_museum_previews = argv[++i];
+            options.make_museum_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--museum-previews" && has_value) {
-            options.museum_previews = argv[++i];
+            options.museum_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--seed" && has_value) {
             options.seed = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (arg == "--f160-light" && has_value) {
@@ -347,10 +355,10 @@ Options ParseOptions(int argc, char** argv) {
             options.audio_period = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
             options.audio_offline = true;
         } else if (arg == "--audio-capture" && has_value) {
-            options.audio_capture = argv[++i];
+            options.audio_capture = pt::os::PathFromUtf8(argv[++i]);
             options.audio_offline = true;
         } else if (arg == "--save-dir" && has_value) {
-            options.save_dir = argv[++i];
+            options.save_dir = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--no-save") {
             options.no_save = true;
         } else if (arg == "--trap-log") {
@@ -386,7 +394,7 @@ Options ParseOptions(int argc, char** argv) {
             options.vsync = false;
             options.vsync_set = true;
         } else if (arg == "--mods" && has_value) {
-            options.mods_dir = argv[++i];
+            options.mods_dir = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--no-mods") {
             options.no_mods = true;
         } else if (arg == "--vr") {
@@ -398,11 +406,11 @@ Options ParseOptions(int argc, char** argv) {
         } else if (arg == "--fake-update" && has_value) {
             options.fake_update = argv[++i];
         } else if (arg == "--settings" && has_value) {
-            options.settings_path = argv[++i];
+            options.settings_path = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--log" && has_value) {
-            options.log_path = argv[++i];
+            options.log_path = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--screenshot" && has_value) {
-            options.screenshot = argv[++i];
+            options.screenshot = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--frames" && has_value) {
             options.frames = std::atoi(argv[++i]);
         } else if (arg == "--width" && has_value) {
@@ -503,8 +511,8 @@ int RunVoiceTest(const std::filesystem::path& input) {
         SDL_AudioSpec spec{};
         Uint8* data = nullptr;
         Uint32 length = 0;
-        if (!SDL_LoadWAV(wav_path.string().c_str(), &spec, &data, &length)) {
-            pt::LogError("voice test: cannot load {}: {}", wav_path.string(), SDL_GetError());
+        if (!SDL_LoadWAV(pt::os::PathToUtf8(wav_path).c_str(), &spec, &data, &length)) {
+            pt::LogError("voice test: cannot load {}: {}", pt::os::PathToUtf8(wav_path), SDL_GetError());
             continue;
         }
         const SDL_AudioSpec target{SDL_AUDIO_S16, 1, pt::VoiceRecognizer::kSampleRate};
@@ -528,7 +536,7 @@ int RunVoiceTest(const std::filesystem::path& input) {
         for (const pt::VoiceRecognizer::Result& r : results) {
             heard += std::format("{}[{}|{:.3f}|{:.2f}s|{:.0f}ms]", heard.empty() ? "" : " ", r.text, r.jack_probability, r.seconds, r.decode_ms);
         }
-        pt::LogInfo("voice test: file {} | {} detections | {} utterances | {:.2f} s | {}", wav_path.filename().string(), detections,
+        pt::LogInfo("voice test: file {} | {} detections | {} utterances | {:.2f} s | {}", pt::os::PathToUtf8(wav_path.filename()), detections,
                     results.size(), static_cast<double>(count) / pt::VoiceRecognizer::kSampleRate, heard);
         total += detections > 0 ? 1 : 0;
         SDL_free(converted);
@@ -556,7 +564,7 @@ void WriteWav(const std::filesystem::path& path, const std::vector<float>& sampl
     out.write("data", 4);
     u32(data_bytes);
     out.write(reinterpret_cast<const char*>(samples.data()), data_bytes);
-    pt::LogInfo("audio capture: {} s written to {}", samples.size() / channels / static_cast<double>(rate), path.string());
+    pt::LogInfo("audio capture: {} s written to {}", samples.size() / channels / static_cast<double>(rate), pt::os::PathToUtf8(path));
 }
 
 struct App {
@@ -577,6 +585,7 @@ struct App {
     float microphone_db = -80.0f;
     std::string microphone_hypothesis;
     std::string microphone_status = "pc_mic_waiting";
+    std::string microphone_reason = "pc_mic_st_loading";
     pt::Renderer renderer;
     pt::TextureManager textures;
     pt::SceneRenderer scene;
@@ -592,16 +601,41 @@ struct App {
     pt::LiveSplitClient livesplit;
 };
 
+/* the game itself, for the preview captures it starts in the background */
+std::filesystem::path GameExecutable() {
+#ifdef __APPLE__
+    return pt::ExecutablePath();
+#elif defined(_WIN32)
+    return pt::ExecutableDir() / "pt.exe";
+#else
+    return pt::ExecutableDir() / "pt";
+#endif
+}
+
+std::filesystem::path UserDataDir();
+
+std::filesystem::path DefaultModsDir() {
+#ifdef __APPLE__
+    /* the app bundle is no place for user files: mods/ in ~/Library/Application Support/pt-port/pt (docs/macos.md), unless a
+       build folder has one next to pt */
+    std::error_code ec;
+    if (!std::filesystem::is_directory(pt::ExecutableDir() / "mods", ec)) {
+        if (const std::filesystem::path user = UserDataDir(); !user.empty()) return user / "mods";
+    }
+#endif
+    return pt::ExecutableDir() / "mods";
+}
+
 void MountMods(App& app) {
     const Options& options = app.options;
     if (options.no_mods || (options.headless && options.mods_dir.empty())) {
         return;
     }
-    const std::filesystem::path dir = options.mods_dir.empty() ? pt::ExecutableDir() / "mods" : options.mods_dir;
+    const std::filesystem::path dir = options.mods_dir.empty() ? DefaultModsDir() : options.mods_dir;
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) {
         if (!options.mods_dir.empty()) {
-            pt::LogWarn("mods: {} is not a folder", dir.string());
+            pt::LogWarn("mods: {} is not a folder", pt::os::PathToUtf8(dir));
         }
         return;
     }
@@ -615,7 +649,7 @@ void MountMods(App& app) {
                     mod.has_script ? ", init.lua" : "", mod.enabled ? "" : ", disabled");
     }
     pt::mods::SetActive(app.mods.get());
-    pt::LogInfo("mods: {} found in {}, {} files replaced", app.mods->mods.size(), dir.string(), app.mods->index.Size());
+    pt::LogInfo("mods: {} found in {}, {} files replaced", app.mods->mods.size(), pt::os::PathToUtf8(dir), app.mods->index.Size());
 }
 
 void RequestEnhancedTextures(App& app, bool enabled) {
@@ -650,26 +684,88 @@ void ApplyFullscreen(App& app) {
     if (!app.window) {
         return;
     }
-    const int mode = app.settings.display.fullscreen;
+    int mode = std::clamp(app.settings.display.fullscreen, 0, 2);
     if (mode == 2) {
-        if (const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(app.window))) {
-            SDL_SetWindowFullscreenMode(app.window, desktop);
+        const SDL_DisplayID display = SDL_GetDisplayForWindow(app.window);
+        int count = 0;
+        SDL_DisplayMode** listed = SDL_GetFullscreenDisplayModes(display, &count);
+        std::vector<glm::ivec2> choices;
+        choices.reserve(std::max(count, 0));
+        for (int i = 0; listed && i < count; ++i) choices.emplace_back(listed[i]->w, listed[i]->h);
+        choices = pt::UniqueDisplaySizes(choices);
+        const glm::ivec2 selected = pt::ClosestDisplaySize(choices, {app.settings.display.width, app.settings.display.height});
+        const SDL_DisplayMode* chosen = nullptr;
+        for (int i = 0; listed && i < count; ++i) {
+            if (listed[i]->w == selected.x && listed[i]->h == selected.y) {
+                chosen = listed[i];
+                break;
+            }
         }
+        if (!chosen) chosen = SDL_GetDesktopDisplayMode(display);
+        if (chosen) {
+            app.settings.display.width = chosen->w;
+            app.settings.display.height = chosen->h;
+            if (!SDL_SetWindowFullscreenMode(app.window, chosen)) {
+                pt::LogWarn("display: exclusive mode {}x{} unavailable: {}", chosen->w, chosen->h, SDL_GetError());
+                mode = 1;
+                app.settings.display.fullscreen = mode;
+                SDL_SetWindowFullscreenMode(app.window, nullptr);
+            }
+        } else {
+            pt::LogWarn("display: no exclusive modes available: {}", SDL_GetError());
+            mode = 1;
+            app.settings.display.fullscreen = mode;
+            SDL_SetWindowFullscreenMode(app.window, nullptr);
+        }
+        SDL_free(listed);
     } else {
         SDL_SetWindowFullscreenMode(app.window, nullptr);
     }
-    SDL_SetWindowFullscreen(app.window, mode != 0);
+    if (!SDL_SetWindowFullscreen(app.window, mode != 0)) {
+        pt::LogWarn("display: fullscreen mode {} failed: {}", mode, SDL_GetError());
+        app.settings.display.fullscreen = 0;
+        SDL_SetWindowFullscreenMode(app.window, nullptr);
+        SDL_SetWindowFullscreen(app.window, false);
+        SDL_SetWindowSize(app.window, app.settings.display.width, app.settings.display.height);
+    }
 }
 
 std::filesystem::path g_output_dir;
 
 std::filesystem::path UserDataDir() {
-    std::filesystem::path dir;
-    if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-        dir = std::filesystem::path(reinterpret_cast<const char8_t*>(pref));
-        SDL_free(pref);
+#ifdef __APPLE__
+    /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
+       /Applications; the data folder is then the user's (docs/macos.md). A build folder keeps it next to pt. */
+    const std::filesystem::path base = pt::ExecutableDir();
+    const bool bundled = std::any_of(base.begin(), base.end(), [](const std::filesystem::path& part) { return part.extension() == ".app"; });
+    if (bundled) {
+        const auto home = pt::os::GetEnv("HOME");
+        if (!home.empty()) return pt::os::PathFromUtf8(home) / "Library" / "Application Support" / "pt-port" / "pt";
     }
-    return dir;
+#endif
+    return pt::ExecutableDir() / "data";
+}
+
+std::filesystem::path LegacyUserDataDir() {
+#ifdef __APPLE__
+    return {};
+#elif defined(_WIN32)
+    PWSTR roaming = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_DONT_VERIFY, nullptr, &roaming))) {
+        const auto dir = std::filesystem::path(roaming) / "pt-port" / "pt";
+        CoTaskMemFree(roaming);
+        return dir;
+    }
+    CoTaskMemFree(roaming);
+    const auto value = pt::os::GetEnv("APPDATA");
+#else
+    const auto value = pt::os::GetEnv("XDG_DATA_HOME");
+    if (value.empty()) {
+        const auto home = pt::os::GetEnv("HOME");
+        return home.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(home) / ".local" / "share" / "pt-port" / "pt";
+    }
+#endif
+    return value.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(value) / "pt-port" / "pt";
 }
 
 bool LooksLikeGameDir(const std::filesystem::path& dir) {
@@ -742,6 +838,40 @@ std::filesystem::path FindGameDir(const Options& options) {
             return picked;
         }
     }
+#elif defined(__APPLE__)
+    /* macOS has no installer (docs/macos.md): the first start asks for the folder, as on Windows */
+    if (!options.headless && SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+        struct Pick {
+            std::filesystem::path path;
+            bool done = false;
+        } pick;
+        const SDL_PropertiesID props = SDL_CreateProperties();
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "P.T.: select the extracted CUSA01127 folder (it contains chunk1.psarc)");
+        SDL_ShowFileDialogWithProperties(
+            SDL_FILEDIALOG_OPENFOLDER,
+            [](void* user, const char* const* list, int) {
+                auto* p = static_cast<Pick*>(user);
+                if (list && list[0]) p->path = std::filesystem::path(reinterpret_cast<const char8_t*>(list[0]));
+                p->done = true;
+            },
+            &pick, props);
+        SDL_DestroyProperties(props);
+        while (!pick.done) {
+            SDL_PumpEvents();
+            SDL_Delay(10);
+        }
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        std::filesystem::path picked = pick.path;
+        if (!LooksLikeGameDir(picked) && LooksLikeGameDir(picked / "CUSA01127")) picked /= "CUSA01127";
+        if (LooksLikeGameDir(picked)) {
+            if (!remembered_file.empty()) {
+                std::ofstream out(remembered_file, std::ios::binary | std::ios::trunc);
+                const std::u8string text = picked.u8string();
+                out.write(reinterpret_cast<const char*>(text.data()), static_cast<std::streamsize>(text.size()));
+            }
+            return picked;
+        }
+    }
 #endif
     return options.game_dir;
 }
@@ -764,7 +894,10 @@ int RunVoiceListen(float seconds, const std::string& device) {
         {140, "Talk normally about anything for 15 seconds, without saying the name."},
         {155, "Stay quiet until the end."},
     };
-    if (!SDL_Init(SDL_INIT_AUDIO)) return 1;
+    if (!SDL_Init(SDL_INIT_AUDIO)) {
+        pt::LogError("SDL_Init(audio): {} (audio drivers built in: {})", SDL_GetError(), pt::SdlCompiledAudioDrivers());
+        return 1;
+    }
     pt::VoiceRecognizer recognizer;
     if (!recognizer.Init(pt::ResourceDir("voice", PT_VOICE_MODEL_DIR), "jack")) return 1;
     pt::Microphone microphone;
@@ -851,6 +984,9 @@ struct TickState {
         items.clear();
         index.clear();
         game.CollectDraws(items);
+        lights.handy_camera = game.GetPlayer().MakeCamera();
+        lights.handy_camera.position += game.GetPlayer().DrawnOffset();
+        lights.handy_lens_valid = game.HandyLens(lights.handy_lens);
         size_t total = 0;
         for (const pt::DrawItem& item : items) {
             total += item.skin.size();
@@ -972,10 +1108,7 @@ std::filesystem::path StartStreamline(App& app) {
     std::error_code ec;
     std::filesystem::path dir = forced ? std::filesystem::current_path(ec) : app.settings_path.parent_path();
     if (dir.empty()) {
-        if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-            dir = pref;
-            SDL_free(pref);
-        }
+        dir = UserDataDir();
     }
     /* DLSS-G can take the process down inside its first frames with nothing logged; a marker left over from such a start turns it off next time. */
     const std::filesystem::path marker = dir / "streamline-starting.txt";
@@ -1201,6 +1334,11 @@ void DrawSettingsWindow(App& app, pt::InputDevice& input, pt::game::GameSound& s
     }
     if (ImGui::Checkbox("Vibration", &s.input.rumble)) {
         input.settings.rumble = s.input.rumble;
+        input.settings.trigger_rumble = pt::FeaturesForRumbleProfile(s.input.rumble_profile, s.input.rumble).trigger_rumble;
+        if (!s.input.rumble) {
+            input.SetRumble(0, 0);
+            input.SetTriggerRumble(0, 0);
+        }
         changed = true;
     }
     if (ImGui::SliderFloat("Camera tilt (1 = original)", &s.camera.roll, 0.0f, 1.0f, "%.2f")) {
@@ -1273,6 +1411,7 @@ pt::InputState FreecamInput(const pt::InputState& input) {
 }
 
 void ApplyPhotoLens(const pt::game::PhotoSettings& photo, const pt::game::Game& game, const pt::Camera& camera, pt::SceneLighting& lighting) {
+    lighting.screen.focal_length = photo.focal_length_mm;
     if (photo.depth_of_field) {
         float focus = photo.FocusDistance();
         if (focus <= 0.0f) {
@@ -1463,10 +1602,10 @@ void SetUpMuseumPreviewRun(Options& options) {
 
 std::filesystem::path PhotoPath() {
     std::filesystem::path base;
-    if (const char* profile = std::getenv("USERPROFILE")) {
-        base = profile;
-    } else if (const char* home = std::getenv("HOME")) {
-        base = home;
+    if (const std::string profile = pt::os::GetEnv("USERPROFILE"); !profile.empty()) {
+        base = pt::os::PathFromUtf8(profile);
+    } else if (const std::string home = pt::os::GetEnv("HOME"); !home.empty()) {
+        base = pt::os::PathFromUtf8(home);
     }
     const std::filesystem::path dir = base / "Pictures" / "PT Photos";
     std::error_code ec;
@@ -1579,6 +1718,12 @@ public:
             vr.rows.push_back(Row(kVrMode, "pc_vr_mode", OffOn(), v.enabled ? 1 : 0, "pc_note_vr_mode"));
             vr.rows.push_back(Row(kVrFlashlight, "pc_vr_flashlight", {"pc_vr_head", "pc_vr_controller"}, v.flashlight, "pc_note_vr_flashlight"));
             vr.rows.push_back(Row(kVrTurn, "pc_vr_turn", {"pc_vr_snap", "pc_vr_smooth"}, v.turn, "pc_note_vr_turn"));
+            auto height=Row(kVrHeight,"pc_vr_height",{},std::clamp(static_cast<int>(std::lround(v.height_offset/0.05f))+10,0,20),"pc_note_vr_height");
+            for(int i=0;i<=20;++i) height.values.push_back(std::format("{:+d} cm",(i-10)*5));
+            height.wrap=false; vr.rows.push_back(std::move(height));
+            auto scale=Row(kVrWorldScale,"pc_vr_world_scale",{},std::clamp(static_cast<int>(std::lround((v.world_scale-0.5f)/0.05f)),0,30),"pc_note_vr_world_scale");
+            for(int i=0;i<=30;++i) scale.values.push_back(std::format("{}%",50+i*5));
+            scale.wrap=false; vr.rows.push_back(std::move(scale));
             return {std::move(vr)};
         }
         if (page_ == kGraphicsPage) return GraphicsSections();
@@ -1590,7 +1735,7 @@ public:
             pt::game::PcSettingSection test{"pc_microphone_test", 0, {}};
             const int level = std::clamp(static_cast<int>((app_.microphone_db + 60.0f) / 6.0f), 0, 10);
             test.rows.push_back(Row(kMicLevel, "pc_mic_level", {std::format("{} {:.0f} dBFS", std::string(level, '|'), app_.microphone_db)}, 0, app_.microphone_status));
-            test.rows.push_back(Row(kMicHeard, "pc_mic_heard", {app_.microphone_hypothesis.empty() ? "pc_mic_no_word" : app_.microphone_hypothesis}, 0, "pc_mic_say_jack"));
+            test.rows.push_back(Row(kMicHeard, "pc_mic_heard", {app_.microphone_hypothesis.empty() ? app_.microphone_reason : app_.microphone_hypothesis}, 0, app_.microphone_status));
             test.rows.push_back(Row(kMicMonitor, "pc_mic_monitor", OffOn(), app_.microphone_monitor ? 1 : 0, "pc_mic_monitor_note"));
             return {std::move(test)};
         }
@@ -1599,27 +1744,26 @@ public:
         pt::game::PcSettingSection display{"pc_section_display", 0, {}};
         const int mode = std::clamp(s.display.fullscreen, 0, 2);
         display.rows.push_back(Row(kDisplayMode, "pc_display_mode", {"pc_window", "pc_borderless", "pc_fullscreen"}, mode, "pc_note_display_mode"));
-        pt::game::PcSettingRow resolution = Row(kResolution, "pc_resolution", {}, 0, "pc_note_resolution");
-        if (s.display.fullscreen == 0) {
-            const std::vector<glm::ivec2> sizes = WindowSizes();
-            for (size_t i = 0; i < sizes.size(); ++i) {
-                resolution.values.push_back(std::format("{} x {}", sizes[i].x, sizes[i].y));
-                if (sizes[i] == glm::ivec2(s.display.width, s.display.height)) {
-                    resolution.value = static_cast<int>(i);
-                }
-            }
-            resolution.wrap = false;
-        } else {
-            const glm::ivec2 desktop = DesktopSize();
-            resolution.values.push_back(std::format("{} x {}", desktop.x, desktop.y));
-            resolution.enabled = false;
-            resolution.note = "pc_note_resolution_fullscreen";
+        const char* resolution_note = mode == 0 ? "pc_note_resolution" : "pc_note_resolution_fullscreen";
+        pt::game::PcSettingRow resolution = Row(kResolution, "pc_resolution", {}, 0, resolution_note);
+        const std::vector<glm::ivec2> sizes = WindowSizes();
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            resolution.values.push_back(std::format("{} x {}", sizes[i].x, sizes[i].y));
+            if (sizes[i] == glm::ivec2(s.display.width, s.display.height)) resolution.value = static_cast<int>(i);
         }
+        resolution.wrap = false;
         display.rows.push_back(std::move(resolution));
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
         display.rows.push_back(Row(kVsync, "pc_vsync", OffOn(), s.display.vsync ? 1 : 0,
                                    dlssg_vsync ? "pc_note_vsync_dlssg" : s.display.vsync ? "pc_note_vsync" : "pc_note_vsync_off"));
+        pt::game::PcSettingRow cap = Row(kFpsLimit, "pc_fps_limit", {"pc_unlimited","30","60","90","120","144","165","240","360"}, 0, "pc_note_fps_limit");
+        constexpr int fps_caps[] = {0,30,60,90,120,144,165,240,360};
+        for (int i=0;i<9;++i) if (fps_caps[i]==s.display.fps_limit) cap.value=i;
+        if (s.display.fps_limit>0 && cap.value==0) { cap.values.push_back(std::to_string(s.display.fps_limit)); cap.value=9; }
+        cap.wrap=false;
+        display.rows.push_back(std::move(cap));
+        display.rows.push_back(Row(kHdr,"pc_hdr",OffOn(),s.display.hdr?1:0,"pc_note_hdr_restart"));
         display.rows.push_back(Row(kFocusPause, "pc_focus_pause", OffOn(), s.display.pause_on_focus_loss ? 1 : 0, "pc_note_focus_pause"));
         display.rows.push_back(Row(kFocusMute, "pc_focus_mute", OffOn(), s.display.mute_in_background ? 1 : 0, "pc_note_focus_mute"));
         out.push_back(std::move(display));
@@ -1701,6 +1845,16 @@ public:
         }
         volume.wrap = false;
         sound.rows.push_back(std::move(volume));
+        sound.rows.push_back(Row(kSurround,"pc_surround",OffOn(),s.audio.surround?1:0,"pc_note_surround"));
+        sound.rows.push_back(Row(kControllerSpeaker, "pc_controller_speaker", OffOn(), s.audio.controller_speaker ? 1 : 0,
+                                 "pc_note_controller_speaker"));
+        pt::game::PcSettingRow controller_speaker_volume = Row(
+            kControllerSpeakerVolume, "pc_controller_speaker_volume", {},
+            std::clamp(static_cast<int>(std::lround(s.audio.controller_speaker_volume * 20.0f)), 0, 20),
+            "pc_note_controller_speaker_volume");
+        for (int i = 0; i <= 20; ++i) controller_speaker_volume.values.push_back(std::format("{}%", i * 5));
+        controller_speaker_volume.wrap = false;
+        sound.rows.push_back(std::move(controller_speaker_volume));
         pt::game::PcSettingRow microphone = Row(kMicrophone, "pc_microphone", {"pc_system_default"}, 0, "pc_note_voice");
         const std::vector<std::string> devices = Microphones();
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -1710,20 +1864,40 @@ public:
             }
         }
         sound.rows.push_back(std::move(microphone));
-        auto microphone_test = Row(kMicrophoneTest, "pc_microphone_test", {"pc_graphics_value"}, 0, "pc_mic_say_jack");
+        std::string trigger_input = s.voice.key.empty() ? "J" : s.voice.key;
+        if(input_.Prompts().device != pt::PromptDevice::Keyboard) {
+            trigger_input = (input_.Prompts().device == pt::PromptDevice::PlayStation || input_.Prompts().device == pt::PromptDevice::Steam) ? "L2 + R2" : input_.Prompts().device == pt::PromptDevice::Nintendo ? "ZL + ZR" : "LT + RT";
+        }
+        std::string trigger_label(pt::game::PcText("pc_microphone_trigger_assign",Language()));
+        if(const size_t at=trigger_label.find("{input}"); at!=std::string::npos) trigger_label.replace(at,7,trigger_input);
+        sound.rows.push_back(Row(kMicrophoneTrigger,trigger_label,OffOn(),s.voice.key.empty()?0:1,"pc_note_microphone_trigger"));
+        auto microphone_test = Row(kMicrophoneTest, "pc_microphone_test", {"pc_graphics_value"}, 0, "pc_note_microphone_test");
         microphone_test.link = true;
         sound.rows.push_back(std::move(microphone_test));
         out.push_back(std::move(sound));
 
         pt::game::PcSettingSection controls{"pc_section_controls", 1, {}};
-        pt::game::PcSettingRow mouse = Row(kMouse, "pc_mouse", {}, Nearest(kMouseSteps, s.input.mouse_sensitivity), "");
-        for (const float step : kMouseSteps) {
-            mouse.values.push_back(step < 0.5f ? std::format("{:.2f}", step) : std::format("{:.1f}", step));
+        if (input_.Prompts().device == pt::PromptDevice::Keyboard) {
+            pt::game::PcSettingRow mouse = Row(kMouse, "pc_mouse", {}, Nearest(kMouseSteps, s.input.mouse_sensitivity), "");
+            for (const float step : kMouseSteps) {
+                mouse.values.push_back(step < 0.5f ? std::format("{:.2f}", step) : std::format("{:.1f}", step));
+            }
+            mouse.wrap = false;
+            controls.rows.push_back(std::move(mouse));
+        } else {
+            pt::game::PcSettingRow gamepad = Row(kGamepadSensitivity, "pc_gamepad_sensitivity", {},
+                                                  Nearest(kGamepadSensitivitySteps, s.input.gamepad_sensitivity),
+                                                  "pc_note_gamepad_sensitivity");
+            for (const float step : kGamepadSensitivitySteps) {
+                gamepad.values.push_back(step < 1.0f ? std::format("{:.2f}", step) : std::format("{:.1f}", step));
+            }
+            gamepad.wrap = false;
+            controls.rows.push_back(std::move(gamepad));
         }
-        mouse.wrap = false;
-        controls.rows.push_back(std::move(mouse));
         controls.rows.push_back(Row(kCameraTilt, "pc_camera_tilt", OffOn(), s.camera.roll > 0.5f ? 1 : 0, "pc_note_camera_tilt"));
         controls.rows.push_back(Row(kVibration, "pc_vibration", OffOn(), s.input.rumble ? 1 : 0, ""));
+        controls.rows.push_back(Row(kRumbleProfile, "pc_rumble_profile", {"pc_rumble_original", "pc_rumble_enhanced"},
+                                    std::clamp(s.input.rumble_profile, 0, 1), "pc_note_rumble_profile"));
         const int dead_zone_step = Nearest(kDeadZoneSteps, s.input.gamepad_dead_zone);
         pt::game::PcSettingRow dead_zone = Row(kDeadZone, "pc_dead_zone", {}, dead_zone_step, "pc_note_dead_zone");
         for (const float step : kDeadZoneSteps) {
@@ -1814,6 +1988,8 @@ public:
             s.display.height = sizes[value].y;
             if (app_.window && s.display.fullscreen == 0) {
                 SDL_SetWindowSize(app_.window, s.display.width, s.display.height);
+            } else if (s.display.fullscreen == 2) {
+                ApplyFullscreen(app_);
             }
             break;
         }
@@ -1826,6 +2002,34 @@ public:
             break;
         case kVrTurn:
             s.vr.turn = std::clamp(value, 0, 1);
+            break;
+        case kFpsLimit: {
+            constexpr int limits[] = {0,30,60,90,120,144,165,240,360};
+            if(value>=0 && value<9) s.display.fps_limit = limits[value];
+            break;
+        }
+        case kHdr:
+            s.display.hdr = value == 1;
+            break;
+        case kSurround:
+            s.audio.surround = value == 1;
+            break;
+        case kControllerSpeaker:
+            s.audio.controller_speaker = value == 1;
+            break;
+        case kControllerSpeakerVolume:
+            s.audio.controller_speaker_volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.05f;
+            break;
+        case kRumbleProfile:
+            s.input.rumble_profile = std::clamp(value, 0, 1);
+            input_.settings.trigger_rumble = pt::FeaturesForRumbleProfile(s.input.rumble_profile, s.input.rumble).trigger_rumble;
+            if (!input_.settings.trigger_rumble) input_.SetTriggerRumble(0, 0);
+            break;
+        case kVrHeight:
+            s.vr.height_offset = static_cast<float>(std::clamp(value,0,20)-10)*0.05f;
+            break;
+        case kVrWorldScale:
+            s.vr.world_scale = 0.5f + static_cast<float>(std::clamp(value,0,30))*0.05f;
             break;
         case kVsync:
             s.display.vsync = value == 1;
@@ -1865,6 +2069,10 @@ public:
         case kVolume:
             s.audio.volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.1f;
             break;
+        case kMicrophoneTrigger:
+            if(value==0) s.voice.key.clear();
+            else if(s.voice.key.empty()) s.voice.key="J";
+            break;
         case kMicrophone: {
             const std::vector<std::string> devices = Microphones();
             s.voice.device = value > 0 && value <= static_cast<int>(devices.size()) ? devices[value - 1] : std::string();
@@ -1873,6 +2081,10 @@ public:
         case kMouse:
             s.input.mouse_sensitivity = kMouseSteps[std::clamp(value, 0, static_cast<int>(std::size(kMouseSteps)) - 1)];
             input_.settings.mouse_sensitivity = pt::InputSettings{}.mouse_sensitivity * s.input.mouse_sensitivity;
+            break;
+        case kGamepadSensitivity:
+            s.input.gamepad_sensitivity = kGamepadSensitivitySteps[std::clamp(value, 0, static_cast<int>(std::size(kGamepadSensitivitySteps)) - 1)];
+            input_.settings.gamepad_sensitivity = s.input.gamepad_sensitivity;
             break;
         case kCameraTilt:
             s.camera.roll = value == 1 ? 1.0f : 0.0f;
@@ -1885,6 +2097,11 @@ public:
         case kVibration:
             s.input.rumble = value == 1;
             input_.settings.rumble = s.input.rumble;
+            input_.settings.trigger_rumble = pt::FeaturesForRumbleProfile(s.input.rumble_profile, s.input.rumble).trigger_rumble;
+            if (!s.input.rumble) {
+                input_.SetRumble(0, 0);
+                input_.SetTriggerRumble(0, 0);
+            }
             break;
         case kDeadZone:
             s.input.gamepad_dead_zone = kDeadZoneSteps[std::clamp(value, 0, static_cast<int>(std::size(kDeadZoneSteps)) - 1)];
@@ -1991,7 +2208,7 @@ public:
             break;
         case M::Demo:
         case M::Model:
-            panel.thumbnail = (MuseumPreviewDirectory() / std::format("{}.png", entry.id)).string();
+            panel.thumbnail = pt::os::PathToUtf8((MuseumPreviewDirectory() / std::format("{}.png", entry.id)));
             panel.lift = entry.media == M::Model ? 10.0f : 6.0f;
             break;
         case M::Sound:
@@ -2104,7 +2321,7 @@ public:
     std::string PreviewFile(int id) const override {
         const int index = id - kLoopFirst;
         return IsLoopBrowser() && index >= 0 && index < kLoopCount && LoopUnlocked(index) ?
-            (PreviewDirectory() / std::format("loop-{}.png", index)).string() : std::string();
+            pt::os::PathToUtf8((PreviewDirectory() / std::format("loop-{}.png", index))) : std::string();
     }
 
     void Activate(int id) override {
@@ -2159,6 +2376,7 @@ public:
             app_.microphone_hypothesis.clear();
             app_.microphone_db = -80.0f;
             app_.microphone_status = "pc_mic_waiting";
+            app_.microphone_reason = "pc_mic_st_loading";
         }
     }
 
@@ -2206,7 +2424,7 @@ private:
     enum RowId {
         kDisplayMode,
         kResolution,
-        kVsync,
+        kVsync, kFpsLimit, kHdr, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile,
         kFocusPause,
         kFocusMute,
         kUpscaler,
@@ -2216,11 +2434,12 @@ private:
         kFrameGeneration,
         kVolume,
         kMicrophone,
-        kMicrophoneTest,
+        kMicrophoneTest, kMicrophoneTrigger,
         kMicLevel,
         kMicHeard,
         kMicMonitor,
         kMouse,
+        kGamepadSensitivity,
         kCameraTilt,
         kVibration,
         kDeadZone,
@@ -2238,7 +2457,7 @@ private:
         kMods,
         kLoopBrowser, kExtras, kFreecam, kPhotoMode, kStreetWalk, kStreetRestart, kStreetLeave, kLoopLock, kThirdPerson, kSpeedrun, kLiveSplit, kRunMenu, kRunReal, kRunGame, kRunBest,
         kArchive, kArchiveLock,
-        kVr, kVrMode, kVrFlashlight, kVrTurn,
+        kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
         kLoopFirst = 1000,
         kRunSplitFirst = 3000,
         kModFirst = 2000,
@@ -2255,7 +2474,7 @@ private:
     uint32_t voice_id_ = 0;
     uint64_t voice_start_ = 0;
 
-    int Language() const { return std::clamp(game_.Options().subtitle_language, 0, 11); }
+    int Language() const { return std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1); }
 
     const pt::game::ArchiveEntry* EntryOf(int id) const {
         const auto entries = pt::game::ArchiveEntries();
@@ -2312,15 +2531,7 @@ private:
 
     std::filesystem::path MuseumPreviewDirectory() const {
         if (!app_.options.museum_previews.empty()) return app_.options.museum_previews;
-        static const std::filesystem::path directory = [] {
-            std::filesystem::path dir;
-            if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-                dir = std::filesystem::path(pref) / std::format("museum-previews-v{}", kMuseumPreviewVersion);
-                SDL_free(pref);
-            }
-            return dir;
-        }();
-        return directory;
+        return UserDataDir() / std::format("museum-previews-v{}", kMuseumPreviewVersion);
     }
     bool MuseumPreviewsGenerating() const {
         if (!museum_process_) return false;
@@ -2343,14 +2554,9 @@ private:
             if (!std::filesystem::exists(dir / std::format("{}.png", e->id), ec)) missing = true;
         }
         if (!missing) return;
-        const auto exe = std::filesystem::path(SDL_GetBasePath()) /
-#ifdef _WIN32
-            "pt.exe";
-#else
-            "pt";
-#endif
-        std::vector<std::string> args{exe.string(), "--game", app_.options.game_dir.string(), "--make-museum-previews", dir.string(),
-            "--log", (dir / "capture.log").string()};
+        const auto exe = GameExecutable();
+        std::vector<std::string> args{pt::os::PathToUtf8(exe), "--game", pt::os::PathToUtf8(app_.options.game_dir), "--make-museum-previews", pt::os::PathToUtf8(dir),
+            "--log", pt::os::PathToUtf8((dir / "capture.log"))};
         std::vector<const char*> argv;
         for (auto& arg : args) argv.push_back(arg.c_str());
         argv.push_back(nullptr);
@@ -2361,7 +2567,7 @@ private:
         museum_process_ = SDL_CreateProcessWithProperties(props);
         SDL_DestroyProperties(props);
         museum_started_ = museum_process_ != nullptr;
-        if (museum_process_) pt::LogInfo("museum: thumbnail capture started ({})", dir.string());
+        if (museum_process_) pt::LogInfo("museum: thumbnail capture started ({})", pt::os::PathToUtf8(dir));
         else pt::LogWarn("museum: thumbnail capture could not start: {}", SDL_GetError());
     }
     bool museum_started_ = false;
@@ -2434,10 +2640,7 @@ private:
     bool LoopUnlocked(int index) const { return game_.BrowseUnlocked(index); }
     static std::filesystem::path BundledPreviewDirectory() {
         static const std::filesystem::path bundled = [] {
-            std::filesystem::path directory;
-            if (const char* base = SDL_GetBasePath()) {
-                directory = std::filesystem::path(base) / "loop-previews";
-            }
+            const std::filesystem::path directory = pt::ExecutableDir() / "loop-previews";
             std::error_code ec;
             int version = 0;
             if (!directory.empty()) std::ifstream(directory / "version.txt") >> version;
@@ -2447,12 +2650,7 @@ private:
     }
     static std::filesystem::path PreviewDirectory() {
         if (auto bundled = BundledPreviewDirectory(); !bundled.empty()) return bundled;
-        std::filesystem::path directory;
-        if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-            directory = std::filesystem::path(pref) / std::format("loop-previews-v{}", kPreviewVersion);
-            SDL_free(pref);
-        }
-        return directory;
+        return UserDataDir() / std::format("loop-previews-v{}", kPreviewVersion);
     }
     bool PreviewsGenerating() {
         if (!preview_process_) return false;
@@ -2484,16 +2682,11 @@ private:
         if (missing.empty()) return;
         std::ofstream(dir / "capture.txt") << LoopPreviewRoute(dir, missing);
         pt::SaveAppSettings(dir / "preview.ini", pt::AppSettings{});
-        const auto exe = std::filesystem::path(SDL_GetBasePath()) /
-#ifdef _WIN32
-            "pt.exe";
-#else
-            "pt";
-#endif
-        std::vector<std::string> args{exe.string(), "--headless", "--no-save", "--audio-offline", "--game", app_.options.game_dir.string(),
+        const auto exe = GameExecutable();
+        std::vector<std::string> args{pt::os::PathToUtf8(exe), "--headless", "--no-save", "--audio-offline", "--game", pt::os::PathToUtf8(app_.options.game_dir),
             "--frames", "120000", "--demo-rate", "20", "--street-offer", "never", "--seed", std::to_string(kLoopPreviewSeed),
-            "--bug-screen", std::to_string(kLoopPreviewBugScreen), "--f160-light", std::to_string(kLoopPreviewF160Roll), "--shot-warmup", "30", "--shot-settle", "--width", "640", "--height", "360", "--input-script", (dir/"capture.txt").string(),
-            "--settings", (dir/"preview.ini").string(), "--log", (dir/"capture.log").string()};
+            "--bug-screen", std::to_string(kLoopPreviewBugScreen), "--f160-light", std::to_string(kLoopPreviewF160Roll), "--shot-warmup", "30", "--shot-settle", "--width", "640", "--height", "360", "--input-script", pt::os::PathToUtf8((dir/"capture.txt")),
+            "--settings", pt::os::PathToUtf8((dir/"preview.ini")), "--log", pt::os::PathToUtf8((dir/"capture.log"))};
         std::vector<const char*> argv;
         for (auto& arg:args) argv.push_back(arg.c_str());
         argv.push_back(nullptr);
@@ -2525,6 +2718,7 @@ private:
     static constexpr int kAnisotropySteps[] = {0, 2, 4, 8, 16};
     int page_ = kMainPage;
     static constexpr float kMouseSteps[] = {0.25f, 0.35f, 0.5f, 0.7f, 1.0f, 1.4f, 2.0f, 2.8f, 4.0f, 5.0f};
+    static constexpr float kGamepadSensitivitySteps[] = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f};
     static constexpr float kDeadZoneSteps[] = {0.0f, 0.05f, 26.0f / 255.0f, 0.15f, 0.2f, 0.25f, 0.3f};
 
     static pt::game::PcSettingRow Row(int id, std::string label, std::vector<std::string> values, int value, std::string note) {
@@ -2542,7 +2736,7 @@ private:
     std::vector<pt::game::PcSettingSection> SpeedrunResults() const {
         const pt::game::SpeedrunTimer& run = game_.Speedrun();
         using pt::game::SpeedrunTimer;
-        const int language = std::clamp(game_.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         pt::game::PcSettingSection result{"pc_speedrun_run", 0, {}};
         auto menu = Row(kRunMenu, "pc_speedrun_menu", {""}, 0, "pc_note_speedrun_menu");
         menu.link = true;
@@ -2655,7 +2849,7 @@ private:
         pt::game::PcSettingSection left{"pc_section_mods", 0, {}};
         pt::game::PcSettingSection right{"pc_section_mods", 1, {}};
         if (!app_.mods) return {std::move(left)};
-        const int language = std::clamp(game_.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game_.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         const std::string restart(pt::game::PcText("pc_note_mods", language));
         const auto& mods = app_.mods->mods;
         for (size_t i = 0; i < mods.size() && i < static_cast<size_t>(kMaxModRows); ++i) {
@@ -2774,6 +2968,21 @@ private:
     }
 
     std::vector<glm::ivec2> WindowSizes() const {
+        if (app_.settings.display.fullscreen == 2 && app_.window) {
+            int count = 0;
+            SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(SDL_GetDisplayForWindow(app_.window), &count);
+            std::vector<glm::ivec2> listed;
+            listed.reserve(std::max(count, 0));
+            for (int i = 0; modes && i < count; ++i) listed.emplace_back(modes[i]->w, modes[i]->h);
+            SDL_free(modes);
+            std::vector<glm::ivec2> sizes = pt::UniqueDisplaySizes(listed);
+            const glm::ivec2 current(app_.settings.display.width, app_.settings.display.height);
+            if (!sizes.empty() && std::find(sizes.begin(), sizes.end(), current) == sizes.end()) {
+                sizes.push_back(pt::ClosestDisplaySize(sizes, current));
+                sizes = pt::UniqueDisplaySizes(sizes);
+            }
+            if (!sizes.empty()) return sizes;
+        }
         const glm::ivec2 desktop = DesktopSize();
         std::vector<glm::ivec2> sizes;
         for (const glm::ivec2 size : {glm::ivec2(1280, 720), glm::ivec2(1600, 900), glm::ivec2(1920, 1080), glm::ivec2(2560, 1440), glm::ivec2(3200, 1800),
@@ -2801,7 +3010,7 @@ private:
     pt::InputDevice& input_;
 };
 
-bool PumpEvents(App& app, pt::InputDevice* input, bool& running) {
+bool PumpEvents(App& app, pt::InputDevice* input, bool& running, pt::KeyPressLatch* voice_key_latch = nullptr, uint32_t voice_key = SDL_SCANCODE_UNKNOWN) {
     if (!app.window) {
         return true;
     }
@@ -2810,6 +3019,9 @@ bool PumpEvents(App& app, pt::InputDevice* input, bool& running) {
         ImGui_ImplSDL3_ProcessEvent(&event);
         if (input) {
             input->ProcessEvent(event);
+        }
+        if (voice_key_latch) {
+            voice_key_latch->ProcessEvent(event, voice_key);
         }
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             if (running) {
@@ -2974,10 +3186,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     pt::game::Game game(vfs, *app.models);
     pt::game::GameConfig config;
     config.use_save = !options.no_save && !options.headless;
-    if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-        config.save_path = std::filesystem::path(pref) / "PT_Save_Data.sav";
-        SDL_free(pref);
-    }
+    config.save_path = UserDataDir() / "PT_Save_Data.sav";
     if (!options.save_dir.empty()) {
         config.save_path = options.save_dir / "PT_Save_Data";
         config.use_save = !options.no_save;
@@ -3025,7 +3234,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     game.SetThirdPerson(app.settings.camera.third_person || options.third_person);
     pt::game::GameSound sound(game);
     std::vector<float> captured;
-    if ((app.window || options.audio_offline) && sound.Init(app.window != nullptr, "Eng")) {
+    if ((app.window || options.audio_offline) && sound.Init(app.window != nullptr, "Eng", app.settings.audio.surround)) {
         sound.System().SetMasterVolume(app.settings.audio.volume);
         if (options.seed) {
             sound.System().SetRandomSeed(options.seed);
@@ -3059,8 +3268,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     pt::InputDevice input;
     input.settings.mouse_sensitivity *= app.settings.input.mouse_sensitivity;
+    input.settings.gamepad_sensitivity = app.settings.input.gamepad_sensitivity;
     input.settings.stick_dead_zone = app.settings.input.gamepad_dead_zone;
     input.settings.rumble = app.settings.input.rumble;
+    input.settings.trigger_rumble = pt::FeaturesForRumbleProfile(app.settings.input.rumble_profile, app.settings.input.rumble).trigger_rumble;
     PcSettings pc_settings(app, game, input);
     if (ui_ready) {
         ui.SetPcSettings(&pc_settings);
@@ -3080,13 +3291,21 @@ int RunGame(App& app, pt::Vfs& vfs) {
     std::vector<float> offline_audio;
     double audio_device_time = 0.0;
     uint64_t audio_device_frames = 0;
-    const SDL_Scancode voice_key = app.settings.voice.key.empty() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(app.settings.voice.key.c_str());
-    bool voice_key_down = false;
+    SDL_Scancode voice_key = app.settings.voice.key.empty() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(app.settings.voice.key.c_str());
+    pt::KeyPressLatch voice_key_press;
+    if (!app.settings.voice.key.empty()) {
+        if (voice_key == SDL_SCANCODE_UNKNOWN) {
+            pt::LogInfo("voice: keyboard fallback key '{}' is invalid", app.settings.voice.key);
+        } else {
+            pt::LogInfo("voice: keyboard fallback key '{}' resolved to {}", app.settings.voice.key, SDL_GetScancodeName(voice_key));
+        }
+    }
     std::unique_ptr<pt::VoiceRecognizer> recognizer;
     pt::Microphone microphone;
     std::string active_microphone_device;
     bool previous_microphone_test = false;
     bool microphone_failed = false;
+    float mic_quiet_seconds = 0.0f;
     std::vector<int16_t> mic_samples;
     std::vector<int16_t> voice_input;
     size_t voice_input_at = 0;
@@ -3114,6 +3333,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool show_settings = false;
     bool paused_by_settings = false;
     bool mouse_captured = false;
+    bool mouse_capture_requested = false;
     std::vector<pt::DrawItem> draw_items;
     app.scene.LoadResources(vfs);
     pt::VfxPass vfx_pass;
@@ -3260,14 +3480,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
         photo_saved_toggles = app.scene.toggles;
         photo_saved_grain = app.scene.graphics.film_grain;
         pt::game::PhotoSettings settings;
-        settings.fov = std::clamp(static_cast<int>(std::lround(glm::degrees(freecam_camera.fov_y) / 5.0f)) * 5, 20, 100);
-        settings.roll = std::clamp(static_cast<int>(std::lround(glm::degrees(freecam_camera.roll) / 5.0f)) * 5, -45, 45);
+        settings.focal_length_mm = pt::game::PhotoFocalLengthFromFovYDegrees(glm::degrees(freecam_camera.fov_y));
+        settings.roll = std::clamp(static_cast<int>(std::lround(glm::degrees(freecam_camera.roll) / 5.0f)) * 5, -90, 90);
         settings.depth_of_field = app.scene.toggles.depth_of_field;
         settings.bloom = app.scene.toggles.bloom;
         settings.lens = app.scene.toggles.distortion;
         settings.grain = app.scene.toggles.film_grain;
         settings.grading = app.scene.toggles.color_lut;
-        settings.letterbox = std::clamp(app.settings.display.letterbox, 0, 2);
+        settings.aspect = std::clamp(app.settings.display.letterbox, 0, 2);
         photo_panel.Open(settings);
         if (!game.Paused()) {
             game.SetPaused(true);
@@ -3311,7 +3531,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             theater_paused = true;
             if (game.Audio()) game.Audio()->PostEvent("Pause_All", nullptr);
         }
-        const int language = std::clamp(game.Options().subtitle_language, 0, 11);
+        const int language = std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
         ui.SetMenuSuspended(true);
         ui.EnterTheater(view->theater->Sandbox());
         if (options.make_museum_previews.empty()) {
@@ -3343,10 +3563,19 @@ int RunGame(App& app, pt::Vfs& vfs) {
         vr = std::make_unique<pt::game::VrPlay>(*app.xr, app.settings.vr);
     }
     bool frozen = false;
-    bool was_focused = true;
+    bool was_focused = false;
     float applied_volume = -1.0f;
+    pt::ControllerSpeakerOutput controller_speaker;
+    SDL_JoystickID speaker_gamepad_id = 0;
+    SDL_JoystickID attempted_speaker_gamepad_id = 0;
+    uint64_t next_speaker_retry_ns = 0;
+    std::string last_speaker_error;
+    bool speaker_route_requested = false;
+    constexpr std::array<uint32_t, 2> kLisaCryEvents{0xAD52F3C2u, 0x0CB2A9B7u};
     while (running) {
-        bool visible = PumpEvents(app, &input, running) || vr != nullptr;
+        const SDL_Scancode next_voice_key = app.settings.voice.key.empty() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(app.settings.voice.key.c_str());
+        if(next_voice_key!=voice_key) { voice_key_press.Discard(); voice_key=next_voice_key; }
+        bool visible = PumpEvents(app, &input, running, &voice_key_press, static_cast<uint32_t>(voice_key)) || vr != nullptr;
         if (vr) {
             vr->BeginLoop(running);
             if (!vr->Host().SessionRunning()) {
@@ -3361,7 +3590,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                  : vr         ? !vr->Host().FocusLost()
                                               : visible && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
             const bool pause = app.settings.display.pause_on_focus_loss || forced_focus;
-            if (was_focused && !focused && pause && ui_ready && !ui.MenuOpen() && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
+#ifdef __APPLE__
+            const bool startup_ticked = game.Controller().Step() >= 0;
+#else
+            const bool startup_ticked = true;
+#endif
+            if (was_focused && !focused && pause && ui_ready && startup_ticked && !ui.MenuOpen() && !game.Status().IsSet("S_DISABLE_GAME_PAUSE")) {
                 stop_freecam();
                 ui.OpenMenu(game, false);
                 pt::LogInfo("focus: window in the background, pause menu opened");
@@ -3383,8 +3617,67 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 applied_volume = volume;
             }
         }
+        const bool speaker_audio_requested = app.settings.audio.controller_speaker && app.settings.audio.controller_speaker_volume > 0.0f;
+        const pt::ControllerFeedbackFeatures feedback =
+            pt::FeaturesForRumbleProfile(app.settings.input.rumble_profile, app.settings.input.rumble);
+        const bool speaker_requested = app.window && (speaker_audio_requested || feedback.dualsense_haptics);
+        if (speaker_requested != speaker_route_requested) {
+            controller_speaker.Close();
+            speaker_gamepad_id = attempted_speaker_gamepad_id = 0;
+            next_speaker_retry_ns = 0;
+            last_speaker_error.clear();
+            speaker_route_requested = speaker_requested;
+        }
+        const float controller_volume = !was_focused && app.settings.display.mute_in_background ? 0.0f : app.settings.audio.volume;
+        const bool capture_allowed = speaker_requested && sound.Ready() && visible && !frozen && controller_volume > 0.0f;
+        SDL_Gamepad* selected_gamepad = speaker_requested ? input.LastUsedGamepad() : nullptr;
+        const SDL_JoystickID selected_gamepad_id = selected_gamepad ? SDL_GetGamepadID(selected_gamepad) : 0;
+        if (selected_gamepad_id != speaker_gamepad_id) {
+            controller_speaker.Close();
+            speaker_gamepad_id = selected_gamepad_id;
+            attempted_speaker_gamepad_id = 0;
+            next_speaker_retry_ns = 0;
+            last_speaker_error.clear();
+        }
+        if (capture_allowed && selected_gamepad && !controller_speaker.IsOpen() &&
+            (attempted_speaker_gamepad_id != selected_gamepad_id || SDL_GetTicksNS() >= next_speaker_retry_ns)) {
+            attempted_speaker_gamepad_id = selected_gamepad_id;
+            next_speaker_retry_ns = SDL_GetTicksNS() + 2'000'000'000ull;
+            std::string reason;
+            if (!controller_speaker.OpenForGamepad(selected_gamepad, &reason)) {
+                if (reason != last_speaker_error) {
+                    pt::LogInfo("input: controller PCM unavailable: {}", reason);
+                    last_speaker_error = std::move(reason);
+                }
+            } else {
+                last_speaker_error.clear();
+            }
+        }
+        const bool dualsense_route = controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseQuad;
+        const bool controller_haptics = feedback.dualsense_haptics && dualsense_route;
+        const bool route_has_output = controller_speaker.IsOpen() && (speaker_audio_requested || controller_haptics);
+        if (capture_allowed && route_has_output) {
+            sound.System().SetControllerCaptureEvents(kLisaCryEvents);
+        } else {
+            sound.System().SetControllerCaptureEvents(std::span<const uint32_t>{});
+            controller_speaker.ClearPending();
+        }
+        pt::audio::ControllerPcmBlock controller_block;
+        while (sound.Ready() && sound.System().TryReadControllerPcm(controller_block)) {
+            if (capture_allowed && route_has_output) {
+                if (!controller_speaker.WriteCapturedBlock(controller_block, app.settings.audio.controller_speaker,
+                                                           controller_haptics && app.settings.input.rumble,
+                                                           controller_volume * app.settings.audio.controller_speaker_volume, controller_volume)) {
+                    controller_speaker.Close();
+                    next_speaker_retry_ns = 0;
+                }
+            }
+        }
         if (!visible || frozen) {
+            voice_key_press.Discard();
+            input.Poll(false, pt::MouseUse::None, false);
             input.SetRumble(0, 0);
+            input.SetTriggerRumble(0, 0);
             microphone.Close();
             if (recognizer) recognizer->Reset();
             app.microphone_monitor = false;
@@ -3417,9 +3710,28 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const bool photo_pointer = photo_mode && photo_overlay && !(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
             const bool want_capture = !show_debug && !show_settings && !(ui_ready && ui.MenuOpen()) && !photo_pointer && !vr &&
                                       (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS);
-            if (want_capture != mouse_captured) {
-                SDL_SetWindowRelativeMouseMode(app.window, want_capture);
-                mouse_captured = want_capture;
+            if (want_capture != mouse_capture_requested) {
+                mouse_capture_requested = want_capture;
+                if (want_capture) {
+                    const bool relative = SDL_SetWindowRelativeMouseMode(app.window, true);
+                    const std::string relative_error = relative ? std::string{} : SDL_GetError();
+                    const bool grabbed = relative || SDL_SetWindowMouseGrab(app.window, true);
+                    mouse_captured = grabbed;
+                    const char* driver = SDL_GetCurrentVideoDriver();
+                    if (relative) {
+                        pt::LogInfo("input: mouse captured with relative mode (SDL driver {})", driver ? driver : "none");
+                    } else if (grabbed) {
+                        pt::LogWarn("input: relative mouse mode unavailable ({}); cursor confined with SDL mouse grab (driver {})",
+                                    relative_error, driver ? driver : "none");
+                    } else {
+                        pt::LogWarn("input: cannot capture mouse with relative mode ({}) or SDL mouse grab ({}) (driver {})",
+                                    relative_error, SDL_GetError(), driver ? driver : "none");
+                    }
+                } else {
+                    SDL_SetWindowRelativeMouseMode(app.window, false);
+                    SDL_SetWindowMouseGrab(app.window, false);
+                    mouse_captured = false;
+                }
             }
         }
         const bool keyboard_free = app.window && !show_settings && !(show_debug && ImGui::GetIO().WantCaptureKeyboard);
@@ -3428,10 +3740,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        const bool ending_outro = pt::game::EndingOutroInputBlocked(game.Controller().Step());
+        polled = pt::game::GateEndingOutroInput(game.Controller().Step(), polled);
         if (options.forced_prompts) {
             polled.prompts = *options.forced_prompts;
         }
-        if (vr) {
+        if (vr && !ending_outro) {
             vr->ApplyControls(game, polled, ui_ready && ui.MenuOpen(), vr->ScreenMode(game), dt);
         }
         if (polled.pc_settings && !freecam) {
@@ -3461,23 +3775,24 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pending_input.right_click = pending_input.right_click || polled.right_click;
         pending_input.house_pressed = pending_input.house_pressed || polled.house_pressed;
         pending_input.pointer_valid = false;
-        if (app.window && !mouse_captured) {
+        if (app.window && !mouse_captured && !ending_outro) {
             float x = 0.0f;
             float y = 0.0f;
             SDL_GetMouseState(&x, &y);
             pending_input.pointer = glm::vec2(x, y) * SDL_GetWindowPixelDensity(app.window);
             pending_input.pointer_valid = true;
         }
-        if (const std::vector<int> set = game.TakePhotoSettingsRequest(); set.size() == 7 && photo_mode) {
+        if (const std::vector<int> set = game.TakePhotoSettingsRequest(); (set.size() == 7 || set.size() == 8) && photo_mode) {
             pt::game::PhotoSettings& photo = photo_panel.Settings();
-            photo.fov = set[0];
+            photo.focal_length_mm = pt::game::PhotoFocalLengthFromFovYDegrees(static_cast<float>(set[0]));
             photo.roll = set[1];
             photo.focus = set[2];
             photo.aperture = set[3];
-            photo.letterbox = set[4];
+            photo.aspect = set[4];
             photo.depth_of_field = set[2] != 0 || set[3] != 0;
             photo.exposure = pt::game::PhotoSettings::kExposureZero + set[5];
             photo.body = set[6] != 0;
+            if(set.size()==8) photo.resolution = set[7] == 1 ? pt::game::PhotoResolution::FourK : pt::game::PhotoResolution::Native;
         }
         if (const auto shot = game.TakePhotoCameraRequest(); shot && photo_mode) {
             const pt::game::Player& player = game.GetPlayer();
@@ -3508,14 +3823,18 @@ int RunGame(App& app, pt::Vfs& vfs) {
                         view->first.z, view->second.x, view->second.y, view->second.z);
         }
         if (const int request = game.TakeFreeCameraRequest(); request != 0) {
-            if (request == 1) {
+            if (ending_outro) {
+                stop_freecam();
+            } else if (request == 1) {
                 start_freecam();
             } else {
                 stop_freecam();
             }
         }
         if (const int request = game.TakePhotoModeRequest(); request != 0) {
-            if (request == 1 || request == 2) {
+            if (ending_outro) {
+                stop_freecam();
+            } else if (request == 1 || request == 2) {
                 start_photo();
                 photo_overlay = request == 1;
             } else {
@@ -3528,7 +3847,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             static bool f7_was_down = false;
             static bool h_was_down = false;
             static bool p_was_down = false;
-            const bool usable = keyboard_free && !show_settings && !(ui_ready && ui.MenuOpen()) && app.extras_request == 0 && !vr;
+            const bool usable = keyboard_free && !show_settings && !(ui_ready && ui.MenuOpen()) && app.extras_request == 0 && !vr &&
+                                !ending_outro;
             const bool f6 = keys[SDL_SCANCODE_F6] && !f6_was_down && usable;
             const bool f7 = keys[SDL_SCANCODE_F7] && !f7_was_down && usable;
             const bool h = keys[SDL_SCANCODE_H] && !h_was_down && usable;
@@ -3615,6 +3935,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             pt::InputState state = pending_input;
             script.Apply(frame, game, state);
+            state = pt::game::GateEndingOutroInput(game.Controller().Step(), state);
             if (freecam) {
                 state = FreecamInput(state);
             }
@@ -3625,7 +3946,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const auto tick_t0 = std::chrono::steady_clock::now();
             if (theater) {
                 const bool model = theater->theater->ModelView();
-                if (state.pause || state.cancel || (state.confirm && !model)) theater->theater->Stop();
+                const bool back = state.pause || state.cancel || (state.raw_pressed & pt::kRawCircle);
+                const bool accept = state.confirm || (state.raw_pressed & pt::kRawCross);
+                if (back || (accept && !model)) theater->theater->Stop();
                 theater->theater->Update(step, state);
             } else {
                 game.Update(step, state);
@@ -3669,6 +3992,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pending_input.click = pending_input.right_click = pending_input.house_pressed = false;
             accumulator -= step;
             ++ticks;
+        }
+        if (pt::game::EndingOutroInputBlocked(game.Controller().Step())) {
+            stop_freecam();
         }
         if (ui_ready) ui.AdvancePresentation(paced ? dt : step);
         if (!app.update_polled && app.updates.Done()) {
@@ -3743,7 +4069,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             freecam_camera.pitch = std::clamp(freecam_camera.pitch - look.y * (game.Options().invert_y ? -1.0f : 1.0f), -1.55f, 1.55f);
             if (photo_mode) {
                 const pt::game::PhotoSettings& photo = photo_panel.Settings();
-                freecam_camera.fov_y = glm::radians(static_cast<float>(photo.fov));
+                freecam_camera.fov_y = glm::radians(pt::game::PhotoFovYDegrees(photo.focal_length_mm));
                 freecam_camera.roll = glm::radians(static_cast<float>(photo.roll));
                 app.scene.toggles.depth_of_field = photo.depth_of_field;
                 app.scene.toggles.bloom = photo.bloom;
@@ -3758,6 +4084,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         if (pads) {
             const pt::audio::MotionLevels motion = sound.Ready() ? sound.System().Motion() : pt::audio::MotionLevels{};
             input.SetRumble(motion.large_motor, motion.small_motor);
+            input.SetTriggerRumble(motion.large_motor, motion.small_motor);
         }
         if (vr && sound.Ready()) {
             const pt::audio::MotionLevels motion = sound.System().Motion();
@@ -3771,12 +4098,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         }
 
-        if (app.window && voice_key != SDL_SCANCODE_UNKNOWN) {
-            const bool down = SDL_GetKeyboardState(nullptr)[voice_key];
-            if (down && !voice_key_down && game.VoiceListening() && !game.Paused() && !app.microphone_test) {
-                game.OnVoiceKeyword("jack");
-            }
-            voice_key_down = down;
+        const bool voice_key_tapped = voice_key_press.Consume();
+        if ((voice_key_tapped || polled.voice_keyword_pressed) && (app.window || options.virtual_pads) && voice_key != SDL_SCANCODE_UNKNOWN &&
+            game.VoiceListening() && !game.Paused() && !ui.MenuOpen() && !show_settings && !show_debug && !app.microphone_test) {
+            pt::LogInfo("voice: fallback Jack from {}", polled.voice_keyword_pressed ? "controller" : "keyboard");
+            game.OnVoiceKeyword("jack");
         }
         if (!ui.MenuOpen() || ui.Menu().CurrentPage() != pt::game::OptionsMenu::Page::Pc)
             app.microphone_test = app.microphone_monitor = false;
@@ -3801,12 +4127,29 @@ int RunGame(App& app, pt::Vfs& vfs) {
             if (!microphone.IsOpen() && !microphone_failed && !voice_file) {
                 microphone_failed = !microphone.Open(pt::VoiceRecognizer::kSampleRate, app.settings.voice.device);
                 recognizer->Reset();
+                mic_quiet_seconds = 0.0f;
                 if (microphone_failed) pt::LogError("voice: no microphone to listen with");
             }
             const pt::VoiceRecognizer::State state = recognizer->GetState();
-            app.microphone_status = microphone_failed || state == pt::VoiceRecognizer::State::Failed ? "pc_mic_unavailable"
-                                    : state == pt::VoiceRecognizer::State::Ready                    ? "pc_mic_say_jack"
-                                                                                                    : "pc_mic_waiting";
+            if (microphone_failed) {
+                app.microphone_status = "pc_mic_unavailable";
+                app.microphone_reason = "pc_mic_st_nomic";
+            } else if (state == pt::VoiceRecognizer::State::Failed) {
+                using Failure = pt::VoiceRecognizer::Failure;
+                switch (recognizer->GetFailure()) {
+                case Failure::Files: app.microphone_status = "pc_mic_err_files"; app.microphone_reason = "pc_mic_st_files"; break;
+                case Failure::Cpu: app.microphone_status = "pc_mic_err_cpu"; app.microphone_reason = "pc_mic_st_cpu"; break;
+                case Failure::Model: app.microphone_status = "pc_mic_err_model"; app.microphone_reason = "pc_mic_st_model"; break;
+                default: app.microphone_status = "pc_mic_err_runtime"; app.microphone_reason = "pc_mic_st_runtime"; break;
+                }
+            } else if (state == pt::VoiceRecognizer::State::Ready) {
+                const bool silent = mic_quiet_seconds >= 3.0f && app.microphone_hypothesis.empty();
+                app.microphone_status = silent ? "pc_mic_err_silent" : "pc_mic_say_jack";
+                app.microphone_reason = silent ? "pc_mic_st_silent" : "pc_mic_no_word";
+            } else {
+                app.microphone_status = "pc_mic_waiting";
+                app.microphone_reason = "pc_mic_st_loading";
+            }
             if (voice_file) {
                 voice_input_due += dt * pt::VoiceRecognizer::kSampleRate;
                 mic_samples.clear();
@@ -3825,6 +4168,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     loudest = std::max(loudest, static_cast<float>(10.0 * std::log10(std::max(energy / 160.0, 1.0) / (32768.0 * 32768.0))));
                 }
                 app.microphone_db = std::max({-80.0f, loudest, app.microphone_db - 60.0f * dt});
+                if (mic_samples.empty()) mic_quiet_seconds += static_cast<float>(dt);
+                else mic_quiet_seconds = loudest <= -75.0f ? mic_quiet_seconds + static_cast<float>(dt) : 0.0f;
                 bool heard = recognizer->Feed(mic_samples);
                 if (voice_file) heard = recognizer->Drain() || heard;
                 if (heard && !app.microphone_test) game.OnVoiceKeyword(recognizer->Keyword());
@@ -3877,7 +4222,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             tick_state.lights.t = blend;
         }
         const pt::game::TickBlend* light_blend = paced && !theater ? &tick_state.lights : nullptr;
-        if (paced && !theater && !freecam && polled.prompts.device == pt::PromptDevice::Keyboard && !scripted_camera &&
+        if (paced && !theater && !freecam && !pt::game::EndingOutroInputBlocked(game.Controller().Step()) &&
+            polled.prompts.device == pt::PromptDevice::Keyboard && !scripted_camera &&
             !game.Demos().ControlsPlayer() && !game.Paused() && !(game.GetPlayer().locks.Mask('B') & 2)) {
             const pt::Camera unturned = camera;
             camera = pt::game::RenderMouseLook(camera, game.ViewCamera(), pending_input.mouse_look,
@@ -3913,23 +4259,59 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             ImGui::Render();
         }
+        VkExtent2D base_render_extent{};
+        if (!vr && app.window && app.settings.display.fullscreen == 0) {
+            int width = 0;
+            int height = 0;
+            SDL_GetWindowSizeInPixels(app.window, &width, &height);
+            if (width > 0 && height > 0) base_render_extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+        } else if (!vr && app.window) {
+            base_render_extent = {static_cast<uint32_t>(app.settings.display.width), static_cast<uint32_t>(app.settings.display.height)};
+        } else if (!vr && options.headless) {
+            base_render_extent = {options.width, options.height};
+        }
+        app.renderer.SetRenderExtent(base_render_extent);
         if (photo_mode) {
             const int language = std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1);
             photo_status_time = std::max(0.0f, photo_status_time - dt);
             if (photo_status_time <= 0.0f) photo_status.clear();
-            photo_view = photo_panel.View(language, photo_status);
+            const VkExtent2D preview = base_render_extent.width ? base_render_extent : app.renderer.RenderExtent();
+            photo_view = photo_panel.View(language, photo_status, static_cast<float>(preview.width) / std::max(1u, preview.height));
             photo_view.panel = photo_overlay && !photo_shot;
             if (photo_shot) {
                 const std::filesystem::path path = PhotoPath();
-                game.RequestScreenshot(path.string());
+                game.RequestScreenshot(pt::os::PathToUtf8(path));
                 std::string saved(pt::game::PcText("pc_photo_saved", language));
-                if (const size_t at = saved.find("{file}"); at != std::string::npos) saved.replace(at, 6, path.filename().string());
+                if (const size_t at = saved.find("{file}"); at != std::string::npos) saved.replace(at, 6, pt::os::PathToUtf8(path.filename()));
                 photo_status = saved;
                 photo_status_time = 4.0f;
                 photo_shot = false;
             }
         }
         const std::vector<std::string> shots = game.TakeScreenshotRequests();
+        app.renderer.photo_filter = photo_mode ? static_cast<int>(photo_panel.Settings().filter) : 0;
+        const bool photo_capture = photo_mode && !shots.empty() && !vr;
+        const bool photo_four_k = photo_capture && photo_panel.Settings().resolution == pt::game::PhotoResolution::FourK;
+        const VkExtent2D preview_extent = base_render_extent.width ? base_render_extent : app.renderer.RenderExtent();
+        const float preview_aspect = static_cast<float>(preview_extent.width) / std::max(1u, preview_extent.height);
+        const auto photo_crop = photo_capture ? pt::game::PhotoCropForAspect(preview_aspect, photo_panel.Settings().AspectRatio(preview_aspect)) : pt::game::PhotoCropRect{};
+        struct RestorePhotoRender {
+            pt::Renderer& renderer;
+            pt::UpscaleSettings& current;
+            pt::UpscaleSettings saved;
+            VkExtent2D base;
+            bool active;
+            ~RestorePhotoRender() { if (active) { renderer.SetRenderExtent(base); current = saved; } }
+        } restore_photo{app.renderer, app.scene.upscale, app.scene.upscale, base_render_extent, photo_four_k};
+        if (photo_four_k) {
+            const auto extent = pt::game::PhotoCaptureExtent(preview_extent.width, preview_extent.height,
+                static_cast<pt::game::PhotoAspectPreset>(photo_panel.Settings().aspect), pt::game::PhotoResolution::FourK);
+            app.renderer.SetRenderExtent({extent.width, extent.height});
+            app.scene.upscale.kind = pt::UpscalerKind::Off;
+            app.scene.upscale.frame_generation = pt::FrameGenKind::Off;
+            camera.fov_y = 2.0f * std::atan(std::tan(camera.fov_y * 0.5f) * photo_crop.height);
+            photo_view.crop = {};
+        }
         const bool render = app.window || options.render_all || frame + 1 >= static_cast<uint64_t>(options.frames) || !shots.empty();
         ++frame;
         pt::LogSetTick(frame);
@@ -3943,7 +4325,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             auto save_shots = [&](const char* suffix) {
                 for (const std::string& shot : shots) {
                     std::filesystem::path path(shot);
-                    if (*suffix) path = path.parent_path() / (path.stem().string() + suffix + path.extension().string());
+                    if (*suffix) path = path.parent_path() / (pt::os::PathToUtf8(path.stem()) + suffix + pt::os::PathToUtf8(path.extension()));
                     app.renderer.SaveScreenshot(path);
                 }
             };
@@ -4091,10 +4473,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 parts_trace.rows.push_back(parts_row);
             }
             for (const std::string& shot : shots) {
-                app.renderer.SaveScreenshot(shot);
+                const glm::vec4 crop = photo_capture && !photo_four_k ? glm::vec4(photo_crop.x,photo_crop.y,photo_crop.width,photo_crop.height) : glm::vec4(0,0,1,1);
+                if (!app.renderer.SaveScreenshot(shot,crop) && photo_capture) {
+                    photo_status = std::string(pt::game::PcText("pc_photo_save_failed", std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1)));
+                    photo_status_time=4.0f;
+                }
                 if (dump_targets) {
                     const std::filesystem::path path(shot);
-                    app.scene.DumpTargets((path.parent_path() / path.stem()).string());
+                    app.scene.DumpTargets(pt::os::PathToUtf8((path.parent_path() / path.stem())));
                 }
                 const pt::RenderStats& stats = app.scene.Stats();
                 pt::LogInfo("screenshot ev {:.3f} (exposure {:.6f}, metered luminance {:.5f}), {} lights, {} shadow views, camera ({:.3f} {:.3f} {:.3f}) "
@@ -4300,19 +4686,41 @@ int main(int argc, char** argv) {
         SetUpMuseumPreviewRun(app.options);
     }
     const Options& options = app.options;
+    const bool headless_user_data = options.headless && !pt::os::GetEnv("PT_HEADLESS_USER_DATA").empty();
+    const bool tool = (options.headless && !headless_user_data) || options.script_test || options.anim_test ||
+                      !options.voice_test.empty() || options.voice_listen > 0.0f || !options.texture_test.empty() || options.list_pads;
     std::filesystem::path log_path = options.log_path;
     if (log_path.empty()) {
-        const bool tool = options.headless || options.script_test || options.anim_test || !options.voice_test.empty() || options.voice_listen > 0.0f ||
-                          !options.texture_test.empty() || options.list_pads;
-        const std::filesystem::path user = tool ? std::filesystem::path() : UserDataDir();
-        log_path = user.empty() ? std::filesystem::path("pt.log") : user / "pt.log";
+        if (tool) {
+            log_path = "pt.log";
+        } else {
+            std::error_code ec;
+            std::filesystem::create_directories(UserDataDir(), ec);
+            log_path = UserDataDir() / "pt.log";
+        }
     }
     g_output_dir = log_path.parent_path();
-    pt::LogSetFile(log_path.string().c_str());
+    pt::LogSetFile(log_path);
     if (HeadlessOnly() && WouldOpenWindow(options)) {
         pt::LogError("refused: PT_HEADLESS_ONLY set, run would open a window");
         std::fprintf(stderr, "refused: PT_HEADLESS_ONLY set and this run would open a window\n");
         return 3;
+    }
+    if (!tool) {
+        const pt::platform::UserDataReport user_data = pt::platform::PrepareUserDataDirectory(
+            UserDataDir(), options.headless ? std::filesystem::path() : LegacyUserDataDir(), !options.headless);
+        if (!user_data.success) {
+            std::string text = "P.T. cannot prepare its data folder:\n" + pt::os::PathToUtf8(UserDataDir());
+            for (const auto& error : user_data.errors) text += "\n" + error;
+            text += "\nChoose a writable installation folder. Your existing settings and saves have not been removed.";
+            pt::LogError("{}", text);
+            std::fprintf(stderr, "%s\n", text.c_str());
+            if (!options.headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T. data folder", text.c_str(), nullptr);
+            return 1;
+        }
+        pt::LogInfo("user data: {}", pt::os::PathToUtf8(UserDataDir()));
+        if (user_data.migrated_legacy) pt::LogInfo("user data: copied {} legacy files; original profile data retained", user_data.files_copied);
+        for (const auto& warning : user_data.warnings) pt::LogWarn("user data: {}", warning);
     }
     pt::LogInfo("pt-port version {} ({})", pt::update::CurrentVersion(), pt::update::Platform());
 #ifdef _WIN32
@@ -4367,14 +4775,20 @@ int main(int argc, char** argv) {
     pt::Vfs vfs;
     const std::filesystem::path game_dir = FindGameDir(options);
     if (game_dir != options.game_dir) {
-        pt::LogInfo("game files found at {}", game_dir.string());
+        pt::LogInfo("game files found at {}", pt::os::PathToUtf8(game_dir));
     }
     if (!vfs.Mount(game_dir)) {
         if (!options.headless) {
-            const std::string text = "The P.T. game files were not found in\n" + std::filesystem::absolute(game_dir).string() +
+#ifdef __APPLE__
+            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
+                                     "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
+                                     "texture.qar), put that folder next to P.T. PC Port.app, or start pt with --game <folder>.";
+#else
+            const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart pt.exe with --game <folder>, where the folder is your extracted CUSA01127 package "
                                      "(it contains chunk1.psarc and texture.qar), or put that folder at game\\CUSA01127 next to the "
                                      "working directory.";
+#endif
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
         return 1;
@@ -4392,21 +4806,25 @@ int main(int argc, char** argv) {
 
     if (!SDL_Init(options.headless ? (options.virtual_pads ? SDL_INIT_GAMEPAD : 0) : (SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO))) {
         pt::LogError("SDL_Init: {}", SDL_GetError());
-        return 1;
-    }
-    if (options.headless && !options.settings_path.empty()) {
-        app.settings_path = options.settings_path;
-        pt::LoadAppSettings(app.settings_path, app.settings);
-    }
-    if (!options.headless) {
-        app.settings_path = options.settings_path;
-        if (app.settings_path.empty()) {
-            if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-                app.settings_path = std::filesystem::path(pref) / "pt.ini";
-                SDL_free(pref);
+        pt::LogError("SDL_Init: {}", pt::SdlVideoDiagnostics());
+        if (options.headless || !SDL_Init(SDL_INIT_VIDEO)) {
+            return 1;
+        }
+        for (const auto& [flag, name] : {std::pair{SDL_INIT_GAMEPAD, "gamepad"}, std::pair{SDL_INIT_AUDIO, "audio"}}) {
+            if (!SDL_InitSubSystem(flag)) {
+                pt::LogWarn("SDL_Init: no {} ({}), continuing without", name, SDL_GetError());
             }
         }
-        if (!app.settings_path.empty() && !pt::LoadAppSettings(app.settings_path, app.settings)) {
+    }
+    if (!options.headless) {
+        pt::LogSdlVideoInUse();
+    }
+    app.settings_path = !options.settings_path.empty() ? options.settings_path
+                        : (options.headless && !headless_user_data) ? std::filesystem::path()
+                                                                    : UserDataDir() / "pt.ini";
+    const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
+    if (!options.headless) {
+        if (!settings_loaded) {
             pt::SaveAppSettings(app.settings_path, app.settings);
         }
         if (app.settings.network.check_updates && !options.no_update_check) {
@@ -4428,6 +4846,9 @@ int main(int argc, char** argv) {
         app.options.width = static_cast<uint32_t>(app.settings.display.width);
         app.options.height = static_cast<uint32_t>(app.settings.display.height);
         app.options.vsync = app.settings.display.vsync;
+        if (const std::string vulkan = pt::vk::VulkanLibraryPath(); !vulkan.empty()) {
+            SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, vulkan.c_str());
+        }
         app.window = SDL_CreateWindow("P.T.", app.settings.display.width, app.settings.display.height,
                                       SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!app.window) {
@@ -4441,6 +4862,12 @@ int main(int argc, char** argv) {
     settings.headless = options.headless;
     settings.validation = options.validation;
     settings.vsync = options.vsync;
+    settings.hdr = app.settings.display.hdr;
+    if (!options.headless) {
+        settings.pipeline_cache_dir = UserDataDir() / "pipeline-cache";
+    } else if (!options.settings_path.empty()) {
+        settings.pipeline_cache_dir = std::filesystem::absolute(options.settings_path).parent_path() / "pipeline-cache";
+    }
     settings.width = options.width;
     settings.height = options.height;
     if ((app.settings.vr.enabled || options.vr) && !options.no_vr) {
@@ -4477,10 +4904,7 @@ int main(int argc, char** argv) {
         std::filesystem::path texture_data = app.settings_path.parent_path();
         if (!options.save_dir.empty()) texture_data = options.save_dir;
         if (texture_data.empty()) {
-            if (char* pref = SDL_GetPrefPath("pt-port", "pt")) {
-                texture_data = pref;
-                SDL_free(pref);
-            }
+            texture_data = UserDataDir();
         }
         {
             VkPhysicalDeviceMemoryProperties memory{};
@@ -4498,7 +4922,7 @@ int main(int argc, char** argv) {
         if (app.settings.graphics.enhanced_textures) RequestEnhancedTextures(app, true);
         static std::string imgui_ini;
         if (app.window && !g_output_dir.empty()) {
-            imgui_ini = (g_output_dir / "pt_imgui.ini").string();
+            imgui_ini = pt::os::PathToUtf8((g_output_dir / "pt_imgui.ini"));
             ImGui::GetIO().IniFilename = imgui_ini.c_str();
         }
         app.models = std::make_unique<pt::ModelCache>(vfs, app.scene, app.textures);

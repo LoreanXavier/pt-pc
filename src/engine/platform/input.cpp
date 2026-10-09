@@ -7,8 +7,16 @@
 #include <format>
 
 #include "engine/core/log.h"
+#include "engine/platform/controller_feedback.h"
 
 namespace pt {
+
+void KeyPressLatch::ProcessEvent(const SDL_Event& event, uint32_t scancode) {
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode) {
+        pressed_ = true;
+    }
+}
+
 namespace {
 
 constexpr float kTouchSelectX = 768.0f / 1920.0f;
@@ -48,6 +56,11 @@ constexpr KeyBinding kKeyBindings[] = {
 
 PromptStyle StyleOf(SDL_Gamepad* pad) {
     PromptStyle style;
+    if (IsSteamGamepadId(SDL_GetGamepadVendor(pad), SDL_GetGamepadProduct(pad))) {
+        style.device = PromptDevice::Steam;
+        style.faces = {'A', 'B', 'X', 'Y'};
+        return style;
+    }
     const SDL_GamepadType type = SDL_GetGamepadType(pad);
     switch (type) {
         case SDL_GAMEPAD_TYPE_PS3:
@@ -241,8 +254,32 @@ const char* PromptDeviceName(PromptDevice device) {
         case PromptDevice::PlayStation: return "PlayStation";
         case PromptDevice::Xbox: return "Xbox";
         case PromptDevice::Nintendo: return "Nintendo";
+        case PromptDevice::Steam: return "Steam";
         default: return "keyboard";
     }
+}
+
+bool IsSteamGamepadId(uint16_t vendor, uint16_t product) {
+    if (vendor == 0x28DE) {
+        switch (product) {
+            case 0x1101:
+            case 0x1102:
+            case 0x1105:
+            case 0x1106:
+            case 0x1142:
+            case 0x11FF:
+            case 0x1201:
+            case 0x1202:
+            case 0x1205:
+            case 0x1302:
+            case 0x1303:
+            case 0x1304:
+            case 0x1305:
+                return true;
+            default: return false;
+        }
+    }
+    return vendor == 0x0F0D && (product == 0x01AB || product == 0x0196);
 }
 
 uint32_t PlayerButtonsFromRaw(uint32_t raw) {
@@ -348,8 +385,13 @@ void InputDevice::UsePrompts(const PromptStyle& style, uint32_t pad) {
 }
 
 void InputDevice::Shutdown() {
-    if (Pad* pad = Find(rumble_pad_); pad && (rumble_sent_[0] || rumble_sent_[1])) {
-        SDL_RumbleGamepad(pad->handle, 0, 0, 0);
+    if (Pad* pad = Find(rumble_pad_); pad) {
+        if (rumble_sent_[0] || rumble_sent_[1]) {
+            SDL_RumbleGamepad(pad->handle, 0, 0, 0);
+        }
+        if (trigger_rumble_sent_[0] || trigger_rumble_sent_[1]) {
+            SDL_RumbleGamepadTriggers(pad->handle, 0, 0, 0);
+        }
     }
     for (Pad& pad : pads_) {
         SDL_CloseGamepad(pad.handle);
@@ -357,6 +399,18 @@ void InputDevice::Shutdown() {
     pads_.clear();
     rumble_pad_ = 0;
     rumble_sent_[0] = rumble_sent_[1] = 0;
+    trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+    trigger_rumble_sent_at_ = 0;
+}
+
+SDL_Gamepad* InputDevice::LastUsedGamepad() const {
+    const Pad* target = nullptr;
+    for (const Pad& pad : pads_) {
+        if (!target || pad.last_used > target->last_used) {
+            target = &pad;
+        }
+    }
+    return target ? target->handle : nullptr;
 }
 
 InputDevice::Pad* InputDevice::Find(uint32_t id) {
@@ -377,7 +431,12 @@ void InputDevice::Open(uint32_t id) {
         LogWarn("input: cannot open gamepad {}: {}", id, SDL_GetError());
         return;
     }
-    pads_.push_back({handle, id, 0, 0, StyleOf(handle)});
+    Pad pad;
+    pad.handle = handle;
+    pad.id = id;
+    pad.style = StyleOf(handle);
+    pad.trigger_rumble_supported = Describe(handle).trigger_rumble;
+    pads_.push_back(std::move(pad));
     LogInfo("input: gamepad opened: {} ({} connected)", DescribeGamepad(Describe(handle)), pads_.size());
 }
 
@@ -388,11 +447,21 @@ void InputDevice::Close(uint32_t id) {
         }
         const char* name = SDL_GetGamepadName(it->handle);
         LogInfo("input: gamepad {} removed ('{}'), {} left", id, name ? name : "", pads_.size() - 1);
+        if (it->id == rumble_pad_) {
+            if (rumble_sent_[0] || rumble_sent_[1]) {
+                SDL_RumbleGamepad(it->handle, 0, 0, 0);
+            }
+            if (trigger_rumble_sent_[0] || trigger_rumble_sent_[1]) {
+                SDL_RumbleGamepadTriggers(it->handle, 0, 0, 0);
+            }
+        }
         SDL_CloseGamepad(it->handle);
         pads_.erase(it);
         if (rumble_pad_ == id) {
             rumble_pad_ = 0;
             rumble_sent_[0] = rumble_sent_[1] = 0;
+            trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+            trigger_rumble_sent_at_ = 0;
         }
         if (prompt_pad_ == id) {
             const Pad* next = nullptr;
@@ -462,6 +531,7 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         }
         any_edge_ = true;
         last_from_gamepad_ = false;
+        key_pressed_since_poll_ = true;
         UsePrompts(PromptStyle{}, 0);
         for (const KeyBinding& binding : kKeyBindings) {
             if (binding.scancode == 0 || binding.scancode != event.key.scancode) {
@@ -545,6 +615,7 @@ void InputDevice::InjectMouseButton(uint8_t button, bool down) {
 
 InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free) {
     InputState state;
+    state.gamepad_sensitivity = settings.gamepad_sensitivity;
     uint32_t raw = 0;
     const bool video = SDL_WasInit(SDL_INIT_VIDEO) != 0;
     const bool* sdl_keys = keyboard_free && video ? SDL_GetKeyboardState(nullptr) : nullptr;
@@ -597,9 +668,10 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     }
     if (mouse_settle_ > 0) {
         --mouse_settle_;
-    } else if (mouse_travel_ >= kPromptMouseTravel) {
+    } else if (mouse == MouseUse::Menu && mouse_travel_ >= kPromptMouseTravel && !key_pressed_since_poll_) {
         UsePrompts(PromptStyle{}, 0);
     }
+    key_pressed_since_poll_ = false;
     mouse_travel_ = 0.0f;
     mouse_dx_ = 0.0f;
     mouse_dy_ = 0.0f;
@@ -608,6 +680,10 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     glm::vec2 right(0.0f);
     for (Pad& pad : pads_) {
         const uint32_t held = HeldRaw(pad) | pad.event_raw;
+        const bool voice_chord = SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16383 &&
+                                 SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16383;
+        state.voice_keyword_pressed |= pads_free && voice_chord && !pad.previous_voice_chord;
+        pad.previous_voice_chord = voice_chord;
         uint32_t gouge_button = kRawSquare;
         if (pad.style.device == PromptDevice::PlayStation) {
             gouge_button = kRawCross;
@@ -675,6 +751,15 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
 void InputDevice::SetRumble(uint8_t large_motor, uint8_t small_motor) {
     rumble_want_[0] = settings.rumble ? large_motor : 0;
     rumble_want_[1] = settings.rumble ? small_motor : 0;
+    if (!settings.rumble || !settings.trigger_rumble) {
+        trigger_rumble_want_[0] = trigger_rumble_want_[1] = 0;
+    }
+    UpdateRumble();
+}
+
+void InputDevice::SetTriggerRumble(uint8_t left, uint8_t right) {
+    trigger_rumble_want_[0] = settings.rumble && settings.trigger_rumble ? left : 0;
+    trigger_rumble_want_[1] = settings.rumble && settings.trigger_rumble ? right : 0;
     UpdateRumble();
 }
 
@@ -690,8 +775,13 @@ void InputDevice::UpdateRumble() {
         if (Pad* old = Find(rumble_pad_); old && (rumble_sent_[0] || rumble_sent_[1])) {
             SDL_RumbleGamepad(old->handle, 0, 0, 0);
         }
+        if (Pad* old = Find(rumble_pad_); old && (trigger_rumble_sent_[0] || trigger_rumble_sent_[1])) {
+            SDL_RumbleGamepadTriggers(old->handle, 0, 0, 0);
+        }
         rumble_pad_ = id;
         rumble_sent_[0] = rumble_sent_[1] = 0;
+        trigger_rumble_sent_[0] = trigger_rumble_sent_[1] = 0;
+        trigger_rumble_sent_at_ = 0;
         rumble_sent_at_ = 0;
     }
     if (!target) {
@@ -700,6 +790,9 @@ void InputDevice::UpdateRumble() {
     const uint64_t now = SDL_GetTicks();
     const bool active = rumble_want_[0] || rumble_want_[1];
     const bool changed = rumble_want_[0] != rumble_sent_[0] || rumble_want_[1] != rumble_sent_[1];
+    const TriggerRumbleLevels trigger = BuildTriggerRumble(trigger_rumble_want_[0], trigger_rumble_want_[1], settings.rumble,
+                                                           settings.trigger_rumble, target->trigger_rumble_supported);
+    const bool trigger_changed = trigger.left != trigger_rumble_sent_[0] || trigger.right != trigger_rumble_sent_[1];
     if (active && rumble_logged_pad_ != id) {
         rumble_logged_pad_ = id;
         const char* name = SDL_GetGamepadName(target->handle);
@@ -711,6 +804,12 @@ void InputDevice::UpdateRumble() {
         rumble_sent_[0] = rumble_want_[0];
         rumble_sent_[1] = rumble_want_[1];
         rumble_sent_at_ = now;
+    }
+    if (trigger_changed || (trigger.Active() && now - trigger_rumble_sent_at_ >= kRumbleRefreshMs)) {
+        SDL_RumbleGamepadTriggers(target->handle, trigger.left, trigger.right, trigger.Active() ? kRumbleDurationMs : 0);
+        trigger_rumble_sent_[0] = trigger.left;
+        trigger_rumble_sent_[1] = trigger.right;
+        trigger_rumble_sent_at_ = now;
     }
 }
 

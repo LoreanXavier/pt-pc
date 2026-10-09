@@ -23,7 +23,6 @@ constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = SceneRenderer::kDepthTargetFormat;
 constexpr VkFormat kLightFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kHdrFormat = SceneRenderer::kHdrTargetFormat;
-constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kAoFormat = VK_FORMAT_R8_UNORM;
 constexpr VkFormat kRefMapFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kPostFormat = SceneRenderer::kPostTargetFormat;
@@ -106,6 +105,7 @@ bool SceneRenderer::EnsureShadowTarget() {
 
 bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
+    ldr_format_ = renderer.OutputMode() == RendererOutputMode::Sdr ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R16G16B16A16_SFLOAT;
     textures_ = &textures;
     vk::Context& ctx = renderer.Context();
     device_ = ctx.device;
@@ -366,7 +366,7 @@ bool SceneRenderer::CreatePipelines() {
     post.colors = {kBloomFormat};
     post.fragment = "gaussian.frag";
     gaussian_ = CreateGraphicsPipeline(device_, post);
-    post.colors = {kLdrFormat};
+    post.colors = {ldr_format_};
     post.fragment = "tonemap.frag";
     tonemap_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "fxaa.frag";
@@ -374,7 +374,7 @@ bool SceneRenderer::CreatePipelines() {
     post.colors = {kHdrFormat};
     post.fragment = "mirror_temporal.frag";
     mirror_temporal_pipeline_ = CreateGraphicsPipeline(device_, post);
-    post.colors = {kLdrFormat};
+    post.colors = {ldr_format_};
     post.fragment = "dof_blend.frag";
     dof_blend_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "dof_ratio.frag";
@@ -398,13 +398,13 @@ bool SceneRenderer::CreatePipelines() {
     mb_bake_pipeline_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "mb_mcguire.frag";
     mb_mcguire_ = CreateGraphicsPipeline(device_, post);
-    post.colors = {kLdrFormat};
+    post.colors = {ldr_format_};
     post.fragment = "fsblur.frag";
     fsblur_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "banding.frag";
     banding_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "screen_fx.frag";
-    post.colors = {Renderer::kSceneColorFormat};
+    post.colors = {renderer_->SceneColorFormat()};
     screen_fx_ = CreateGraphicsPipeline(device_, post);
     post.fragment = "debug.frag";
     debug_ = CreateGraphicsPipeline(device_, post);
@@ -631,9 +631,9 @@ bool SceneRenderer::EnsureTargets(VkExtent2D extent, VkExtent2D output, bool ups
               CreateTarget(mirror_, kHdrFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
               CreateTarget(bloom_[0], kBloomFormat, quarter, color, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, color, c) &&
               CreateTarget(bloom_[2], kBloomFormat, quarter, color, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
-              CreateTarget(ldr_[0], kLdrFormat, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-              CreateTarget(ldr_[1], kLdrFormat, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
-              CreateTarget(history_, kLdrFormat, output, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
+              CreateTarget(ldr_[0], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+              CreateTarget(ldr_[1], ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c) &&
+              CreateTarget(history_, ldr_format_, output, color | VK_IMAGE_USAGE_TRANSFER_DST_BIT, c) &&
               CreateTarget(ao_[0], kAoFormat, extent, color, c) && CreateTarget(ao_[1], kAoFormat, extent, color | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, c);
     const VkExtent2D shift1{std::max(output.width >> 1, 1u), std::max(output.height >> 1, 1u)};
     const VkExtent2D shift2{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};

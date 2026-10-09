@@ -42,7 +42,8 @@ setup. The script:
 8. runs `tools/ci/stamp_integrity.py`, which writes the SHA-256 of the finished setup into the setup itself. The setup
    reads its own file at start and compares; an unstamped or patched setup does not run. The game does not check its own
    file;
-9. writes `latest.json`, the update manifest (docs/updates.md), to attach to the GitHub release with the setup.
+The game and installers discover updates through the GitHub Releases API (docs/updates.md); no separate update JSON
+file is uploaded with the platform packages.
 
 `release.json` in the report folder lists the version, the LibOrbisPkg source used, every step's exit code and the
 files.
@@ -195,3 +196,5 @@ The payload is appended to the executable (payload, `PTPAYLD1`, u64 offset, u64 
 ## Update check
 
 Both setups look for a newer release when they start (docs/updates.md) and show it without blocking anything.
+
+For 1.0.2 only, add `--legacy-update-manifest` to the release command. This creates the final remote `latest.json` asset for existing 1.0.1 update notifications. Do not pass it for 1.0.3 or later.

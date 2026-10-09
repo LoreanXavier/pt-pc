@@ -40,6 +40,38 @@ int main(int argc, char** argv) {
     check(!update::ParseManifest(R"({"notes": "no version"})", "windows"), "manifest without a version");
     check(!update::ParseManifest("<html>", "windows"), "not JSON");
     check(!update::ParseManifest(R"({"version": "1", )", "windows"), "truncated JSON");
+    const char* github = R"({"tag_name":"v1.0.2","html_url":"https://github.com/LoreanXavier/pt-pc/releases/tag/v1.0.2",
+        "body":"Fixes\nMore details", "draft":false,"prerelease":false,
+        "assets":[
+          {"name":"P.T.PC.Port-portable-windows.zip","browser_download_url":"https://example.org/portable.zip"},
+          {"name":"P.T.PC.Port.Setup-linux","browser_download_url":"https://example.org/linux"},
+          {"name":"P.T.PC.Port-macOS-x64.zip","browser_download_url":"https://example.org/intel.zip"},
+          {"name":"P.T.PC.Port.Setup.exe","browser_download_url":"https://example.org/windows.exe"},
+          {"name":"P.T.PC.Port-macOS-arm64.zip","browser_download_url":"https://example.org/apple.zip"}
+        ]})";
+    const auto gh_windows = update::ParseManifest(github, "windows");
+    const auto gh_linux = update::ParseManifest(github, "linux");
+    const auto gh_arm = update::ParseManifest(github, "macos-arm64");
+    const auto gh_intel = update::ParseManifest(github, "macos-x64");
+    check(gh_windows && gh_windows->version == "v1.0.2" && gh_windows->url == "https://example.org/windows.exe",
+          "GitHub release selects Windows installer instead of portable ZIP");
+    check(gh_linux && gh_linux->url == "https://example.org/linux", "GitHub release selects Linux installer");
+    check(gh_arm && gh_arm->url == "https://example.org/apple.zip", "GitHub release selects Apple silicon app");
+    check(gh_intel && gh_intel->url == "https://example.org/intel.zip", "GitHub release selects Intel app");
+    const char* no_asset = R"({"tag_name":"v1.0.2","html_url":"https://example.org/release","assets":[]})";
+    const auto gh_fallback = update::ParseManifest(no_asset, "macos-arm64");
+    check(gh_fallback && gh_fallback->url == "https://example.org/release", "missing platform asset falls back to release page");
+    check(!update::ParseManifest(R"({"tag_name":"v1.0.2","html_url":"https://example.org/r","draft":true})", "windows"),
+          "draft GitHub release is ignored");
+    check(!update::ParseManifest(R"({"tag_name":"v1.0.2-rc1","html_url":"https://example.org/r","prerelease":true})", "windows"),
+          "prerelease GitHub release is ignored");
+    check(!update::ParseManifest(R"({"tag_name":"nightly","html_url":"https://example.org/r"})", "windows"),
+          "non-version release tag is ignored");
+    check(!update::ParseManifest(R"({"message":"API rate limit exceeded"})", "windows"), "API errors are not updates");
+    check(!update::ParseManifest(R"({"tag_name":"v1.0.2.","html_url":"https://example.org/r"})", "windows"), "malformed version tag is ignored");
+    const auto unsafe_asset = update::ParseManifest(R"({"tag_name":"v1.0.2","html_url":"https://example.org/r",
+        "assets":[{"name":"P.T.PC.Port.Setup.exe","browser_download_url":"http://example.org/setup.exe"}]})", "windows");
+    check(unsafe_asset && unsafe_asset->url == "https://example.org/r", "non-HTTPS asset is ignored");
     if (os::GetEnv("PT_UPDATE_MANIFEST_URL").empty()) {
 #ifdef _WIN32
         _putenv_s("PT_UPDATE_MANIFEST_URL", "https://releases.invalid/pt-port/latest.json");
@@ -67,6 +99,11 @@ int main(int argc, char** argv) {
         request.no_cache = true;
         const auto response = http::Get(request);
         check(response && response->status == 204 && response->date && *response->date > 1700000000, "HTTPS GET with a Date header");
+        request.url = "https://api.github.com/repos/LoreanXavier/pt-pc/releases/latest";
+        request.max_body = 512 * 1024;
+        const auto api = http::Get(request);
+        const auto published = api && api->status == 200 ? update::ParseManifest(api->body, update::Platform()) : std::nullopt;
+        check(published && !published->version.empty() && published->url.starts_with("https://"), "real GitHub release API parses without a manifest asset");
         request.url = "https://nonexistent-host.invalid/";
         check(!http::Get(request), "an unreachable host is no answer");
         if (!os::GetEnv("PT_UPDATE_MANIFEST_URL").empty()) {

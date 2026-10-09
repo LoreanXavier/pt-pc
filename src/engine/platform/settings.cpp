@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "engine/platform/settings.h"
 
 #include <algorithm>
@@ -98,14 +99,20 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "display.pause_on_focus_loss", out.display.pause_on_focus_loss);
     Read(v, "display.mute_in_background", out.display.mute_in_background);
     Read(v, "display.fps_limit", out.display.fps_limit);
+    Read(v, "display.hdr", out.display.hdr);
     Read(v, "display.letterbox", out.display.letterbox);
     Read(v, "input.mouse_sensitivity", out.input.mouse_sensitivity);
+    Read(v, "input.gamepad_sensitivity", out.input.gamepad_sensitivity);
     Read(v, "input.gamepad_dead_zone", out.input.gamepad_dead_zone);
     Read(v, "input.rumble", out.input.rumble);
+    Read(v, "input.rumble_profile", out.input.rumble_profile);
     Read(v, "network.check_updates", out.network.check_updates);
     Read(v, "camera.roll", out.camera.roll);
     Read(v, "camera.third_person", out.camera.third_person);
     Read(v, "audio.volume", out.audio.volume);
+    Read(v, "audio.surround", out.audio.surround);
+    Read(v, "audio.controller_speaker", out.audio.controller_speaker);
+    Read(v, "audio.controller_speaker_volume", out.audio.controller_speaker_volume);
     Read(v, "voice.device", out.voice.device);
     Read(v, "voice.key", out.voice.key);
     Read(v, "upscaling.upscaler", out.upscaling.upscaler);
@@ -145,6 +152,8 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     Read(v, "vr.snap_degrees", out.vr.snap_degrees);
     Read(v, "vr.smooth_speed", out.vr.smooth_speed);
     Read(v, "vr.resolution_scale", out.vr.resolution_scale);
+    Read(v, "vr.height_offset", out.vr.height_offset);
+    Read(v, "vr.world_scale", out.vr.world_scale);
     {
         std::string reached;
         Read(v, "progress.loops_reached", reached);
@@ -180,12 +189,19 @@ bool LoadAppSettings(const std::filesystem::path& path, AppSettings& out) {
     out.display.fps_limit = out.display.fps_limit <= 0 ? 0 : std::clamp(out.display.fps_limit, 20, 1000);
     out.display.letterbox = std::clamp(out.display.letterbox, 0, 2);
     out.input.mouse_sensitivity = std::clamp(out.input.mouse_sensitivity, 0.05f, 20.0f);
+    out.input.gamepad_sensitivity = std::isfinite(out.input.gamepad_sensitivity) ? std::clamp(out.input.gamepad_sensitivity, 0.25f, 4.0f) : 1.0f;
     out.input.gamepad_dead_zone = std::clamp(out.input.gamepad_dead_zone, 0.0f, 0.9f);
+    out.input.rumble_profile = std::clamp(out.input.rumble_profile, 0, 1);
     out.camera.roll = std::clamp(out.camera.roll, 0.0f, 1.0f);
     out.audio.volume = std::clamp(out.audio.volume, 0.0f, 2.0f);
+    out.audio.controller_speaker_volume = std::isfinite(out.audio.controller_speaker_volume)
+                                              ? std::clamp(out.audio.controller_speaker_volume, 0.0f, 1.0f)
+                                              : 0.5f;
     out.upscaling.scale = std::clamp(out.upscaling.scale, 0.25f, 1.0f);
     out.upscaling.sharpness = std::clamp(out.upscaling.sharpness, 0.0f, 1.0f);
     out.ray_tracing.shadows = std::clamp(out.ray_tracing.shadows, 0, 2);
+    out.vr.height_offset = std::isfinite(out.vr.height_offset) ? std::clamp(out.vr.height_offset, -0.5f, 0.5f) : 0.0f;
+    out.vr.world_scale = std::isfinite(out.vr.world_scale) ? std::clamp(out.vr.world_scale, 0.5f, 2.0f) : 1.0f;
     out.vr.flashlight = std::clamp(out.vr.flashlight, 0, 1);
     out.vr.flashlight_hand = std::clamp(out.vr.flashlight_hand, 0, 1);
     out.vr.turn = std::clamp(out.vr.turn, 0, 1);
@@ -211,14 +227,19 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "mute_in_background = " << (s.display.mute_in_background ? 1 : 0) << "\n"
          << "; frames per second at most, 0 for no limit (menus and the paused game stay at 60 or less either way)\n"
          << "fps_limit = " << s.display.fps_limit << "\n"
+         << "hdr = " << (s.display.hdr ? 1 : 0) << "\n"
          << "; black bars over and under the picture in play and in the cutscenes, not in the original: 0 off, 1 2.39:1, 2 1.85:1\n"
          << "letterbox = " << s.display.letterbox << "\n\n"
          << "[input]\n"
          << "mouse_sensitivity = " << s.input.mouse_sensitivity << "\n"
+         << "; gamepad turn speed after the original stick response, 1 keeps the original\n"
+         << "gamepad_sensitivity = " << s.input.gamepad_sensitivity << "\n"
          << "; per stick axis, as the original reads its pads (0.102 is the DualShock 4 dead zone)\n"
          << "gamepad_dead_zone = " << s.input.gamepad_dead_zone << "\n"
          << "; pad vibration from the game's Wwise motion sounds, 0 turns it off\n"
-         << "rumble = " << (s.input.rumble ? 1 : 0) << "\n\n"
+         << "rumble = " << (s.input.rumble ? 1 : 0) << "\n"
+         << "; 0 original motor rumble only, 1 also enables supported trigger rumble and DualSense USB cry haptics\n"
+         << "rumble_profile = " << s.input.rumble_profile << "\n\n"
          << "[camera]\n"
          << "; share of the head's roll the camera takes: 1 as the original (it leans with the walk, most when strafing right), 0 keeps it level\n"
          << "roll = " << s.camera.roll << "\n"
@@ -226,7 +247,11 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "; person for the zoom and the cutscenes; 0 keeps the original's first person view\n"
          << "third_person = " << (s.camera.third_person ? 1 : 0) << "\n\n"
          << "[audio]\n"
-         << "volume = " << s.audio.volume << "\n\n"
+         << "volume = " << s.audio.volume << "\n"
+         << "surround = " << (s.audio.surround ? 1 : 0) << "\n\n"
+         << "controller_speaker = " << (s.audio.controller_speaker ? 1 : 0) << "\n"
+         << "; separate controller-speaker level, 0 to 1; does not change game volume or DualSense haptics\n"
+         << "controller_speaker_volume = " << s.audio.controller_speaker_volume << "\n\n"
          << "[network]\n"
          << "; at start, ask the release page whether a newer version exists (a small note in the PC settings); 0 sends nothing\n"
          << "check_updates = " << (s.network.check_updates ? 1 : 0) << "\n\n"
@@ -292,7 +317,9 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
          << "snap_degrees = " << s.vr.snap_degrees << "\n"
          << "smooth_speed = " << s.vr.smooth_speed << "\n"
          << "; the eye images' size against the headset's recommendation (0.5 to 2)\n"
-         << "resolution_scale = " << s.vr.resolution_scale << "\n";
+         << "resolution_scale = " << s.vr.resolution_scale << "\n"
+         << "height_offset = " << s.vr.height_offset << "\n"
+         << "world_scale = " << s.vr.world_scale << "\n";
     text << "\n[progress]\n"
          << "; the loop browser's unlocks (release builds): the entries reached in play (hex bits) and the game finished once\n"
          << "loops_reached = " << std::hex << s.progress.loops_reached << std::dec << "\n"
@@ -318,7 +345,7 @@ bool SaveAppSettings(const std::filesystem::path& path, const AppSettings& s) {
     std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream out(path, std::ios::binary);
     if (!out) {
-        LogWarn("settings: cannot write {}", path.string());
+        LogWarn("settings: cannot write {}", pt::os::PathToUtf8(path));
         return false;
     }
     out << text.str();

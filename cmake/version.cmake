@@ -1,4 +1,4 @@
-# Writes OUT, the header with this build's version and the release manifest's address (src/engine/platform/update_check.cpp,
+# Writes OUT, the header with this build's version and the update metadata endpoint (src/engine/platform/update_check.cpp,
 # docs/updates.md). Run at every build, so the environment's PT_VERSION (tools/ci/release.py --version) takes effect without a
 # reconfigure; the header is rewritten only when its text changes.
 if(DEFINED ENV{PT_VERSION} AND NOT "$ENV{PT_VERSION}" STREQUAL "")

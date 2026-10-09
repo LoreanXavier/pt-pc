@@ -35,7 +35,8 @@ namespace {
 constexpr int kEm = 48;
 const char* FontFile(std::string_view family) {
     if (family == "Noto Sans") return "NotoSans.ttf";
-    if (family == "Noto Sans Arabic") return "NotoSansArabic.ttf";
+    if (family == "Noto Kufi Arabic") return "NotoKufiArabic.ttf";
+    if (family == "Noto Naskh Arabic") return "NotoNaskhArabic.ttf";
     if (family == "Noto Sans SC") return "NotoSansSC.ttf";
     return nullptr;
 }

@@ -6,6 +6,7 @@
 #include <cctype>
 
 #include "engine/core/log.h"
+#include "engine/platform/sdl_diag.h"
 
 namespace pt {
 
@@ -13,7 +14,7 @@ bool Microphone::Open(int sample_rate, const std::string& device_name) {
     Close();
     sample_rate_ = sample_rate;
     if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        LogError("microphone: SDL audio init failed: {}", SDL_GetError());
+        LogError("microphone: SDL audio init failed: {} (audio drivers built in: {})", SDL_GetError(), SdlCompiledAudioDrivers());
         return false;
     }
     SDL_AudioDeviceID device = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
@@ -42,10 +43,12 @@ bool Microphone::Open(int sample_rate, const std::string& device_name) {
     stream_ = SDL_OpenAudioDeviceStream(device, &spec, nullptr, nullptr);
     if (!stream_) {
         LogWarn("microphone: no recording device: {}", SDL_GetError());
+        LogSdlAudioDevices(true);
         return false;
     }
     SDL_ResumeAudioStreamDevice(stream_);
     LogInfo("microphone: recording at {} Hz", sample_rate);
+    LogSdlAudioDevices(true);
     return true;
 }
 

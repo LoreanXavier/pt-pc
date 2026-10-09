@@ -1,9 +1,9 @@
 # the Museum (Extras): opened from the PC settings page, a cutscene played in its theater from its frame on the wall, back on that
 # frame, then a model in the theater's model viewer (sarchive, left as its back button does); the player's session is the same
 # afterwards (sstate). The halls are a grid of three columns (down steps a row), a wall a strip (right steps an exhibit)
-sstate save
 sui menu pc
 swait 150
+sstate save
 sui menukey up
 swait 4
 sui menukey up
@@ -51,8 +51,22 @@ swait 10
 sexpect menu 1
 sexpect page 1
 sui menukey close
-swait 60
+swait 20
+sexpect pcrow pc_archive_cutscenes
+sexpect page 1
+sui menukey close
+swait 20
+sexpect pcrow pc_archive
+sexpect page 1
+sui menukey close
+swait 20
+sexpect pcrow pc_display_mode
+sexpect page 1
+sui menukey close
+swait 90
+sexpect menu 1
+sexpect page 0
+sstate compare
 sui menukey close
 swait 90
 sexpect menu 0
-sstate compare

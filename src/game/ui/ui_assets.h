@@ -58,8 +58,8 @@ struct UiFont {
 
 class UiAssets {
 public:
-    static constexpr int kLanguageCount = 12;
-    static constexpr const char* kLanguageCodes[kLanguageCount] = {"eng", "fra", "deu", "spa", "jpn", "ita", "por", "tur", "zhs", "ara", "rus", "ukr"};
+    static constexpr int kLanguageCount = 13;
+    static constexpr const char* kLanguageCodes[kLanguageCount] = {"eng", "fra", "deu", "spa", "jpn", "ita", "por", "tur", "zhs", "ara", "rus", "ukr", "ces"};
 
     UiAssets() = default;
     UiAssets(const UiAssets&) = delete;
@@ -93,7 +93,7 @@ private:
 
     Vfs* vfs_ = nullptr;
     TextureManager* textures_ = nullptr;
-    std::array<std::unique_ptr<UiFont>, 21> fonts_;
+    std::array<std::unique_ptr<UiFont>, 24> fonts_;
     std::vector<UiFontStyle> styles_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> options_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> system_;

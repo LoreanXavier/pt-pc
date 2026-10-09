@@ -39,6 +39,8 @@ struct FrameGenPrepare {
     bool reset = false;
 };
 
+enum class FrameStartAction { Continue, RecreateSwapchain, KeepCurrentSwapchain };
+
 class FrameGeneration {
 public:
     virtual ~FrameGeneration() = default;
@@ -48,6 +50,11 @@ public:
     virtual void Prepare(const FrameGenPrepare& prepare) = 0;
     virtual const vk::Image* Present(uint32_t image_index) = 0;
     virtual void Shutdown() = 0;
+    virtual FrameStartAction FrameStart(bool swapchain_recreation_pending) {
+        (void)swapchain_recreation_pending;
+        return FrameStartAction::Continue;
+    }
+    virtual bool SwapchainFailed() { return false; }
 };
 
 std::unique_ptr<FrameGeneration> CreateFrameGeneration(vk::Context& ctx, const FrameGenQueues& queues);

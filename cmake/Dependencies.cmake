@@ -44,6 +44,11 @@ set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(WHISPER_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+if(APPLE)
+  # CPU only on macOS too (docs/macos.md): ggml would add its Metal and Accelerate backends by default
+  set(GGML_METAL OFF CACHE BOOL "" FORCE)
+  set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+endif()
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(BUILD_SHARED_LIBS ON)
 add_subdirectory(${whisper_SOURCE_DIR} ${whisper_BINARY_DIR} EXCLUDE_FROM_ALL)
@@ -54,10 +59,14 @@ add_dependencies(pt_voice_runtime whisper)
 foreach(lib whisper ggml ggml-base)
   set_target_properties(${lib} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PT_VOICE_DIR} LIBRARY_OUTPUT_DIRECTORY ${PT_VOICE_DIR})
   if(NOT WIN32)
-    # plain libwhisper.so files (no version symlinks to package) that find each other in voice/
+    # plain libwhisper.so (macOS: .dylib) files (no version symlinks to package) that find each other in voice/
     set_property(TARGET ${lib} PROPERTY VERSION)
     set_property(TARGET ${lib} PROPERTY SOVERSION)
-    set_target_properties(${lib} PROPERTIES BUILD_RPATH "$ORIGIN")
+    if(APPLE)
+      set_target_properties(${lib} PROPERTIES BUILD_RPATH "@loader_path")
+    else()
+      set_target_properties(${lib} PROPERTIES BUILD_RPATH "$ORIGIN")
+    endif()
   endif()
 endforeach()
 # ggml gives clang-cl only the MSVC /arch switch of a variant, which leaves out the instruction sets its intrinsics
@@ -71,10 +80,16 @@ set(PT_GGML_VARIANT_FLAGS
   "cascadelake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavx512f -mavx512cd -mavx512vl -mavx512dq -mavx512bw -mavx512vnni"
   "icelake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavx512f -mavx512cd -mavx512vl -mavx512dq -mavx512bw -mavx512vbmi -mavx512vnni"
   "alderlake|-msse4.2 -mavx -mavx2 -mfma -mf16c -mbmi2 -mavxvnni")
-foreach(variant x64 sse42 sandybridge ivybridge piledriver haswell skylakex cannonlake cascadelake icelake cooperlake zen4 alderlake sapphirerapids)
+# the Apple silicon variants (apple_m1, apple_m2_m3, apple_m4) are MODULE libraries, libggml-cpu-apple_m4.so even on macOS
+foreach(variant x64 sse42 sandybridge ivybridge piledriver haswell skylakex cannonlake cascadelake icelake cooperlake zen4 alderlake sapphirerapids
+    apple_m1 apple_m2_m3 apple_m4)
   if(TARGET ggml-cpu-${variant})
     add_dependencies(pt_voice_runtime ggml-cpu-${variant})
     set_target_properties(ggml-cpu-${variant} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PT_VOICE_DIR} LIBRARY_OUTPUT_DIRECTORY ${PT_VOICE_DIR})
+    if(APPLE)
+      # dyld finds libggml-base.dylib through the variant's own rpath, not through the copy already loaded
+      set_target_properties(ggml-cpu-${variant} PROPERTIES BUILD_RPATH "@loader_path")
+    endif()
   endif()
 endforeach()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
@@ -97,10 +112,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
 endif()
 set(PT_WHISPER_INCLUDE_DIRS ${whisper_SOURCE_DIR}/include ${whisper_SOURCE_DIR}/ggml/include)
 
-# The models next to pt.exe in voice/: Whisper base.en (OpenAI, MIT) quantized to q5_1 by the whisper.cpp project, and
-# the Silero VAD v6.2.0 (MIT) in ggml form; the notices go with them
+# The models next to pt.exe in voice/: Whisper base.en (OpenAI, MIT) quantized to q5_1 by the whisper.cpp project, the
+# larger small.en q5_1 as the second opinion for short utterances the first model did not take for the word, and the
+# Silero VAD v6.2.0 (MIT) in ggml form; the notices go with them
 foreach(entry
     "ggml-base.en-q5_1.bin|https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin|4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f"
+    "ggml-small.en-q5_1.bin|https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin|bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30"
     "ggml-silero-v6.2.0.bin|https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin|2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987")
   string(REPLACE "|" ";" parts "${entry}")
   list(GET parts 0 name)
@@ -165,6 +182,9 @@ target_include_directories(pt_thirdparty PUBLIC
 target_compile_definitions(pt_thirdparty PUBLIC VK_NO_PROTOTYPES IMGUI_IMPL_VULKAN_USE_VOLK)
 if(WIN32)
   target_compile_definitions(pt_thirdparty PUBLIC VK_USE_PLATFORM_WIN32_KHR)
+elseif(APPLE)
+  # VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK, src/engine/render/vk_context.cpp) is in the headers' beta part
+  target_compile_definitions(pt_thirdparty PUBLIC VK_ENABLE_BETA_EXTENSIONS)
 endif()
 target_link_libraries(pt_thirdparty PUBLIC Vulkan::Headers SDL3::SDL3-static zlibstatic pt_bc7enc)
 if(NOT WIN32)

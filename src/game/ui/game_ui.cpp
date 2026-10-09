@@ -524,7 +524,8 @@ void GameUi::DrawSubliminal(ui::UiBatch& batch, bool string_pass) {
     ui::UiDrawParams params = ui::UiDrawParams::Plain(noise_texture_);
     params.textures[1] = noise_normal_texture_;
     params.extra = glm::vec4(subliminal_.Phase(), 0.0f, subliminal_.NoiseB(), subliminal_.NoiseA());
-    const bool hdr_scene = Renderer::kSceneColorFormat == VK_FORMAT_R16G16B16A16_SFLOAT || Renderer::kSceneColorFormat == VK_FORMAT_R32G32B32A32_SFLOAT;
+    const VkFormat scene_format = renderer_ ? renderer_->SceneColorFormat() : Renderer::kSceneColorFormat;
+    const bool hdr_scene = scene_format == VK_FORMAT_R16G16B16A16_SFLOAT || scene_format == VK_FORMAT_R32G32B32A32_SFLOAT;
     params.extra2 = hdr_scene ? glm::vec4(renderer_ ? renderer_->exposure : 1.0f, 2.2f, 0.0f, 0.0f) : glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
     params.extra2.z = across;
     batch.Quad(glm::vec2(0.0f), extent, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f), params, ui::UiShade::Noise, ui::UiBlend::Alpha);
@@ -1078,7 +1079,13 @@ void GameUi::RecordPhotoMode(VkCommandBuffer cmd, VkExtent2D extent, const Photo
     canvas_ready_ = true;
     batch.SetScreenArea(canvas.origin, UiCanvas::kHeight * canvas.scale);
     const glm::vec2 full(static_cast<float>(extent.width), static_cast<float>(extent.height));
-    DrawLetterbox(batch, full, view.letterbox);
+    const glm::vec2 lo(view.crop.x*full.x,view.crop.y*full.y);
+    const glm::vec2 hi((view.crop.x+view.crop.width)*full.x,(view.crop.y+view.crop.height)*full.y);
+    const auto black=ui::UiDrawParams::Plain(TextureManager::kWhite);
+    const glm::vec4 color(0,0,0,1);
+    auto matte=[&](glm::vec2 a,glm::vec2 b){ if(b.x>a.x && b.y>a.y) batch.Quad(a,b,{0,0},{1,1},color,black,ui::UiShade::Solid,ui::UiBlend::Alpha); };
+    matte({0,0},{full.x,lo.y}); matte({0,hi.y},full);
+    matte({0,lo.y},{lo.x,hi.y}); matte({hi.x,lo.y},{full.x,hi.y});
     if (view.panel) {
         DrawPhotoPanel(batch, canvas, view);
     }

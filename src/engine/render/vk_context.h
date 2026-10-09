@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ public:
 struct Swapchain {
     VkSwapchainKHR handle = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
+    VkColorSpaceKHR color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D extent{};
     std::vector<VkImage> images;
     std::vector<VkImageView> views;
@@ -54,10 +56,10 @@ struct Swapchain {
 
 class Context {
 public:
-    bool Init(SDL_Window* window, bool validation);
+    bool Init(SDL_Window* window, bool validation, bool want_hdr = false);
     void Shutdown();
 
-    bool CreateSwapchain(uint32_t width, uint32_t height, bool vsync);
+    bool CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr = false);
     void DestroySwapchain();
     VkResult AcquireNextImage(VkSemaphore semaphore, uint32_t* index);
     VkResult QueuePresent(const VkPresentInfoKHR& info);
@@ -79,6 +81,8 @@ public:
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties properties{};
     VkDevice device = VK_NULL_HANDLE;
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
+    std::filesystem::path pipeline_cache_dir;
     uint32_t queue_family = 0;
     VkQueue queue = VK_NULL_HANDLE;
     VmaAllocator allocator = nullptr;
@@ -89,6 +93,7 @@ public:
     PFN_vkGetInstanceProcAddr loader = nullptr;
     std::function<void()> before_device_destroy;
     bool force_vsync_off = false;
+    bool swapchain_refused = false;
 
     bool want_ray_query = false;
     bool ray_query_supported = false;
@@ -105,5 +110,9 @@ private:
     VkCommandPool upload_pool_ = VK_NULL_HANDLE;
     SwapchainHooks* swapchain_owner_ = nullptr;
 };
+
+/* The Vulkan library to load: on macOS MoltenVK, shipped with the game (docs/macos.md); empty elsewhere, where volk finds the
+   system's loader. The window's surface must come from the same library, so it is also SDL's (SDL_HINT_VULKAN_LIBRARY). */
+std::string VulkanLibraryPath();
 
 }

@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "game/save_data.h"
 
 #include <algorithm>
@@ -74,6 +75,8 @@ GameOptions DefaultOptionsForLocale(std::string_view locale) {
         options.subtitle_language = 10;
     } else if (primary == "uk") {
         options.subtitle_language = 11;
+    } else if (primary == "cs") {
+        options.subtitle_language = 12;
     }
     return options;
 }
@@ -102,7 +105,7 @@ bool SaveStore::Reset() {
         const auto path=Slot(i);
         std::filesystem::remove(path,error);
         if(error) {
-            LogWarn("save: cannot reset {}: {}",path.string(),error.message());
+            LogWarn("save: cannot reset {}: {}",pt::os::PathToUtf8(path),error.message());
             return false;
         }
     }
@@ -129,18 +132,18 @@ SaveStore::SlotRead SaveStore::Read(const std::filesystem::path& path) const {
     }
     /* No checksum in the PC file; the PS4 savedata layer did that job, so a short read is the only corruption we can detect. */
     if (!in || in.gcount() != static_cast<std::streamsize>(buffer.size())) {
-        LogWarn("save: {} is broken (cannot read {} bytes)", path.string(), buffer.size());
+        LogWarn("save: {} is broken (cannot read {} bytes)", pt::os::PathToUtf8(path), buffer.size());
         slot.status = SaveLoadStatus::Broken;
         return slot;
     }
     const uint32_t version = Get<uint32_t>(buffer, 0x08);
     if (Get<uint64_t>(buffer, 0x00) != kMagic || version > kVersion) {
-        LogWarn("save: {} has a bad header (magic {:#x}, version {})", path.string(), Get<uint64_t>(buffer, 0x00), version);
+        LogWarn("save: {} has a bad header (magic {:#x}, version {})", pt::os::PathToUtf8(path), Get<uint64_t>(buffer, 0x00), version);
         slot.status = SaveLoadStatus::Unreadable;
         return slot;
     }
     if (version < kVersion) {
-        LogWarn("save: {} has the old version {}", path.string(), version);
+        LogWarn("save: {} has the old version {}", pt::os::PathToUtf8(path), version);
         slot.status = SaveLoadStatus::Old;
         return slot;
     }

@@ -1,3 +1,4 @@
+#include "engine/platform/os.h"
 #include "engine/fs/mods.h"
 
 #include <algorithm>
@@ -448,7 +449,7 @@ std::optional<std::vector<uint8_t>> ReadDiskFile(const std::filesystem::path& pa
     }
     constexpr std::streamoff kMaxFile = std::streamoff(1) << 30;
     if (size > kMaxFile) {
-        LogError("mods: {} is {} bytes, more than the {} an override may have; the game's own file is used", path.string(), size, kMaxFile);
+        LogError("mods: {} is {} bytes, more than the {} an override may have; the game's own file is used", pt::os::PathToUtf8(path), size, kMaxFile);
         return std::nullopt;
     }
     std::vector<uint8_t> data(static_cast<size_t>(size));

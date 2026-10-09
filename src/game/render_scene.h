@@ -34,6 +34,9 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
 struct TickBlend {
     float t = 1.0f;
     glm::vec3 handy_aim{0.0f};
+    Camera handy_camera;
+    glm::vec3 handy_lens{0.0f};
+    bool handy_lens_valid = false;
     std::vector<DemoLight> demo_lights;
 };
 
@@ -66,7 +69,7 @@ private:
     void AddLight(const fox2::DataSetFile& file, const fox2::Entity& e, const glm::mat4& file_to_world, uint64_t id, SceneLighting& out) const;
     std::optional<SceneProbe> BuildProbe(Vfs& vfs, const fox2::DataSetFile& file, const fox2::Entity& e, const glm::mat4& file_to_world);
     static std::optional<SceneOccluder> BuildOccluder(const fox2::DataSetFile& file, const fox2::Entity& e, const glm::mat4& file_to_world);
-    void AddHandyLight(Game& game, const Camera& camera, const glm::vec3& aim_point, float dt, SceneLighting& out);
+    void AddHandyLight(Game& game, const Camera& camera, const glm::vec3& aim_point, float dt, SceneLighting& out, const TickBlend* blend);
     void AddHandyReflection(Game& game, const SceneLight& handy, SceneLighting& out) const;
     void AddDemoLight(const DemoLight& light, const TickBlend* blend, SceneLighting& out) const;
     void ApplyDemoCamera(Game& game, SceneLighting& out) const;

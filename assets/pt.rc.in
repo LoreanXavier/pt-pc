@@ -1,0 +1,2 @@
+#include <windows.h>
+1 ICON "@CMAKE_SOURCE_DIR@/assets/pt.ico"

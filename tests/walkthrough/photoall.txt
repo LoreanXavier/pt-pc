@@ -1,0 +1,27 @@
+# the other three pieces (Gap, Bath, Stair; Lisa and Tree are in photo.txt, the option frame in photooption.txt): the Archive's
+# complete photo is noted once all five pieces and the option frame are in (the word is then 0x1FC, bit 4 stays from Activate)
+sanchor
+gfile 0.1 -1.4 7.3
+fent shsb_labl001_mapc008_gap
+swait 10
+szoom 1
+swait 150
+szoom 0
+swait 30
+slog
+gfile -5.9 -1.4 7.5
+fent shsb_labl001_mapc003_bath
+swait 10
+szoom 1
+swait 150
+szoom 0
+swait 30
+slog
+gfile -14.4 -2.8 7.5
+fent shsb_labl001_mapc006_stair
+swait 10
+szoom 1
+swait 150
+szoom 0
+swait 30
+slog

@@ -69,6 +69,8 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     const ExposureSettings& exposure = lighting.exposure;
     gpu::PassPush push;
     push.ids.w = post_view_;
+    const bool hdr_output = renderer_->OutputMode() != RendererOutputMode::Sdr;
+    push.f1.x = hdr_output ? 1.0f : 0.0f;
 
     const char* native_order_override = std::getenv("PT_AA_NATIVE_ORDER");
     const bool native_aa_order = toggles.fxaa && !up_.enabled && native_order_override && std::string(native_order_override) == "1";
@@ -226,7 +228,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     const bool grain = toggles.film_grain && screen.film_grain && lighting.valid;
     const bool distortion = toggles.distortion && screen.screen_distortion && lighting.valid;
     push.f0 = glm::vec4(distortion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
-    push.f1 = glm::vec4(graphics.clarity, 0.0f, 0.0f, 0.0f);
+    push.f1 = glm::vec4(graphics.clarity, hdr_output ? 1.0f : 0.0f, 0.0f, 0.0f);
     Fullscreen(cmd, screen_fx_, push);
     renderer_->grain[0] = grain ? 1.0f : 0.0f;
     renderer_->grain[1] = screen.grain_alt ? 1.0f : 0.0f;
@@ -235,7 +237,7 @@ void SceneRenderer::RecordPost(VkCommandBuffer cmd, const SceneLighting& lightin
     renderer_->grain_offset[1] = screen.grain_offset.y;
     if (vfx_filter && vr_eye_ < 0) {
         SceneFilterContext context = FilterContext(cmd, 2u);
-        context.color_format = Renderer::kSceneColorFormat;
+        context.color_format = renderer_->SceneColorFormat();
         vfx_filter(context);
         BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
     }

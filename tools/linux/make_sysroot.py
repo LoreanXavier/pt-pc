@@ -10,7 +10,8 @@ MIRROR = "https://deb.debian.org/debian/"
 WANT = """libc6-dev linux-libc-dev libgcc-14-dev libstdc++-14-dev libgcc-s1 libstdc++6 libc6
 libx11-dev libxext-dev libxrandr-dev libxrender-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev
 libxkbcommon-dev libxcb1-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libdrm-dev
-libgbm-dev libegl-dev libgl-dev libgles-dev libwayland-dev libdecor-0-dev libvulkan-dev libusb-1.0-0-dev""".split()
+libgbm-dev libegl-dev libgl-dev libgles-dev libwayland-dev libdecor-0-dev libvulkan-dev libusb-1.0-0-dev
+libpulse0 libwayland-client0 libwayland-cursor0 libwayland-egl1""".split()
 SKIP = re.compile(r"^(perl|python|dpkg|debconf|coreutils|bash|sed|grep|tar|gzip|mount|util-linux|systemd|init|adduser|login|passwd|"
                   r"gcc-14-base|libc-bin|libc-dev-bin|rpcsvc-proto|libpam|base-files|dbus-bin|dbus-daemon|dbus-system-bus|"
                   r"dbus-session-bus|dbus$|pipewire-bin|pipewire$|libpipewire-0.3-modules|libpipewire-0.3-common|libspa-0.2-modules|"

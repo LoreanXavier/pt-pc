@@ -492,8 +492,27 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
         const glm::vec2 centre(width * 0.5f, kCellCentre.y);
         text->Centre(centre);
         paint = [&, centre](glm::vec2 p) { return Paint{BoxDistance(p, centre, body * 0.5f, kKeyCorner), 1.0f, 1.0f, text->Ink(p)}; };
-    } else if (id.starts_with("bumper:") && font) {
-        const std::string_view name = std::string_view(id).substr(7);
+    } else if (id.starts_with("steam:face:") && font) {
+        const std::string_view name = std::string_view(id).substr(11);
+        text.emplace(font->font, art.fields, name, kLetterCap, kLetterBold);
+        text->Centre(kCellCentre);
+        paint = [&, centre = kCellCentre](glm::vec2 p) {
+            return Paint{BoxDistance(p, centre, glm::vec2(r * 0.78f), r * 0.24f), 1.0f, 1.0f, text->Ink(p)};
+        };
+    } else if (id == "steam:menu") {
+        const glm::vec2 half(r * 0.9f, r * 0.72f);
+        body = half * 2.0f;
+        paint = [&, half](glm::vec2 p) {
+            float ink = 0.0f;
+            for (const float dy : {-0.25f * r, 0.0f, 0.25f * r}) {
+                ink = std::max(ink, StrokeInk(SegmentDistance(p, kCellCentre + glm::vec2(-0.42f * r, dy),
+                                                                   kCellCentre + glm::vec2(0.42f * r, dy))));
+            }
+            return Paint{BoxDistance(p, kCellCentre, half, 0.2f * r), 1.0f, 1.0f, ink};
+        };
+    } else if ((id.starts_with("bumper:") || id.starts_with("steam:bumper:")) && font) {
+        const size_t prefix = id.starts_with("steam:bumper:") ? 13 : 7;
+        const std::string_view name = std::string_view(id).substr(prefix);
         text.emplace(font->font, art.fields, name, kKeyCap, kKeyBold);
         body = glm::vec2(std::max(2.6f * r, text->Width() + 2.0f * kKeyPad), 1.56f * r);
         width = std::ceil(body.x + 2.0f * (kCellCentre.x - r));
@@ -575,6 +594,28 @@ const PromptGlyph& UiAssets::GeneratedGlyph(const std::string& id) {
     return art.glyphs.emplace(id, glyph).first->second;
 }
 
+std::string SteamPromptGlyphName(const Prompt& prompt, const PromptStyle& style) {
+    if (style.device != PromptDevice::Steam) {
+        return {};
+    }
+    switch (prompt.button) {
+        case PromptButton::Cross:
+        case PromptButton::Circle:
+        case PromptButton::Square:
+        case PromptButton::Triangle: {
+            const size_t face = prompt.button == PromptButton::Cross ? 0 : prompt.button == PromptButton::Circle ? 1
+                                : prompt.button == PromptButton::Square ? 2 : 3;
+            constexpr char kDefaultFaces[] = {'A', 'B', 'X', 'Y'};
+            const char letter = style.faces[face] ? style.faces[face] : kDefaultFaces[face];
+            return std::format("steam:face:{}", letter);
+        }
+        case PromptButton::Options: return "steam:menu";
+        case PromptButton::L1: return "steam:bumper:L1";
+        case PromptButton::R1: return "steam:bumper:R1";
+        default: return {};
+    }
+}
+
 PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& style) {
     const PromptDevice device = style.device;
     const bool built = BuildPcIcons();
@@ -613,6 +654,12 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         case PromptButton::R1: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
     }
     const bool shoulder = prompt.button == PromptButton::L1 || prompt.button == PromptButton::R1;
+    if (built && device == PromptDevice::Steam) {
+        const std::string name = SteamPromptGlyphName(prompt, style);
+        if (!name.empty()) {
+            return GeneratedGlyph(name);
+        }
+    }
     if (built && shoulder && device != PromptDevice::Keyboard) {
         const bool left = prompt.button == PromptButton::L1;
         const char* name = device == PromptDevice::PlayStation ? (left ? "L1" : "R1") : device == PromptDevice::Nintendo ? (left ? "L" : "R")

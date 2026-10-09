@@ -974,6 +974,9 @@ public:
         slope_ = static_cast<float>(static_cast<double>(1.0f / std::max(ratio, 1.0f) - 1.0f) * 0.05);
         delay_l_.assign(lookahead_, 0.0f);
         delay_r_.assign(lookahead_, 0.0f);
+        for (auto& channel : delay_surround_) {
+            channel.assign(lookahead_, 0.0f);
+        }
     }
 
     void SetDetector(const float* peak) override { detector_ = peak; }
@@ -1022,11 +1025,64 @@ public:
         }
     }
 
+    void ProcessSurround(float* left, float* right, std::array<float*, 8>& speakers, uint32_t frames) override {
+        const float* detector = std::exchange(detector_, nullptr);
+        auto peak_at = [&](uint32_t i) { return detector ? detector[i] : std::max(std::fabs(left[i]), std::fabs(right[i])); };
+        if (first_ && frames > 0) {
+            first_ = false;
+            const uint32_t count = std::min(lookahead_, frames);
+            for (uint32_t i = 0; i < count; ++i) {
+                if (peak_at(i) > held_) {
+                    held_ = peak_at(i);
+                    hold_ = count - i;
+                }
+            }
+            target_ = std::max(FastGainToDb(held_) - threshold_db_, 0.0f);
+        }
+        for (uint32_t i = 0; i < frames; ++i) {
+            const uint32_t pos = pos_;
+            const float out_l = delay_l_[pos];
+            const float out_r = delay_r_[pos];
+            std::array<float, 8> delayed{};
+            for (size_t channel = 0; channel < delayed.size(); ++channel) {
+                delayed[channel] = delay_surround_[channel][pos];
+                delay_surround_[channel][pos] = speakers[channel][i];
+            }
+            const float peak = peak_at(i);
+            delay_l_[pos] = left[i];
+            delay_r_[pos] = right[i];
+            if (++pos_ == lookahead_) pos_ = 0;
+            if (hold_ == 0 || held_ < peak) {
+                held_ = peak;
+                target_ = std::max(FastGainToDb(peak) - threshold_db_, 0.0f);
+                hold_ = lookahead_;
+            } else {
+                --hold_;
+            }
+            const float coef = target_ - env_ < 0.0f ? release_coef_ : attack_coef_;
+            env_ = target_ + (env_ - target_) * coef;
+            const float gain = FastPow10(slope_ * env_);
+            left[i] = out_l * gain;
+            right[i] = out_r * gain;
+            for (size_t channel = 0; channel < delayed.size(); ++channel) {
+                speakers[channel][i] = delayed[channel] * gain;
+            }
+        }
+        if (output_gain_ != 1.0f) {
+            for (uint32_t i = 0; i < frames; ++i) {
+                left[i] *= output_gain_;
+                right[i] *= output_gain_;
+                for (float* channel : speakers) channel[i] *= output_gain_;
+            }
+        }
+    }
+
     float TailSeconds() const override { return static_cast<float>(lookahead_ * 2) / kOutputRate + 0.02f; }
 
     void Reset() override {
         std::fill(delay_l_.begin(), delay_l_.end(), 0.0f);
         std::fill(delay_r_.begin(), delay_r_.end(), 0.0f);
+        for (auto& channel : delay_surround_) std::fill(channel.begin(), channel.end(), 0.0f);
         pos_ = 0;
         env_ = 0.0f;
         held_ = 0.0f;
@@ -1045,6 +1101,7 @@ private:
     uint32_t lookahead_ = 1;
     std::vector<float> delay_l_;
     std::vector<float> delay_r_;
+    std::array<std::vector<float>, 8> delay_surround_;
     uint32_t pos_ = 0;
     float env_ = 0.0f;
     float held_ = 0.0f;

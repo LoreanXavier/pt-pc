@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <deque>
 #include <memory>
 #include <vector>
@@ -68,6 +69,9 @@ class Effect {
 public:
     virtual ~Effect() = default;
     virtual void Process(float* left, float* right, uint32_t frames) = 0;
+    virtual void ProcessSurround(float* left, float* right, std::array<float*, 8>& speakers, uint32_t frames) {
+        Process(left, right, frames);
+    }
     virtual float TailSeconds() const = 0;
     virtual void Reset() = 0;
     virtual void MuteDry() {}

@@ -1,0 +1,80 @@
+# issue #7: Lisa follows in loop 2 (KillChase). The player stands facing -z (yaw +-pi, down the hallway toward the start room) and moves
+# the mouse a few degrees: the look-back ring must not arm (the raw mean broke at the +-pi seam). A full turn still arms it.
+sanchor
+swait 700
+sexpect ocho 3
+sexpect ocholook 0
+sface -17.51 -1.4 -100
+swait 900
+sexpect ocholook 0
+slog
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook -0.03 0 3
+swait 20
+slook 0.03 0 3
+swait 20
+swait 300
+sexpect ocholook 0
+sexpect ocho 3
+sface -17.51 -1.4 100
+swait 400
+slog

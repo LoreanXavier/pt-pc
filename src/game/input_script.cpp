@@ -295,6 +295,7 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (c.op == "sphotoset") {
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photoset", static_cast<int>(arg(4))};
             item.extra = glm::vec4(arg(3), arg(5), c.args.size() > 6 ? arg(6) : 1.0f, 0.0f);
+            item.up.x = c.args.size() > 7 ? arg(7) : -1.0f;
             waypoints_.push_back(item);
         } else if (c.op == "sphotocam") {
             Waypoint item{glm::vec3(arg(0), arg(1), arg(2)), false, false, "photocam", 0};
@@ -514,9 +515,11 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             LogInfo("input script frame {}: ChangeGameStep({})", frame, item.text);
             game.Controller().ChangeGameStep(item.text);
         } else if (item.op == "photoset") {
-            game.RequestPhotoSettings({static_cast<int>(item.point.x), static_cast<int>(item.point.y), static_cast<int>(item.point.z),
-                                       static_cast<int>(item.extra.x), item.frames, static_cast<int>(item.extra.y),
-                                       static_cast<int>(item.extra.z)});
+            std::vector<int> values{static_cast<int>(item.point.x), static_cast<int>(item.point.y), static_cast<int>(item.point.z),
+                                    static_cast<int>(item.extra.x), item.frames, static_cast<int>(item.extra.y),
+                                    static_cast<int>(item.extra.z)};
+            if (item.up.x >= 0.0f) values.push_back(static_cast<int>(item.up.x));
+            game.RequestPhotoSettings(values);
         } else if (item.op == "photocam") {
             game.RequestPhotoCamera(glm::vec4(item.point, item.extra.x));
             game.RequestPhotoTarget(glm::vec2(item.extra.y, item.extra.z));
@@ -1009,6 +1012,9 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         ok = game.Objects().Ocho().State() == static_cast<int>(arg(0));
         got = std::format("ocho state {} visible {} killed {}", game.Objects().Ocho().State(), game.Objects().Ocho().Visible(),
                           game.Objects().Ocho().HasKilled());
+    } else if (what == "ocholook") {
+        ok = game.Objects().Ocho().LookPhase() == static_cast<int>(arg(0));
+        got = std::format("ocho look-back phase {}", game.Objects().Ocho().LookPhase());
     } else if (what == "gameplus") {
         const bool shown = game.GamePlusTubShown();
         ok = shown == (arg(0) != 0.0f);
@@ -1024,6 +1030,10 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         });
         ok = found == static_cast<int>(arg(0));
         got = std::format("body {} {}", word(1), found < 0 ? std::string("missing") : found ? std::string("visible") : std::string("hidden"));
+    } else if (what == "hello") {
+        const uint32_t value = game.Nazo().Word(NazoId::Hello);
+        ok = value == static_cast<uint32_t>(arg(0));
+        got = std::format("hello word {}", value);
     } else if (what == "speech") {
         const bool shown = GameUi::Active() && GameUi::Active()->SpeechShown();
         ok = shown == (arg(0) != 0.0f);
@@ -1068,6 +1078,10 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const bool open = entry && game.ArchiveUnlocked(*entry);
         ok = entry && open == (arg(0) != 0.0f);
         got = std::format("archive entry {} {}", word(1), !entry ? "missing" : open ? "open" : "locked");
+    } else if (what == "viewer") {
+        const bool active = game.ArchiveTheaterActive();
+        ok = active == (arg(0) != 0.0f);
+        got = std::format("archive viewer {}", active ? "open" : "closed");
     } else if (what == "unlocked") {
         const int index = static_cast<int>(arg(0));
         ok = game.BrowseUnlocked(index) == (arg(1) != 0.0f);

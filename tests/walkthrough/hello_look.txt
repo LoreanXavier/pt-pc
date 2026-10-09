@@ -1,0 +1,8 @@
+gfile 0 -1.4 7.0
+fent shsb_labl001_hhhh001_0000
+swait 20
+sexpect hello 4
+ffile 0 -0.2 12
+swait 20
+sexpect hello 8
+slog

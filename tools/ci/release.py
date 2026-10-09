@@ -3,13 +3,13 @@
     python tools/ci/release.py --dest <releases folder> --out <dir> --version 1.0.0
 
 It builds the developer build pt, the release game pt_release (PT_RELEASE_LOCKS, the loop browser locked until the game is
-finished once), its portable zip, the release setup and latest.json, the update manifest the game and the setup read
-(docs/updates.md), to attach to the GitHub release with the setup.
+finished once), its portable zip, the release setup. Update metadata comes directly from the GitHub Releases API
+(docs/updates.md); no metadata file is attached to the release.
 
 --linux-setup <name> also makes the Linux setup (docs/installer.md, Linux): the cross build of the same game and
 pt_setup_linux (tools/linux/cross_build.sh, PT_LINUX_SYSROOT or --linux-sysroot), its portable zip with the loop browser
 previews the Windows package shot, the helper published for linux-x64, the payload and the stamped setup as --dest/<folder>/<name>;
-latest.json then lists it. --linux-only skips the Windows steps and makes the Linux setup from a folder the Windows run left.
+The updater discovers its release asset. --linux-only skips the Windows steps and makes the Linux setup from a folder the Windows run left.
 
 The large files stay on the PC under --dest/<stamp> (or --dest/--name); --out gets a short report (release.json, release.log).
 --version is this release's version (PT_VERSION, shown by the game and the setup and compared by the update check).
@@ -33,7 +33,7 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BUILD = REPO / "build" / "release"
-# the public releases (docs/updates.md): the manifest's release page and the assets' addresses
+# the public release page (docs/updates.md)
 GITHUB_REPO = "https://github.com/LoreanXavier/pt-pc"
 SETUP_NAME = "P.T.PC.Port.Setup.exe"
 
@@ -43,8 +43,9 @@ p.add_argument("--out", type=pathlib.Path, required=True)
 p.add_argument("--name", help="the folder under --dest (default: a date and time stamp)")
 p.add_argument("--liborbis", type=pathlib.Path)
 p.add_argument("--version", required=True, help="this release's version, e.g. 1.0.0 (PT_VERSION)")
-p.add_argument("--notes", default="", help="one short line for latest.json (the update notice logs it)")
-p.add_argument("--linux-setup", help="also make the Linux setup, as this file name under the release folder (latest.json lists it)")
+p.add_argument("--notes", default="", help="one short line recorded in the local release report")
+p.add_argument("--legacy-update-manifest", action="store_true", help="1.0.2 only: publish one final latest.json for existing 1.0.1 notifications")
+p.add_argument("--linux-setup", help="also make the Linux setup, as this file name under the release folder; use P.T.PC.Port.Setup-linux for direct update links")
 p.add_argument("--linux-sysroot", type=pathlib.Path, default=pathlib.Path(os.environ.get("PT_LINUX_SYSROOT") or REPO.parent / "pt-linux-env" / "sysroot"),
                help="the Debian sysroot of tools/linux/make_sysroot.py (default: PT_LINUX_SYSROOT or pt-linux-env/sysroot beside the checkout)")
 p.add_argument("--linux-only", action="store_true", help="only the Linux setup (--linux-setup), from the Windows package a previous run left under --name")
@@ -54,6 +55,8 @@ if a.linux_only and not (a.linux_setup and a.name):
     sys.exit("--linux-only needs --linux-setup and --name (the folder of the Windows run)")
 if not re.fullmatch(r"\d+(\.\d+)*(-[0-9A-Za-z.]+)?", a.version):
     sys.exit(f"--version {a.version}: use a version like 1.0.0")
+if a.legacy_update_manifest and a.version != "1.0.2":
+    sys.exit("--legacy-update-manifest is only allowed for the 1.0.2 transition")
 os.environ["PT_VERSION"] = a.version
 SLOT = pathlib.Path(os.environ["PT_SLOT"]) if os.environ.get("PT_SLOT") else None
 
@@ -99,8 +102,9 @@ LINUX_BUILD = REPO / "build" / "linux-cross"
 def build_linux(target):
     sh = shutil.which("sh") or r"C:\Program Files\Git\bin\sh.exe"
     argv = [sh, "tools/linux/cross_build.sh", target]
-    deps = os.environ.get("PT_DEPS") or str(BUILD / "_deps")
-    env = dict(os.environ, PT_LINUX_SYSROOT=str(a.linux_sysroot), PT_DEPS=deps)
+    # forward slashes: the sysroot path reaches pkg-config's output, which CMake parses (a backslash is an escape there)
+    deps = pathlib.Path(os.environ.get("PT_DEPS") or BUILD / "_deps").as_posix()
+    env = dict(os.environ, PT_LINUX_SYSROOT=a.linux_sysroot.as_posix(), PT_DEPS=deps)
     return [sys.executable, str(SLOT), "build", "--", *argv] if SLOT and SLOT.exists() else argv, env
 
 
@@ -157,15 +161,26 @@ package_dir = dest / "game"
 report["files"] = []
 if not a.linux_only:
     # 1. the developer game (its post build steps bring the DLLs, fonts and shaders) and the release game
-    for target in ("pt", "pt_release"):
+    # the release's cache values, set again whatever a test build left in build/release (Game+ on, every upscaler required,
+    # the installer payload at its default place)
+    release_cache = " ".join(["-DPT_GAMEPLUS=ON", "-DPT_UPSCALERS=ON", "-DPT_REQUIRE_UPSCALERS=ON",
+                              f"-DPT_SETUP_PAYLOAD={(REPO / 'dump/installer-20261002/native/payload.bin').as_posix()}"])
+    for index, target in enumerate(("pt", "pt_release")):
         argv, env = build(target)
+        if index == 0:
+            env["PT_CMAKE_ARGS"] = release_cache
         run(f"build {target}", argv, env=env)
+    cache = (BUILD / "CMakeCache.txt").read_text(errors="replace")
+    if "PT_GAMEPLUS:BOOL=ON" not in cache:
+        report["error"] = "the release build has Game+ off"
+        finish(1)
     version_header = (BUILD / "generated" / "pt_version.h").read_text()
     if f'PT_VERSION "{a.version}"' not in version_header:
         report["error"] = "the build did not take --version"
         finish(1)
     # 2. the portable folder and zip: the release game as game/
-    run("package pt_release", [sys.executable, "tools/package.py", "--exe", BUILD / "pt_release.exe", "--game", a.game, "--out", dest / "game"])
+    run("package pt_release", [sys.executable, "tools/package.py", "--exe", BUILD / "pt_release.exe", "--game", a.game,
+                                "--out", dest / "game"])
     runtime = newest_zip(package_dir)
     # 3. the native installer around that runtime
     source = liborbis_source()
@@ -180,13 +195,19 @@ if not a.linux_only:
     run("stamp pt_setup", [sys.executable, "tools/ci/stamp_integrity.py", setup])
     shutil.copy2(setup, dest / SETUP_NAME)
     report["installer"] = str(dest / SETUP_NAME)
-    report["files"] = [str(x) for x in sorted(dest.rglob("*.zip"))] + [report["installer"]]
+    # the portable zip as a release file of its own (issue #8): the same runtime the installer carries, for an already
+    # extracted CUSA01127 folder; its data folder is made next to pt.exe at the first start
+    portable = dest / "P.T.PC.Port-portable-windows.zip"
+    shutil.copy2(runtime, portable)
+    report["portable"] = str(portable)
+    report["files"] = [report["installer"], report["portable"]]
 else:
     if not package_dir.is_dir() or not list(package_dir.glob("pt-port-*.zip")):
         report["error"] = f"--linux-only: no Windows package under {package_dir}"
         finish(1)
     source = liborbis_source()
     report["installer"] = str(dest / SETUP_NAME)
+    report["files"] = [report["installer"], str(dest / "P.T.PC.Port-portable-windows.zip")]
 # 4. the Linux setup (docs/installer.md, Linux): the cross build of the game and the setup, the portable zip (the previews the
 # Windows package shot, since the Linux game cannot run here), the helper for linux-x64, the payload and the stamped setup
 if a.linux_setup:
@@ -218,18 +239,14 @@ if a.linux_setup:
     run("attach linux payload", [sys.executable, "tools/linux/attach_payload.py", "--setup", LINUX_BUILD / "pt_setup_linux", "--payload",
                                  linux / "payload" / "payload.bin", "--out", linux_setup])
     report["linux_installer"] = str(linux_setup)
-    report["files"] += [str(runtime), str(linux_setup)]
-# 5. the update manifest (docs/updates.md), attached to the GitHub release next to the setup
-tag = f"v{a.version}"
-manifest = {
-    "version": a.version,
-    "notes": a.notes,
-    "url": f"{GITHUB_REPO}/releases/tag/{tag}",
-    "platforms": {"windows": {"url": f"{GITHUB_REPO}/releases/download/{tag}/{SETUP_NAME}"}},
-}
-if a.linux_setup:
-    manifest["platforms"]["linux"] = {"url": f"{GITHUB_REPO}/releases/download/{tag}/{a.linux_setup}"}
-(dest / "latest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-report["manifest"] = str(dest / "latest.json")
-report["files"].append(report["manifest"])
+    report["files"].append(str(linux_setup))
+# GitHub release metadata supplies updates. Only platform packages are published.
+if a.legacy_update_manifest:
+    from legacy_update_manifest import write_manifest
+    report["manifest"] = str(write_manifest(dest, a.version, a.notes, a.linux_setup or ""))
+    report["files"].append(report["manifest"])
+else:
+    (dest / "latest.json").unlink(missing_ok=True)
+report["release_page"] = f"{GITHUB_REPO}/releases/tag/v{a.version}"
+report["notes"] = a.notes
 finish(0)

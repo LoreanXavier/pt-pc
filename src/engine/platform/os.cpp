@@ -29,14 +29,15 @@ FILE* OpenFile(const std::filesystem::path& path, const char* mode) {
 int SeekFile(FILE* file, int64_t offset, int origin) { return _fseeki64(file, offset, origin); }
 
 std::string GetEnv(const char* name) {
-    char* value = nullptr;
-    size_t size = 0;
-    std::string out;
-    if (_dupenv_s(&value, &size, name) == 0 && value) {
-        out = value;
-        std::free(value);
-    }
-    return out;
+    std::wstring key;
+    for (const char* c = name; *c; ++c) key.push_back(static_cast<wchar_t>(*c));
+    const DWORD size = GetEnvironmentVariableW(key.c_str(), nullptr, 0);
+    if (!size) return {};
+    std::wstring value(size, L'\0');
+    const DWORD written = GetEnvironmentVariableW(key.c_str(), value.data(), size);
+    if (!written || written >= size) return {};
+    value.resize(written);
+    return PathToUtf8(std::filesystem::path(value));
 }
 
 uint32_t ProcessId() { return GetCurrentProcessId(); }

@@ -31,4 +31,6 @@ struct PromptGlyph {
     bool original = false;
 };
 
+std::string SteamPromptGlyphName(const Prompt& prompt, const PromptStyle& style);
+
 }

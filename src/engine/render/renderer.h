@@ -13,10 +13,15 @@ struct SDL_Window;
 
 namespace pt {
 
+enum class FrameStartAction;
+enum class RendererOutputMode { Sdr, ScRgb, Hdr10 };
+
 struct RendererSettings {
     bool validation = false;
     bool vsync = true;
     bool headless = false;
+    bool hdr = false;
+    std::filesystem::path pipeline_cache_dir;
     uint32_t width = 1600;
     uint32_t height = 900;
 };
@@ -44,7 +49,7 @@ public:
     void EndFrame(bool draw_ui);
     void Resize(uint32_t width, uint32_t height);
     void SetVsync(bool enabled);
-    bool SaveScreenshot(const std::filesystem::path& path);
+    bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f});
 
     vk::Context& Context() { return ctx_; }
     VkCommandBuffer Cmd() const { return frames_[frame_index_].cmd; }
@@ -53,7 +58,10 @@ public:
     uint32_t FrameIndex() const { return frame_index_; }
     static constexpr uint32_t kFramesInFlight = 2;
     static constexpr VkFormat kSceneColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat SceneColorFormat() const { return output_mode_ == RendererOutputMode::Sdr ? kSceneColorFormat : VK_FORMAT_R16G16B16A16_SFLOAT; }
+    RendererOutputMode OutputMode() const { return output_mode_; }
 
+    int photo_filter = 0;
     float exposure = 1.0f;
     float output_brightness = 1.0f;
     float fade[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -61,6 +69,8 @@ public:
     float grain_offset[2] = {0.0f, 0.0f};
     std::function<void(VkCommandBuffer, VkImageView, VkExtent2D)> overlay;
     std::function<const vk::Image*(uint32_t)> hudless;
+    std::function<FrameStartAction(bool)> frame_start;
+    std::function<bool()> swapchain_failed;
 
     void SetGrainNoise(VkImageView view);
 
@@ -80,7 +90,8 @@ private:
     void DestroyTargets();
     bool CreateCompositePipeline(VkFormat output_format);
     bool InitImGui(SDL_Window* window);
-    void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkOffset2D offset = {0, 0});
+    void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format,
+                   VkOffset2D offset = {0, 0});
     void WriteCompositeSets();
     void RecordXr(VkCommandBuffer cmd);
     void CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget& target, bool premultiplied);
@@ -102,6 +113,8 @@ private:
     vk::Image final_;
     vk::Image output_;
     VkFormat output_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat final_format_ = VK_FORMAT_R8G8B8A8_UNORM;
+    RendererOutputMode output_mode_ = RendererOutputMode::Sdr;
     VkSampler linear_sampler_ = VK_NULL_HANDLE;
     VkSampler wrap_sampler_ = VK_NULL_HANDLE;
     VkImageView grain_noise_ = VK_NULL_HANDLE;
@@ -111,6 +124,7 @@ private:
     VkDescriptorSet final_set_ = VK_NULL_HANDLE;
     VkPipelineLayout composite_layout_ = VK_NULL_HANDLE;
     VkPipeline composite_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline final_composite_pipeline_ = VK_NULL_HANDLE;
 
     VkExtent2D render_extent_{0, 0};
     bool presenting_ = false;
