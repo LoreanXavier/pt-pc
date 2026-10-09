@@ -28,7 +28,7 @@ struct SubtitleView {
 
 class SubtitlePlayer {
 public:
-    static constexpr int kLanguageCount = 13;
+    static constexpr int kLanguageCount = 14;
 
     void Init(Vfs& vfs) { vfs_ = &vfs; }
     void SetLanguage(int language);

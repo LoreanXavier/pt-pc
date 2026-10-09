@@ -11,7 +11,7 @@
 namespace pt::game {
 namespace {
 
-constexpr const char* kSubtitleLanguages[SubtitlePlayer::kLanguageCount] = {"Eng", "Fre", "Ger", "Spa", "Jpn", "Ita", "Por", "Tur", "Zhs", "Ara", "Rus", "Ukr", "Ces"};
+constexpr const char* kSubtitleLanguages[SubtitlePlayer::kLanguageCount] = {"Eng", "Fre", "Ger", "Spa", "Jpn", "Ita", "Por", "Tur", "Zhs", "Ara", "Rus", "Ukr", "Ces", "Pol"};
 
 constexpr int kPlayingPriority[8] = {255, 0, 0, 10, 20, 30, 40, 0};
 constexpr float kRangeRadius[4] = {0.0f, 20.0f, 40.0f, 70.0f};

@@ -48,6 +48,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","ロシア語"},
     {"op_sub_ukrainian","ウクライナ語"},
     {"op_sub_czech","チェコ語"},
+    {"op_sub_polish","ポーランド語"},
     {"pc_loop_browser","ループ選択"},
     {"pc_note_loop_browser_entry","セーブデータを上書きせずに、好きなループから始めます。"},
     {"pc_loop_choose","ループを選択"},

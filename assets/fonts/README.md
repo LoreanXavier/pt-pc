@@ -1,6 +1,6 @@
 # Bundled UI fonts
 
-Google Noto fonts, SIL Open Font License 1.1. Private process registration only; no Windows font installation. Used for added Turkish, Simplified Chinese, Arabic, Russian, Ukrainian and Czech menus/subtitles. Original game fonts remain for original languages. Arabic uses Noto Kufi Arabic in the menus and Noto Naskh Arabic in the subtitles. The build copies the OFL notices to `licenses/` as well.
+Google Noto fonts, SIL Open Font License 1.1. Private process registration only; no Windows font installation. Used for added Turkish, Simplified Chinese, Arabic, Russian, Ukrainian, Czech and Polish menus/subtitles. Original game fonts remain for original languages. Arabic uses Noto Kufi Arabic in the menus and Noto Naskh Arabic in the subtitles. The build copies the OFL notices to `licenses/` as well.
 
 Retrieved from the official google/fonts repository (Noto Sans and Noto Sans SC on 2026-10-02, Noto Kufi Arabic and Noto Naskh Arabic on 2026-10-06). Matching OFL files are beside the fonts. SHA256 pins the files used in this build:
 

@@ -48,6 +48,7 @@ inline constexpr Text kMenu[] = {
     {"op_sub_russian","Russo"},
     {"op_sub_ukrainian","Ucraniano"},
     {"op_sub_czech","Checo"},
+    {"op_sub_polish","Polonês"},
     {"pc_loop_browser","Seleção de loop"},
     {"pc_note_loop_browser_entry","Comece qualquer loop sem substituir seu arquivo salvo."},
     {"pc_loop_choose","Escolha um loop"},
