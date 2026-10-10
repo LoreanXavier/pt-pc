@@ -57,7 +57,7 @@ be moved or copied; an older profile is migrated once without overwriting newer 
 `~/Library/Application Support/pt-port/pt/`. The game checks GitHub Releases for a newer version at startup;
 `[network] check_updates = 0` disables that check.
 
-Thanks to ahm3texe for the Apple silicon port(even though he is an easy ragebaitted dumbass), totsu0jv for Czech translation, GrzybDev for Polish translation, and yewhochen for the Linux library-loading
+Thanks to ahm3texe for the Apple silicon port (even though he is an easy ragebaitted dumbass), totsu0jv for Czech translation, GrzybDev for Polish translation, and yewhochen for the Linux library-loading
 and startup-focus fixes. Their contributions are incorporated here, with platform and release changes adapted for 1.0.2.
 
 ## Playing
