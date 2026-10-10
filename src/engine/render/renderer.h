@@ -71,6 +71,8 @@ public:
     int photo_filter = 0;
     float exposure = 1.0f;
     float output_brightness = 1.0f;
+    // the start's title picture (GameUi::ShowBootSplash) is shown as it is: no film grain, no brightness setting
+    bool plain_output = false;
     float fade[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float grain[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float grain_offset[2] = {0.0f, 0.0f};

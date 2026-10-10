@@ -256,9 +256,9 @@ inline std::string ReadSlice(const fs::path& file, uint64_t offset, uint64_t cou
     input.read(bytes.data(), std::streamsize(count));
     return input.gcount() == std::streamsize(count) ? bytes : std::string{};
 }
-inline std::optional<std::string> IconFromFolder(const fs::path& dir) {
+inline std::optional<std::string> SystemPngFromFolder(const fs::path& dir, const char* name) {
     std::error_code error;
-    const fs::path icon = dir / "sce_sys" / "icon0.png";
+    const fs::path icon = dir / "sce_sys" / name;
     if (!fs::is_regular_file(icon, error)) return std::nullopt;
     const auto size = fs::file_size(icon, error);
     if (error || size < 8 || size > kIconMaxBytes) return std::nullopt;
@@ -266,7 +266,9 @@ inline std::optional<std::string> IconFromFolder(const fs::path& dir) {
     if (!IsPng(bytes)) return std::nullopt;
     return bytes;
 }
-inline std::optional<std::string> IconFromPackage(const fs::path& pkg) {
+inline std::optional<std::string> IconFromFolder(const fs::path& dir) { return SystemPngFromFolder(dir, "icon0.png"); }
+// a PNG of the package's system entries (icon0.png, pic1.png), read from the entry table without the PFS
+inline std::optional<std::string> SystemPngFromPackage(const fs::path& pkg, const char* wanted) {
     const std::string head = ReadSlice(pkg, 0, 0x20);
     if (head.size() != 0x20 || head.compare(0, 4, "\x7F" "CNT") != 0) return std::nullopt;
     const uint32_t count = Be32(head, 0x10), table = Be32(head, 0x18);
@@ -289,28 +291,31 @@ inline std::optional<std::string> IconFromPackage(const fs::path& pkg) {
         if (id < 0x1000 || (flags1 & 0x80000000u) || size < 8 || size > kIconMaxBytes) continue;
         const uint32_t name_at = Be32(entries, at + 4);
         if (name_at >= names.size()) continue;
-        if (std::string(names.c_str() + name_at) != "icon0.png") continue;
+        if (std::string(names.c_str() + name_at) != wanted) continue;
         const std::string bytes = ReadSlice(pkg, offset, size);
         if (IsPng(bytes)) return bytes;
     }
     return std::nullopt;
 }
-inline std::optional<std::string> FindIconPng(const fs::path& input) {
+inline std::optional<std::string> IconFromPackage(const fs::path& pkg) { return SystemPngFromPackage(pkg, "icon0.png"); }
+// A system picture of the game the player picked (a package, a dump folder or a folder one level above it)
+inline std::optional<std::string> FindSystemPng(const fs::path& input, const char* name) {
     std::error_code error;
     if (input.empty() || !fs::exists(input, error)) return std::nullopt;
     if (fs::is_regular_file(input, error)) {
         if (IsPackage(input)) {
-            if (auto icon = IconFromPackage(input)) return icon;
+            if (auto png = SystemPngFromPackage(input, name)) return png;
         }
-        if (auto icon = IconFromFolder(input.parent_path())) return icon;
+        if (auto png = SystemPngFromFolder(input.parent_path(), name)) return png;
         return std::nullopt;
     }
-    if (auto icon = IconFromFolder(input)) return icon;
+    if (auto png = SystemPngFromFolder(input, name)) return png;
     for (fs::directory_iterator it(input, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error))
         if (it->is_directory(error))
-            if (auto icon = IconFromFolder(it->path())) return icon;
+            if (auto png = SystemPngFromFolder(it->path(), name)) return png;
     return std::nullopt;
 }
+inline std::optional<std::string> FindIconPng(const fs::path& input) { return FindSystemPng(input, "icon0.png"); }
 inline void CopyArchives(const GameFiles& files, const fs::path& assets) {
     fs::create_directories(assets);
     std::vector<char> buffer(4 * 1024 * 1024);
@@ -760,6 +765,21 @@ inline InstallOutcome RunInstall(const fs::path& input, fs::path destination, bo
                                      "install-notes.txt", "install-extraction.log"})
                 if (fs::is_regular_file(staging / name, error)) extra.push_back(name);
         }
+        {
+            // the game's title picture (sce_sys/pic1.png), which the game shows at its start; the archives alone do not carry it,
+            // so installs from a package or a copied dump had no start picture. An update without a source takes it from the
+            // folder the player picked when that is the dump
+            const fs::path look = source ? source->path : input;
+            std::error_code error;
+            if (!look.empty() && !fs::is_regular_file(destination / "CUSA01127" / "sce_sys" / "pic1.png", error)) {
+                if (const auto picture = FindSystemPng(look, "pic1.png")) {
+                    fs::create_directories(staging / "CUSA01127" / "sce_sys", error);
+                    std::ofstream picture_file(staging / "CUSA01127" / "sce_sys" / "pic1.png", std::ios::binary);
+                    picture_file.write(picture->data(), std::streamsize(picture->size()));
+                    if (picture_file) extra.push_back("CUSA01127/sce_sys/pic1.png");
+                }
+            }
+        }
         if (shortcut) {
             const fs::path look = source ? source->path : input;
             if (!look.empty()) {
@@ -1033,6 +1053,10 @@ inline std::string SelfTestIcon(const fs::path& root) {
     if (!from_folder || *from_folder != png) failures += " folder-icon";
     write(dir / "sce_sys" / "icon0.png", "not a png file");
     if (FindIconPng(dir)) failures += " folder-nonpng";
+    write(dir / "sce_sys" / "pic1.png", png);
+    const auto picture = FindSystemPng(dir, "pic1.png");
+    if (!picture || *picture != png) failures += " folder-title-picture";
+    if (FindSystemPng(root / "missing", "pic1.png")) failures += " missing-title-picture";
     const fs::path pkg = root / "game.pkg";
     write(pkg, package(false));
     const auto from_pkg = FindIconPng(pkg);

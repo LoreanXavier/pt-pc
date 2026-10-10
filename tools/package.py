@@ -168,6 +168,8 @@ def main():
             sys.exit(f"loop browser previews incomplete: {len(shots)} of 18, see {previews / 'capture.log'}")
         for extra in ("capture.txt", "capture.log", "preview.ini"):
             (previews / extra).unlink(missing_ok=True)
+        # the capture run's own Vulkan pipeline cache (this machine's GPU and driver) is no part of the package
+        shutil.rmtree(previews / "pipeline-cache", ignore_errors=True)
     else:
         print(f"loop browser previews skipped: no game files at {args.game}")
     if (build / "texture-tools").is_dir():

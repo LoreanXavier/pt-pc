@@ -6,6 +6,7 @@
 namespace pt::japanese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","この変更を反映するには、ゲームを再起動してください。"},
     {"pc_controller_speaker","コントローラーのスピーカー"},
     {"pc_note_controller_speaker","Lisaのゲーム内の叫び声を、対応するSonyコントローラーのスピーカーから再生します。WindowsではUSB接続が必要です。非対応機器やBluetoothでは音は出ません。ハプティクスとは独立しており、初期設定ではオフです。"},
     {"pc_controller_speaker_volume","コントローラーのスピーカー音量"},

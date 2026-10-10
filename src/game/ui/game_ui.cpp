@@ -282,10 +282,16 @@ void GameUi::UpdateSubliminal(Game& game, float dt, bool paused) {
     }
 }
 
+void GameUi::ShowBootSplash(uint32_t texture, float seconds) {
+    boot_splash_ = texture;
+    boot_splash_time_ = seconds;
+}
+
 void GameUi::Update(Game& game, const InputState& input, float dt) {
     if (!ready_) {
         return;
     }
+    boot_splash_time_ = std::max(0.0f, boot_splash_time_ - std::min(dt, 0.1f));
     if (game.TakeSubtitleClear()) {
         ClearSubtitles();
     }
@@ -444,7 +450,14 @@ void GameUi::Update(Game& game, const InputState& input, float dt) {
 
 void GameUi::DrawSubtitle(ui::UiBatch& batch, const UiCanvas& canvas) {
     SubtitleView view;
-    if (!subtitles_on_ || !subtitles_.Current(hidden_subtitle_, view)) {
+    const bool shown = subtitles_on_ && subtitles_.Current(hidden_subtitle_, view);
+    // the line on screen, logged when it changes (which of two overlapping subtitles holds the screen)
+    const std::string on_screen = shown ? view.id + " " + view.text : std::string();
+    if (on_screen != logged_subtitle_) {
+        logged_subtitle_ = on_screen;
+        LogInfo("ui: subtitle on screen: {}", on_screen.empty() ? std::string("none") : view.id);
+    }
+    if (!shown) {
         return;
     }
     const int language = subtitles_.Language();
@@ -898,6 +911,15 @@ void GameUi::Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent) 
     }
     if (demo_ui_.Active()) {
         layers.push_back({DemoUi::kPriority, [&] { demo_ui_.Draw(batch, canvas, language_); }});
+    }
+    if (boot_splash_ != 0 && boot_splash_time_ > 0.0f) {
+        layers.push_back({SaveIcon::kPriority - 2, [&] {
+                              const glm::vec2 lo = canvas.origin;
+                              const glm::vec2 hi = canvas.origin + glm::vec2(UiCanvas::kWidth, UiCanvas::kHeight) * canvas.scale;
+                              const float alpha = std::clamp(boot_splash_time_ / 0.6f, 0.0f, 1.0f);
+                              batch.Quad(lo, hi, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f, 1.0f, 1.0f, alpha),
+                                         ui::UiDrawParams::Plain(boot_splash_), ui::UiShade::Material, ui::UiBlend::Alpha);
+                          }});
     }
     if (save_icon_.Visible()) {
         layers.push_back({SaveIcon::kPriority, [&] { save_icon_.Draw(batch, canvas); }});

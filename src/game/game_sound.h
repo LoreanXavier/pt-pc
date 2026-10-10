@@ -91,6 +91,7 @@ public:
     void Footstep(bool left, const glm::vec3& position) override;
     void AnimEvent(std::string_view sound, uint64_t event, const glm::vec3& position) override;
     void StopAll() override;
+    void ResetSession() override;
     uint32_t PlayStream(std::vector<uint8_t> wem, const glm::vec3* position) override;
     void SeekPlayingId(uint32_t playing_id, float seconds) override;
     void StopPlayingId(uint32_t playing_id, float fade_seconds) override;
@@ -185,7 +186,7 @@ private:
     audio::GameObjectId next_emitter_ = 0x20000;
     audio::GameObjectId next_anim_object_ = kAnimEventBase;
     std::map<uint64_t, AnimObject> anim_objects_;
-    audio::GameObjectId next_dialogue_object_ = 0x7D000000;
+    audio::GameObjectId next_dialogue_object_ = 0x7B000000;
     std::vector<DialogueObject> dialogue_objects_;
     glm::vec3 listener_{0.0f};
     std::vector<Emitter> emitters_;

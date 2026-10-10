@@ -6,6 +6,7 @@
 namespace pt::russian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Чтобы изменение вступило в силу, перезапустите игру."},
     {"pc_controller_speaker","Динамик контроллера"},
     {"pc_note_controller_speaker","Воспроизводит записанные в игре крики Лизы через поддерживаемые динамики контроллеров Sony. В Windows требуется USB; неподдерживаемые устройства и Bluetooth остаются без звука. Независимо от тактильной отдачи; по умолчанию выключено."},
     {"pc_controller_speaker_volume","Громкость динамика контроллера"},

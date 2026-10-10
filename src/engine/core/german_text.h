@@ -6,6 +6,7 @@
 namespace pt::german {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Starte das Spiel neu, damit diese Änderung wirksam wird."},
     {"pc_controller_speaker","Controller-Lautsprecher"},
     {"pc_note_controller_speaker","Gibt Lisas aufgezeichnete Schreie über unterstützte Sony-Controller-Lautsprecher wieder. Unter Windows ist USB erforderlich; nicht unterstützte Geräte und Bluetooth bleiben stumm. Unabhängig von der Haptik; standardmäßig aus."},
     {"pc_controller_speaker_volume","Lautstärke des Controller-Lautsprechers"},

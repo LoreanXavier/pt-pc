@@ -6,6 +6,7 @@
 namespace pt::spanish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Debes reiniciar el juego para que este cambio surta efecto."},
     {"pc_controller_speaker","Altavoz del mando"},
     {"pc_note_controller_speaker","Reproduce los gritos grabados de Lisa por los altavoces compatibles de mandos Sony. En Windows se requiere USB; los dispositivos no compatibles y Bluetooth permanecen en silencio. Es independiente de la respuesta háptica y está desactivado de forma predeterminada."},
     {"pc_controller_speaker_volume","Volumen del altavoz del mando"},

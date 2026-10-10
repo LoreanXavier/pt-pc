@@ -1131,6 +1131,10 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
     std::vector<LitRef>& lit_refs = build_lit_refs_;
     lit_refs.clear();
     const bool block_lit = m.kind == MaterialKind::Lit && static_cast<bool>(light_block_);
+    // Primitive_Liquid2Final lights each pixel by the draw's first two point lights (m_lightParams[2] to [5]); lighting the quad at its
+    // centre striped the f060 bathtub water quad by quad under the flashlight's reflection light, which sits on the water
+    const bool liquid_block = m.kind == MaterialKind::Liquid && static_cast<bool>(light_block_);
+    const bool any_block = block_lit || liquid_block;
     items.reserve(state.particles.size());
     for (size_t pi = 0; pi < state.particles.size(); ++pi) {
         const Particle& p = state.particles[pi];
@@ -1263,7 +1267,10 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
                 quad_luminance.y = glm::dot(rgb, glm::vec3(0.2126f, 0.7152f, 0.0722f));
                 // the particle colour before lighting multiplies the transmitted scene (inColor.rgb * (1 - T) * ... * screen)
                 unlit = rgb;
-                rgb *= light.ambient * m.ambient_rate + light.point * (m.point_rate * (1.0f - m.transparency));
+                rgb *= light.ambient * m.ambient_rate + (liquid_block ? glm::vec3(0.0f) : light.point * (m.point_rate * (1.0f - m.transparency)));
+                if (liquid_block) {
+                    lit_refs.push_back({items.size(), items.size(), rgb, world_pos});
+                }
             } else {
                 rgb *= light.ambient * m.ambient_rate + light.directional * m.directional_rate + light.point * m.point_rate;
             }
@@ -1327,20 +1334,20 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
                 q.uv_next = glm::vec4(texcoord(i1), texcoord(i1));
                 items.push_back({depth, q});
             }
-            if (block_lit) {
+            if (any_block) {
                 lit_refs.back().last = items.size();
             }
             continue;
         }
         items.push_back({depth, q});
-        if (block_lit) {
+        if (any_block) {
             lit_refs.back().last = items.size();
         }
     }
     if (items.empty()) {
         return;
     }
-    if (block_lit && !lit_refs.empty()) {
+    if (any_block && !lit_refs.empty()) {
         // the draw object's world box: the box around its quads. A shape with 0x94390DB1 draws every particle as its own draw
         // object (ending_fx_trace: all 976 Prim_Poly_LitDP3_NS_VF draws of its 20 traced frames are one quad), so each particle
         // gets the block of its own quad; the others share one block for the shape's draw
@@ -1371,10 +1378,19 @@ void System::BuildShape(const Instance& inst, const glm::mat4& world, const Shap
             }
             for (size_t k = r.first; k < r.last; ++k) {
                 Quad& q = items[k].quad;
+                if (liquid_block) {
+                    // the shader adds pointLightRate (1 - T) saturate((1 - T) N.L + T) saturate(1/d^2 - w d^2) colour per light
+                    q.light_factors = glm::vec4(0.0f, 0.0f, 0.0f, m.point_rate);
+                    for (uint32_t i = 0; i < std::min(block.count, 2u); ++i) {
+                        q.light_position[i] = glm::vec4(block.position[i], block.inv_r4[i]);
+                        q.light_color[i] = glm::vec4(block.color[i], 0.0f);
+                    }
+                    continue;
+                }
                 q.color = glm::vec4(r.unlit, q.color.a);
                 q.info.y |= kQuadLit;
                 q.light_factors = glm::vec4(block.sky * m.ambient_rate + block.directional * m.directional_rate, m.point_rate);
-                for (uint32_t i = 0; i < std::min(block.count, 3u); ++i) {
+                for (uint32_t i = 0; i < std::min(block.count, m.point_lights); ++i) {
                     q.light_position[i] = glm::vec4(block.position[i], block.inv_r4[i]);
                     q.light_color[i] = glm::vec4(block.color[i], 0.0f);
                 }

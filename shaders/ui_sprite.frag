@@ -107,7 +107,11 @@ vec4 ShadeNoise(UiDraw d) {
 
 vec4 ShadeString(UiDraw d) {
     vec4 t = Sample(d.textures.x, d.extra.xy + in_uv);
-    return vec4(clamp(0.1 * in_color.rgb, 0.0, 1.0), clamp(d.extra.w * t.a * in_color.a, 0.0, 1.0));
+    // Draw2D_ShSubliminalString writes 0.1 x colour into the original's sRGB target (img f43), which stores it encoded: 0.35, a
+    // light grey hand. The UI target here holds encoded values, so the 0.1 is encoded first (it wrote 0.1 raw: near black)
+    vec3 c = clamp(0.1 * in_color.rgb, 0.0, 1.0);
+    vec3 encoded = mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, 12.92 * c, lessThanEqual(c, vec3(0.0031308)));
+    return vec4(encoded, clamp(d.extra.w * t.a * in_color.a, 0.0, 1.0));
 }
 
 void main() {

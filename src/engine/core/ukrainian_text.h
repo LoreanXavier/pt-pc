@@ -6,6 +6,7 @@
 namespace pt::ukrainian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Щоб зміна набула чинності, перезапустіть гру."},
     {"pc_controller_speaker","Динамік контролера"},
     {"pc_note_controller_speaker","Відтворює записані в грі крики Лізи через підтримувані динаміки контролерів Sony. У Windows потрібне USB-з’єднання; непідтримувані пристрої та Bluetooth залишаються без звуку. Незалежний від тактильного відгуку; типово вимкнений."},
     {"pc_controller_speaker_volume","Гучність динаміка контролера"},

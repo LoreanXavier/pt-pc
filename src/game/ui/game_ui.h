@@ -56,6 +56,10 @@ public:
 
     bool Init(Renderer& renderer, TextureManager& textures, Vfs& vfs);
     void Update(Game& game, const InputState& input, float dt);
+    // PC addition: the PS4 game's title picture (sce_sys/pic1.png) over the start's loading screen for `seconds`, under the
+    // loading icon, fading out at its end
+    void ShowBootSplash(uint32_t texture, float seconds);
+    bool BootSplashShown() const { return boot_splash_ != 0 && boot_splash_time_ > 0.0f; }
     void ShowSubtitle(std::string_view subtitle_id, float start_offset_seconds);
     void ClearSubtitles();
     void Record(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent);
@@ -131,6 +135,8 @@ private:
     OptionsMenu menu_;
     DemoUi demo_ui_;
     SaveIcon save_icon_;
+    uint32_t boot_splash_ = 0;
+    float boot_splash_time_ = 0.0f;
     uint32_t save_io_seen_ = 0;
     float save_icon_wait_ = 0.0f;
     bool save_icon_loading_ = false;
@@ -148,6 +154,7 @@ private:
     bool subtitles_on_ = false;
     bool strong_subtitles_ = false;
     std::string hidden_subtitle_;
+    std::string logged_subtitle_;
     uint32_t last_caption_ = 0;
     float last_caption_time_ = 0.0f;
     int last_subliminal_ = -1;

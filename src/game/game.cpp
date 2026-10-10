@@ -2028,7 +2028,7 @@ void Game::TearDownSession() {
     demos_.StopAll();
     nazo_.StopVoiceRecognition();
     if (audio_) {
-        audio_->StopAll();
+        audio_->ResetSession();
     }
     ClearPendingSubtitles();
     PostSound("Set_state_none", glm::vec3(0.0f), false);
@@ -2207,6 +2207,10 @@ void Game::OnBrowseFloorEntered() {
     const auto& loop = kBrowseLoops[browse_loop_];
     floor_.SetFloorLevel(loop.floor);
     floor_.SetLoopCount(loop.pass);
+    // a boot through f000 and f010 leaves every puzzle it has not reached deactivated (word 1, FloorLevel::RelocateGimmicks); the
+    // browser's session reset leaves word 0, which has no visual state, so a browsed loop kept the puzzle assets of the session
+    // before it (the XMark photo of the last puzzle). Before this floor's own setup runs, they take the boot's value
+    nazo_.DeactivateUnset();
     browse_waiting_entry_ = false;
     browse_arrived_ = true;
     if (loop.floor == "f160") {

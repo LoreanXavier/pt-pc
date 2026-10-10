@@ -133,6 +133,12 @@ bool SubtitlePlayer::PlayKey(uint32_t key, float offset_seconds, std::optional<g
         LogWarn("ui: subtitle {:#x} not found", key);
         return false;
     }
+    // the baby's echo of the f080 radio line ("with an umbilical cord", tria1000_1g1010) never shows on PS4: the radio's line holds
+    // the screen there, so the port does not show it at all
+    if (key == 0x7980630Bu || entry->id == "tria1000_1g1010") {
+        LogInfo("ui: subtitle {:#x} tria1000_1g1010 not shown (the PS4 shows the radio's line there)", key);
+        return false;
+    }
     active_.erase(std::remove_if(active_.begin(), active_.end(), [&](const Playing& p) { return p.key == key; }), active_.end());
     Playing playing;
     playing.key = key;
@@ -207,8 +213,17 @@ bool SubtitlePlayer::Current(std::string_view hidden_id, SubtitleView& out) cons
         if (!candidate || !InRange(p, *candidate)) {
             continue;
         }
+        // a subtitle competes while it has a line at its time or still to come; one past its last line (a sound's tail) does not
+        // hide a newer one. Between its lines it holds the screen, empty, so an equal priority newer one does not fill its gaps
+        // (f080: the baby's "umbilical cord" line came up in the pauses of the radio's and the subtitle switched back and forth)
+        if (std::none_of(candidate->lines.begin(), candidate->lines.end(),
+                         [&](const audio::SubtitleLine& line) { return p.time < line.end_seconds; })) {
+            continue;
+        }
         const int priority = PlayingPriority(candidate->category);
-        if (!best || priority < best_priority || (priority == best_priority && p.order > best->order)) {
+        // equal priority: the line already on screen stays until it ends (f080: the radio's tria1000_1b1010, "with a garden hose",
+        // keeps its line while the baby's tria1000_1g1010, "with an umbilical cord", talks over it, as on PS4; both are category 5)
+        if (!best || priority < best_priority || (priority == best_priority && p.order < best->order)) {
             best = &p;
             best_priority = priority;
         }

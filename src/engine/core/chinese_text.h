@@ -6,6 +6,7 @@
 namespace pt::chinese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","需要重新启动游戏才能使此更改生效。"},
     {"pc_controller_speaker","控制器扬声器"},
     {"pc_note_controller_speaker","通过受支持的 Sony 控制器扬声器播放游戏中为 Lisa 录制的哭喊声。Windows 需要 USB 连接；不支持的设备和蓝牙连接不会播放声音。此功能与触觉反馈独立，默认关闭。"},
     {"pc_controller_speaker_volume","控制器扬声器音量"},

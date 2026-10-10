@@ -6,6 +6,7 @@
 namespace pt::czech {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Aby se tato změna projevila, musíte hru restartovat."},
     {"pc_controller_speaker","Reproduktor ovladače"},
     {"pc_note_controller_speaker","Přehrává nahrané výkřiky Lisy z podporovaných reproduktorů ovladačů Sony. Ve Windows je nutné připojení USB; nepodporovaná zařízení a Bluetooth zůstávají potichu. Nezávislé na haptice; ve výchozím stavu vypnuté."},
     {"pc_controller_speaker_volume","Hlasitost reproduktoru ovladače"},

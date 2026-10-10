@@ -651,6 +651,12 @@ void SoundEngine::StopAll(float fade_seconds) {
     Push(std::move(command));
 }
 
+void SoundEngine::ResetSession() {
+    Command command;
+    command.type = CommandType::ResetSession;
+    Push(std::move(command));
+}
+
 bool SoundEngine::IsPlaying(PlayingId id) const {
     std::lock_guard lock(status_mutex_);
     return live_ids_.contains(id);
@@ -810,6 +816,9 @@ void SoundEngine::ApplyCommand(Command& command) {
             break;
         case CommandType::StopAll:
             StopAllInternal(command.value);
+            break;
+        case CommandType::ResetSession:
+            ResetSessionInternal();
             break;
         case CommandType::RegisterObject:
             Object(command.object).name = command.text;
@@ -2354,6 +2363,36 @@ void SoundEngine::StopAllInternal(float fade_ms) {
     for (auto& player : music_) {
         MusicCheckDone(*player);
     }
+}
+
+// The port's Reset Progress and loop browser start a new session in the same process; the original only ever had a boot for
+// that. Whatever an event or the game set on the engine (a state group, a global or object game parameter, a switch, an
+// object's aux sends or obstruction, a SetVolume/SetPitch/SetLPF action's offset, a Pause_All left without its Resume_All)
+// would otherwise carry over into the new session's sounds.
+void SoundEngine::ResetSessionInternal() {
+    std::vector<uint32_t> groups;
+    for (const auto& [group, state] : states_) {
+        if (state != 0) groups.push_back(group);
+    }
+    for (uint32_t group : groups) {
+        SetStateInternal(group, 0, now_);
+    }
+    states_.clear();
+    global_rtpc_.clear();
+    for (const auto& [id, value] : rtpc_defaults_) {
+        global_rtpc_[id].Jump(value);
+    }
+    for (auto& [id, object] : objects_) {
+        object.switches.clear();
+        object.rtpcs.clear();
+        object.has_aux_sends = false;
+        object.aux_sends.clear();
+        object.obstruction = 0.0f;
+        object.occlusion = 0.0f;
+    }
+    action_props_.clear();
+    global_pause_ = false;
+    LogInfo("sound: session reset ({} state groups back to none)", groups.size());
 }
 
 void SoundEngine::StopObject(GameObjectId object) {

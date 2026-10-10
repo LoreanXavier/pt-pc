@@ -57,7 +57,7 @@ void main() {
         // it through this frame's jitter moved a thin bright reflection (a lit baseboard) by up to half a texel every frame
         vec4 reflection = Reflection(uv);
         if (reflection.a > 0.0) {
-            color = min(color, vec3(1.0)) * (1.0 - reflection.a) + reflection.rgb;
+            color = SrgbDecode(SrgbEncode(min(color, vec3(1.0))) * (1.0 - reflection.a) + reflection.rgb);
         }
     }
     ivec2 size = ivec2(pass.f1.xy);

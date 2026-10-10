@@ -132,6 +132,7 @@ struct MaterialDef {
     float ambient_rate = 1.0f;
     float directional_rate = 0.0f;
     float point_rate = 0.0f;
+    uint32_t point_lights = 3;
     bool anime_blend = false;
     float anime_fps = 60.0f;
     uint32_t anime_w = 1;

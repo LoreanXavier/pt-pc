@@ -483,13 +483,13 @@ void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, V
     const VkPipeline pipeline = target_format == final_format_ && final_format_ != output_format_ ? final_composite_pipeline_ : composite_pipeline_;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_layout_, 0, 1, &set, 0, nullptr);
-    const float brightness = std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
     // grain_offset.z: the frame's width in 16:9 frames, so the grain's three tiles across the original's 16:9 frame keep their
     // texel shape in a wider or narrower window (composite.frag)
     /* The grain tiles three times across the original 16:9 frame; scaling by the window's width in 16:9 frames keeps the grain texel size on ultrawide. */
     const float across = extent.height ? (static_cast<float>(extent.width) / static_cast<float>(extent.height)) / (16.0f / 9.0f) : 1.0f;
     const float push[16] = {exposure, brightness, mode, static_cast<float>(photo_filter), fade[0], fade[1], fade[2], fade[3],
-                            grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across,
+                            plain_output ? 0.0f : grain[0], grain[1], grain[2], grain[3], grain_offset[0], grain_offset[1], across,
                             static_cast<float>(output_mode_)};
     vkCmdPushConstants(cmd, composite_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -859,14 +859,14 @@ void Renderer::CopyToXr(VkCommandBuffer cmd, VkDescriptorSet set, const XrTarget
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, xr_layout_, 0, 1, &set, 0, nullptr);
-    const float brightness = std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
+    const float brightness = plain_output ? 1.0f : std::clamp(brightness_override_ > 0.0f ? brightness_override_ : output_brightness, 0.1f, 4.0f);
     // the grain tiles keep the window's texel shape: the frame's width in 16:9 frames, as Composite
     const float across = target.rect.w > 0.0f && target.extent.height
                              ? (static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height)) / (16.0f / 9.0f)
                              : 1.0f;
     const float push[16] = {target.rect.x, target.rect.y, target.rect.z, target.rect.w,
                             premultiplied ? 1.0f : 0.0f, premultiplied ? 1.0f : brightness, 0.0f, 0.0f,
-                            premultiplied ? 0.0f : grain[0], grain[1], grain[2], grain[3],
+                            premultiplied || plain_output ? 0.0f : grain[0], grain[1], grain[2], grain[3],
                             grain_offset[0], grain_offset[1], across, 0.0f};
     vkCmdPushConstants(cmd, xr_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);

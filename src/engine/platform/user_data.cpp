@@ -348,7 +348,8 @@ void CopyTree(const std::filesystem::path& source, const std::filesystem::path& 
 
 UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination,
                                        const std::filesystem::path& legacy,
-                                       bool migrate_legacy) {
+                                       bool migrate_legacy,
+                                       const std::function<bool(const std::filesystem::path&)>& ask) {
     UserDataReport report;
     std::error_code ec;
     std::filesystem::create_directories(destination, ec);
@@ -405,12 +406,34 @@ UserDataReport PrepareUserDataDirectory(const std::filesystem::path& destination
             AddError(report, "Cannot compare legacy and destination data paths", legacy, samePathError);
             return report;
         }
+        bool has_files = false;
+        std::error_code scan;
+        for (auto it = std::filesystem::recursive_directory_iterator(legacy, scan); !scan && it != std::filesystem::recursive_directory_iterator();
+             it.increment(scan)) {
+            if (it->is_regular_file(scan)) {
+                has_files = true;
+                break;
+            }
+        }
         if (samePath) {
             report.warnings.push_back("Legacy and destination data paths are the same; skipped self-migration");
-        } else {
+        } else if (has_files && ask && !ask(legacy)) {
+            report.declined_legacy = true;
+        } else if (has_files) {
             CopyTree(legacy, destination, report);
             if (!report.errors.empty()) return report; // Retry partial work next launch.
             report.migrated_legacy = true;
+            if (ask) {
+                std::error_code removeError;
+                std::filesystem::remove_all(legacy, removeError);
+                if (removeError) {
+                    report.warnings.push_back("Moved the old saves but could not delete '" + PathText(legacy) + "': " + removeError.message());
+                } else {
+                    report.removed_legacy = true;
+                    // the empty pt-port folder above it too
+                    std::filesystem::remove(legacy.parent_path(), removeError);
+                }
+            }
         }
     }
 

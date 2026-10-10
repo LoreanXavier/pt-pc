@@ -200,6 +200,8 @@ public:
     void Destroy(GpuMesh& mesh);
 
     void Render(const Camera& camera, const std::vector<DrawItem>& items);
+    // the next frame's temporal upscaler starts without history
+    void ResetUpscaleHistory() { up_.reset = true; }
     void Render(const Camera& camera, const std::vector<DrawItem>& items, const SceneLighting& lighting, float dt);
     void DrawDebugUi();
     void ResetExposure() { adaptation_valid_ = false; }
@@ -217,7 +219,9 @@ public:
     static constexpr VkFormat kHdrTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthTargetFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kPostTargetFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-    static constexpr VkFormat kNearFarDepthFormat = VK_FORMAT_R16G16_SFLOAT;
+    // 32-bit as the original's ScaleDownDepth (D32): 16-bit floats quantized the reverse-Z range, and the near/far blend drew depth contours over
+    // effects in front of a sloping surface (the bathtub water's "barcode" lines, longer under the zoom's nearer clip)
+    static constexpr VkFormat kNearFarDepthFormat = VK_FORMAT_R32G32_SFLOAT;
     // Shadow atlas tiles: the original renders every spot shadow into its 2048x2048 target and every point shadow into the
     // 4096x2048 paraboloid target (shadow_f010 1706), one light at a time; the atlas holds 4x4 tiles of 2048, room for the
     // view's 8 shadowed lights (12.5) even when all are points

@@ -12,12 +12,21 @@
 namespace pt::game {
 namespace {
 
-const char* FootstepMaterial(uint32_t geom_material) {
+struct FootstepSwitch {
+    const char* name;
+    uint32_t id;
+};
+
+// the Material switch values of 0x1279AF0's surface types 1 to 6 (FNV-1 of the names; 3 and 5 have no known name). The stair
+// treads (0x4FB17187) play type 5: the original's steps down the f010 stairs match its containers (normalized correlation 0.94,
+// wood 0.75), the hallway floor around them matches wood and the start room concrete
+FootstepSwitch FootstepMaterial(uint32_t geom_material) {
     switch (geom_material) {
-    case 0x59D11AF1: return "tile";
-    case 0x5F263606: return "conc";
-    case 0x2D2AEFA4: return "BLOOD";
-    default: return "wood";
+    case 0x59D11AF1: return {"tile", 0x9D366849};
+    case 0x5F263606: return {"conc", 0xDDC5A09E};
+    case 0x2D2AEFA4: return {"BLOOD", 0xEA8341EB};
+    case 0x4FB17187: return {"2780720025", 0xA5BE6B99};
+    default: return {"wood", 0x7AAB588A};
     }
 }
 
@@ -240,6 +249,14 @@ void GameSound::StopAll() {
     current_area_.clear();
 }
 
+void GameSound::ResetSession() {
+    StopAll();
+    if (ready_) {
+        system_.ResetSession();
+    }
+    one_shot_objects_.Reset();
+}
+
 uint32_t GameSound::PlayStream(std::vector<uint8_t> wem, const glm::vec3* position) {
     if (!ready_) {
         return 0;
@@ -281,13 +298,13 @@ void GameSound::Footstep(bool left, const glm::vec3& position) {
     system_.SetObjectTransform(kPlayerObject, position, game_.GetPlayer().BodyForward());
     SetAreaSends(kPlayerObject, position);
     const uint32_t surface = game_.SurfaceMaterial(position);
-    const char* material = FootstepMaterial(surface);
-    if (material != footstep_material_ || surface != footstep_surface_) {
-        footstep_material_ = material;
+    const FootstepSwitch material = FootstepMaterial(surface);
+    if (material.name != footstep_material_ || surface != footstep_surface_) {
+        footstep_material_ = material.name;
         footstep_surface_ = surface;
-        LogDebug("sound: footstep material {} (surface {:#x} at {:.2f} {:.2f} {:.2f})", material, surface, position.x, position.y, position.z);
+        LogDebug("sound: footstep material {} (surface {:#x} at {:.2f} {:.2f} {:.2f})", material.name, surface, position.x, position.y, position.z);
     }
-    system_.SetSwitch("Material", material, kPlayerObject);
+    system_.SetSwitchId(0xE6640542, material.id, kPlayerObject);  // group Material
     system_.PostEvent(left ? "Play_plr_footstep_wk_l" : "Play_plr_footstep_wk_r", kPlayerObject);
 }
 
@@ -304,7 +321,7 @@ void GameSound::AnimEvent(std::string_view sound, uint64_t event, const glm::vec
     }
     system_.SetObjectTransform(o.object, position, game_.GetPlayer().BodyForward());
     SetAreaSends(o.object, position);
-    system_.SetSwitch("Material", FootstepMaterial(game_.SurfaceMaterial(position)), o.object);
+    system_.SetSwitchId(0xE6640542, FootstepMaterial(game_.SurfaceMaterial(position)).id, o.object);
     o.playing.push_back(system_.PostEvent(sound, o.object));
 }
 

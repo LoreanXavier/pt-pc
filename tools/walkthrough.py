@@ -365,6 +365,13 @@ SCENARIOS = {
     },
     # A loop browser pick and a progress reset start a new session, which must hold what a fresh boot holds: the gimmick records
     # with their meshes, Lisa without her kill, no speech of the old session (sstate compare, expect gimmick/ocho/body/speech)
+    # the radio of the first loop after a progress reset made on the last loop (reported: heard from far away), against a fresh boot
+    "radio_fresh": {"start_floor": None, "frames": 30000, "save": True, "route": ["start", "walk", "f005"], "expect": []},
+    "radio_reset": {"start_floor": "f160", "frames": 40000, "save": True, "route": ["start", "session_reset", "start", "walk", "f005"], "expect": []},
+    # audit: the session state on arriving in every loop by play, and by the loop browser (compare the logged states per floor)
+    "full_states": {"start_floor": None, "frames": 400000, "save": True,
+                    "route": [p for part in FULL for p in ([part, "state_dump"] if part == "exit" else [part])], "expect": []},
+    "browse_states": {"start_floor": None, "frames": 200000, "save": True, "route": ["start", "browse_states"], "expect": []},
     "reset": {
         "start_floor": None,
         "frames": 40000,

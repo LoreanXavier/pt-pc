@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <fstream>
+#include <iterator>
 
 #include "engine/assets/ftex.h"
 #include "engine/assets/enhanced_textures.h"
@@ -532,6 +534,26 @@ uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& 
         LogInfo("mods: texture {} from a {} x {} PNG", stem, width, height);
     }
     return index;
+}
+
+uint32_t TextureManager::LoadImageFile(const std::filesystem::path& path, const std::string& key) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return kWhite;
+    }
+    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<std::vector<uint8_t>> levels;
+    uint32_t width = 0, height = 0;
+    std::string error;
+    if (!ModImageLevels(data, true, levels, width, height, error)) {
+        LogWarn("texture: {} unreadable: {}", key, error);
+        return kWhite;
+    }
+    std::vector<TextureMip> mips;
+    for (uint32_t level = 0; level < levels.size(); ++level) {
+        mips.push_back({std::max(1u, width >> level), std::max(1u, height >> level), levels[level]});
+    }
+    return Create(key, VK_FORMAT_R8G8B8A8_SRGB, mips);
 }
 
 void TextureManager::ConfigureEnhancedTextures(const QarArchive& qar, const std::filesystem::path& cache, uint64_t model) {

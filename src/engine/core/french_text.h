@@ -6,6 +6,7 @@
 namespace pt::french {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Vous devez redémarrer le jeu pour que ce changement prenne effet."},
     {"pc_controller_speaker","Haut-parleur de la manette"},
     {"pc_note_controller_speaker","Diffuse les cris enregistrés de Lisa sur les haut-parleurs compatibles des manettes Sony. Sous Windows, une connexion USB est requise ; les appareils non pris en charge et Bluetooth restent silencieux. Indépendant du retour haptique ; désactivé par défaut."},
     {"pc_controller_speaker_volume","Volume du haut-parleur de la manette"},

@@ -6,6 +6,7 @@
 namespace pt::italian {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Devi riavviare il gioco perché questa modifica abbia effetto."},
     {"pc_controller_speaker","Altoparlante del controller"},
     {"pc_note_controller_speaker","Riproduce le urla registrate di Lisa dagli altoparlanti supportati dei controller Sony. Su Windows serve una connessione USB; i dispositivi non supportati e Bluetooth restano silenziosi. Indipendente dal feedback aptico; disattivato per impostazione predefinita."},
     {"pc_controller_speaker_volume","Volume altoparlante controller"},

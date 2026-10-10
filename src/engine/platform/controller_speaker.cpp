@@ -1,6 +1,7 @@
 #include "engine/platform/controller_speaker.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_hidapi.h>
 
 #include <algorithm>
 #include <array>
@@ -248,7 +249,61 @@ ControllerSpeakerOutput::~ControllerSpeakerOutput() {
     Close();
 }
 
+void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t counter, std::span<uint8_t> report) {
+    if (report.size() < kDualSenseBtHapticsReportSize) return;
+    std::fill(report.begin(), report.begin() + kDualSenseBtHapticsReportSize, uint8_t{0});
+    report[0] = 0x32;
+    report[1] = 0x00;  // tag 0, sequence 0
+    // packet 0x11 (sized): 7 bytes, the last one a counter
+    report[2] = 0x80 | 0x11;
+    report[3] = 7;
+    const uint8_t control[7] = {0xFE, 0x00, 0x00, 0x00, 0x00, 0xFF, counter};
+    std::copy(std::begin(control), std::end(control), report.begin() + 4);
+    // packet 0x12 (sized): 64 bytes of 8-bit stereo actuator PCM
+    report[11] = 0x80 | 0x12;
+    report[12] = 64;
+    for (size_t i = 0; i < 64 && i < stereo_s8.size(); ++i) {
+        report[13 + i] = static_cast<uint8_t>(stereo_s8[i]);
+    }
+    // the Bluetooth output CRC-32 (reflected 0xEDB88320) over the seed byte 0xA2 and the report up to the CRC
+    uint32_t crc = 0xFFFFFFFFu;
+    auto feed = [&](uint8_t byte) {
+        crc ^= byte;
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    };
+    feed(0xA2);
+    for (size_t i = 0; i < kDualSenseBtHapticsReportSize - 4; ++i) feed(report[i]);
+    crc = ~crc;
+    for (size_t i = 0; i < 4; ++i) report[kDualSenseBtHapticsReportSize - 4 + i] = static_cast<uint8_t>(crc >> (8 * i));
+}
+
+bool ControllerSpeakerOutput::WriteBluetoothHaptics(const float* actuator_stereo, uint32_t frames) {
+    if (!hid_ || !actuator_stereo) return false;
+    constexpr uint32_t kDecimation = static_cast<uint32_t>(kPcmRate / kDualSenseBtHapticsRate);
+    for (uint32_t i = 0; i < frames; ++i) {
+        bt_sum_[0] += actuator_stereo[i * 2];
+        bt_sum_[1] += actuator_stereo[i * 2 + 1];
+        if (++bt_summed_ < kDecimation) continue;
+        for (int c = 0; c < 2; ++c) {
+            const float v = std::clamp(bt_sum_[c] / static_cast<float>(kDecimation), -1.0f, 1.0f);
+            bt_frames_[bt_frame_count_ * 2 + c] = static_cast<int8_t>(std::lround(v * 127.0f));
+        }
+        bt_sum_ = {};
+        bt_summed_ = 0;
+        if (++bt_frame_count_ < kDualSenseBtHapticsFrames) continue;
+        std::array<uint8_t, kDualSenseBtHapticsReportSize> report{};
+        BuildDualSenseBtHapticsReport(bt_frames_, bt_counter_++, report);
+        bt_frame_count_ = 0;
+        if (SDL_hid_write(hid_, report.data(), report.size()) < 0) {
+            LogInfo("input: DualSense Bluetooth haptics report failed: {}", SDL_GetError());
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ControllerSpeakerOutput::IsOpen() const {
+    if (hid_) return true;
     if (!stream_) return false;
     const SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(stream_);
     return device != 0 && SDL_GetAudioDeviceName(device) != nullptr;
@@ -260,12 +315,28 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
         SetReason(reason, "no gamepad selected");
         return false;
     }
-    if (SDL_GetGamepadConnectionState(gamepad) != SDL_JOYSTICK_CONNECTION_WIRED) {
-        SetReason(reason, "controller speaker routing requires a wired gamepad");
-        return false;
-    }
     const uint16_t vendor = SDL_GetGamepadVendor(gamepad);
     const uint16_t product = SDL_GetGamepadProduct(gamepad);
+    if (SDL_GetGamepadConnectionState(gamepad) == SDL_JOYSTICK_CONNECTION_WIRELESS && vendor == kSonyVendor &&
+        (product == kDualSense || product == kDualSenseEdge)) {
+        // Bluetooth: no audio endpoint; the haptics go out as HID output reports on the pad's own HID path
+        const char* hid_path = SDL_GetGamepadPath(gamepad);
+        const bool hid_ready = hid_path && SDL_hid_init() == 0;
+        hid_ = hid_ready ? SDL_hid_open_path(hid_path) : nullptr;
+        if (!hid_) {
+            if (hid_ready) SDL_hid_exit();
+            SetReason(reason, std::format("could not open the DualSense Bluetooth HID path for haptics: {}", SDL_GetError()));
+            return false;
+        }
+        route_ = ControllerPcmRoute::DualSenseBluetoothHaptics;
+        device_name_ = "DualSense Bluetooth haptics";
+        LogInfo("input: DualSense Bluetooth haptics opened (HID output report 0x32; the speaker needs a wired connection)");
+        return true;
+    }
+    if (SDL_GetGamepadConnectionState(gamepad) != SDL_JOYSTICK_CONNECTION_WIRED) {
+        SetReason(reason, "controller speaker routing requires a wired gamepad (a DualSense over Bluetooth gets haptics only)");
+        return false;
+    }
     const int expected_channels = vendor == kSonyVendor && (product == kDualShock4 || product == kDualShock4Slim)
                                      ? 1
                                      : vendor == kSonyVendor && (product == kDualSense || product == kDualSenseEdge) ? 4 : 0;
@@ -338,6 +409,25 @@ bool ControllerSpeakerOutput::OpenForGamepad(SDL_Gamepad* gamepad, std::string* 
     }
     const char* name = SDL_GetAudioDeviceName(*id);
     device_name_ = name ? name : "controller audio endpoint";
+    if (expected_channels == 4) {
+        // The DualSense sends channels 1-2 to its headphone jack until the audio path is switched to the built-in speaker: USB
+        // output report 0x02 with valid_flag0 bits 5 (speaker volume) and 7 (audio control), the speaker volume byte and the
+        // output path select (audio control bits 4-5, 3 = the speaker). Only the flagged fields change, so SDL's own rumble
+        // and light reports on the same report keep working.
+        if (SDL_hid_init() == 0) {
+            if (SDL_hid_device* hid = SDL_hid_open_path(path)) {
+                uint8_t report[48] = {};
+                report[0] = 0x02;
+                report[1] = 0x20 | 0x80;
+                report[6] = 0x64;
+                report[8] = 3 << 4;
+                const bool sent = SDL_hid_write(hid, report, sizeof(report)) >= 0;
+                LogInfo("input: DualSense speaker path {}", sent ? "set to the built-in speaker" : std::string("not set: ") + SDL_GetError());
+                SDL_hid_close(hid);
+            }
+            SDL_hid_exit();
+        }
+    }
     route_ = expected_channels == 4 ? ControllerPcmRoute::DualSenseQuad : ControllerPcmRoute::DualShock4Mono;
     SDL_ResumeAudioStreamDevice(stream_);
     SetReason(reason, {});
@@ -351,6 +441,14 @@ void ControllerSpeakerOutput::Close() {
         SDL_DestroyAudioStream(stream_);
         stream_ = nullptr;
     }
+    if (hid_) {
+        SDL_hid_close(hid_);
+        SDL_hid_exit();
+        hid_ = nullptr;
+    }
+    bt_sum_ = {};
+    bt_summed_ = 0;
+    bt_frame_count_ = 0;
     route_ = ControllerPcmRoute::None;
     device_name_.clear();
     haptic_filter_.Reset();
@@ -404,6 +502,22 @@ bool ControllerSpeakerOutput::WriteCapturedBlock(const audio::ControllerPcmBlock
                             speaker_gain, haptics_gain)) {
         return false;
     }
+    // the speaker gets Lisa at game level (often below 0.05 of full scale, after her distance attenuation), which the pad's small
+    // speaker does not make audible: 8 times louder through a soft limit at 0.9, so a near cry is clear and a far one stays faint
+    if (speaker_enabled) {
+        constexpr float kSpeakerDrive = 8.0f;
+        constexpr float kSpeakerCeiling = 0.9f;
+        // the speaker is one driver (fed from one side of the pair): Lisa goes to both channels as mono, wherever she is
+        for (size_t i = 0; i + 1 < stereo_samples; i += 2) {
+            const float mono = 0.5f * (speaker_buffer[i] + speaker_buffer[i + 1]);
+            speaker_buffer[i] = speaker_buffer[i + 1] = kSpeakerCeiling * std::tanh(mono * kSpeakerDrive / kSpeakerCeiling);
+        }
+    }
+    // the actuators take the haptic mix (the speaker's events and the haptic-only ones), at the same level
+    const float haptics_level = dualsense_haptics_enabled && std::isfinite(haptics_gain) ? std::clamp(haptics_gain, 0.0f, 1.0f) : 0.0f;
+    for (size_t i = 0; i < stereo_samples; ++i) {
+        haptics_source[i] = block.haptic[i] * haptics_level;
+    }
     const std::span<const float> speaker(speaker_scratch_.data(), stereo_samples);
     if (route_ == ControllerPcmRoute::DualShock4Mono) {
         const std::span<float> mono(mono_scratch_.data(), block.frames);
@@ -422,6 +536,15 @@ bool ControllerSpeakerOutput::WriteCapturedBlock(const audio::ControllerPcmBlock
             haptic_filter_.Reset();
         }
         return WriteDualSense(speaker_scratch_.data(), actuator, block.frames);
+    }
+    if (route_ == ControllerPcmRoute::DualSenseBluetoothHaptics) {
+        if (!dualsense_haptics_enabled) {
+            haptic_filter_.Reset();
+            return true;
+        }
+        const std::span<float> haptics(actuator_scratch_.data(), stereo_samples);
+        const std::span<const float> source(haptics_source_scratch_.data(), stereo_samples);
+        return haptic_filter_.Process(source, haptics, block.frames) && WriteBluetoothHaptics(actuator_scratch_.data(), block.frames);
     }
     return false;
 }

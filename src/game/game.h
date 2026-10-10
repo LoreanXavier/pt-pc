@@ -54,6 +54,8 @@ public:
     virtual void Footstep(bool, const glm::vec3&) {}
     virtual void AnimEvent(std::string_view, uint64_t, const glm::vec3&) {}
     virtual void StopAll() {}
+    // a new session (Reset Progress, the loop browser): everything the last one set on the sound engine goes back to the boot's
+    virtual void ResetSession() {}
     virtual uint32_t PlayStream(std::vector<uint8_t>, const glm::vec3*) { return 0; }
     // an event whose container plays these media in order, once (Game+'s chosen takes)
     virtual uint32_t PostEventMedia(std::string_view, std::vector<uint32_t>, const glm::vec3*) { return 0; }
@@ -475,6 +477,8 @@ public:
     };
     const std::optional<SaveDialog>& PendingSaveDialog() const { return save_dialog_; }
     void CloseSaveDialog();
+    // a PC notice in the same centred dialog (a PC text key), closed by the accept button: settings that need a restart
+    void ShowNoticeDialog(std::string key) { save_dialog_ = SaveDialog{std::move(key), SaveDialog::Then::Nothing}; }
     // every save write and load read the save job starts (it posts SaveUiDisp or LoadUiDisp), for the save icon; the kind of the last
     uint32_t SaveIoCount() const { return save_io_count_; }
     bool SaveIoLoading() const { return save_io_loading_; }

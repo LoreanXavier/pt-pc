@@ -100,5 +100,6 @@ void main() {
     result = max(result, vec4(0.0));
     out_history = result;
     // the original's mix (reflect_blend.frag) with the accumulated reflection: mix(min(base, 1), min(hit, 1), amount)
-    out_color = result.a > 0.0 && pass.f1.w < 0.5 ? vec4(min(base.rgb, vec3(1.0)) * (1.0 - result.a) + result.rgb, base.a) : base;
+    // on the sRGB-encoded values, as the original's 8-bit blend (reflect_blend_main.glsl)
+    out_color = result.a > 0.0 && pass.f1.w < 0.5 ? vec4(SrgbDecode(SrgbEncode(min(base.rgb, vec3(1.0))) * (1.0 - result.a) + result.rgb), base.a) : base;
 }

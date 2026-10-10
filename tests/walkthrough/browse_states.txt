@@ -1,0 +1,165 @@
+# loop browser pick 1
+sloop 1
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 2
+sloop 2
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 3
+sloop 3
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 4
+sloop 4
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 5
+sloop 5
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 6
+sloop 6
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 7
+sloop 7
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 8
+sloop 8
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 9
+sloop 9
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 10
+sloop 10
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 11
+sloop 11
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 12
+sloop 12
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 13
+sloop 13
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 14
+sloop 14
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save
+# loop browser pick 15
+sloop 15
+swait 10
+sstep 15
+swait 30
+goto 0 0 12.5
+swait 10
+sfree
+sbrowsed
+swait 90
+sstate save

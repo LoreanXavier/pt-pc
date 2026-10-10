@@ -13,6 +13,7 @@
 #include "engine/audio/controller_pcm_capture.h"
 
 struct SDL_AudioStream;
+struct SDL_hid_device;
 struct SDL_Gamepad;
 
 namespace pt {
@@ -41,7 +42,15 @@ bool ScaleControllerPcm(std::span<const float> authored_stereo, std::span<float>
                         std::span<float> haptics_source_stereo, size_t frames, bool speaker_enabled, bool haptics_enabled,
                         float speaker_gain, float haptics_gain);
 
-enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad };
+// The DualSense's haptics over Bluetooth (no audio endpoint there): HID output report 0x32, 142 bytes with its id, carrying a
+// 0x11 control packet (7 bytes, the last a running counter) and a 0x12 packet of 32 interleaved stereo frames of signed 8-bit
+// actuator PCM at 3 kHz, sealed with the Bluetooth output CRC-32 (seed byte 0xA2). Layout after SAxense (egormanga/SAxense).
+constexpr size_t kDualSenseBtHapticsReportSize = 142;
+constexpr size_t kDualSenseBtHapticsFrames = 32;
+constexpr int kDualSenseBtHapticsRate = 3000;
+void BuildDualSenseBtHapticsReport(std::span<const int8_t> stereo_s8, uint8_t counter, std::span<uint8_t> report);
+
+enum class ControllerPcmRoute : uint8_t { None, DualShock4Mono, DualSenseQuad, DualSenseBluetoothHaptics };
 
 class ControllerSpeakerOutput {
 public:
@@ -66,7 +75,16 @@ public:
                             float speaker_gain = 1.0f, float haptics_gain = 1.0f);
 
 private:
+    bool WriteBluetoothHaptics(const float* actuator_stereo, uint32_t frames);
+
     SDL_AudioStream* stream_ = nullptr;
+    SDL_hid_device* hid_ = nullptr;
+    // 48 kHz actuator frames averaged 16 to one 3 kHz frame, then 32 of those to a report
+    std::array<float, 2> bt_sum_{};
+    uint32_t bt_summed_ = 0;
+    std::array<int8_t, kDualSenseBtHapticsFrames * 2> bt_frames_{};
+    uint32_t bt_frame_count_ = 0;
+    uint8_t bt_counter_ = 0;
     ControllerPcmRoute route_ = ControllerPcmRoute::None;
     std::string device_name_;
     bool owns_audio_subsystem_ = false;

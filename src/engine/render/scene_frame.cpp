@@ -2139,8 +2139,10 @@ void SceneRenderer::RecordReflections(VkCommandBuffer cmd, const ViewSetup& view
     constexpr float kLines = 1080.0f;
     const glm::mat3 rotation(frame_->views[view.index].view);
     const glm::vec3 plane = glm::normalize(rotation * glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::vec3 forward = camera_.Forward();
-    forward.y = 0.0f;
+    // ReflectMapBlend's localParam[2] is the camera's own forward in view space ((0, 0, 1) in the original's convention,
+    // sink_refl_cb_f060 4185 to 4195); the horizontal forward the port took (the original's localParam[3], which the blend
+    // does not read) made the lean term 2 on a floor seen from above where the original's is 1: twice the reflection
+    const glm::vec3 forward = camera_.Forward();
     const float length = glm::length(forward);
     const glm::vec3 horizontal = length > 1.0e-6f ? rotation * (forward / length) : glm::vec3(0.0f);
     const float aspect = static_cast<float>(extent_.width) / static_cast<float>(std::max(extent_.height, 1u));

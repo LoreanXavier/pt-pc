@@ -45,6 +45,9 @@ public:
 
     vfx::System& System() { return system_; }
     size_t Instances() const { return system_.InstanceCount(); }
+    // the f120 view distortion sprites (fx_sh_viwdis01_s1, 02: refraction a few decimetres in front of the camera) move the image
+    // without motion vectors
+    bool ViewDistortion() const { return system_.AnyLive("viwdis"); }
     size_t Particles() const { return system_.ParticleCount(); }
 
 private:

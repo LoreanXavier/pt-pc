@@ -49,6 +49,12 @@ std::vector<uint32_t> DecodeUtf8(std::string_view text) {
         for (int k = 0; k < extra && i < text.size(); ++k, ++i) {
             code = (code << 6) | (static_cast<uint8_t>(text[i]) & 0x3F);
         }
+        // typographic quotes: the game's fonts have no glyph for them (a box in "Lisa’s"); the plain ones look the same
+        if (code == 0x2018 || code == 0x2019) {
+            code = 0x27;
+        } else if (code == 0x201C || code == 0x201D) {
+            code = '"';
+        }
         out.push_back(code);
     }
     return out;

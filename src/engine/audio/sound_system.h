@@ -64,6 +64,7 @@ public:
     // move every voice of a playing id to that time of its media (AK::SoundEngine::SeekOnEvent)
     void SeekPlayingId(PlayingId id, float seconds);
     void StopAll(float fade_seconds = 0.0f);
+    void ResetSession();
     bool IsPlaying(PlayingId id) const;
     bool IsEventPlaying(std::string_view event_name) const;
     bool IsEventIdPlaying(uint32_t event_id) const;
@@ -89,6 +90,8 @@ public:
 
     void Update(float dt);
     void RenderOffline(float* interleaved_stereo, uint32_t frames);
+    // the offline mix with the device mix's speaker layout (2, 6 or 8 channels; PT_CAPTURE_CHANNELS checks the surround panning)
+    void RenderOfflineChannels(float* interleaved, uint32_t frames, uint32_t channels);
 
     bool LoadSubtitles(std::string_view language);
     const SubtitleTable& Subtitles() const { return subtitles_; }
@@ -103,6 +106,8 @@ public:
     MotionLevels Motion() const;
     void SetControllerCaptureEvent(uint32_t event_id);
     void SetControllerCaptureEvents(std::span<const uint32_t> event_ids);
+    // events felt on the DualSense actuators only (not heard on its speaker)
+    void SetControllerHapticEvents(std::span<const uint32_t> event_ids);
     bool TryReadControllerPcm(ControllerPcmBlock& block);
     uint32_t ControllerPcmDroppedBlocks() const;
     void SetFrozen(bool frozen);

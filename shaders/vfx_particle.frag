@@ -89,6 +89,19 @@ vec3 PointLight(vec4 position, vec4 color) {
     return color.rgb * attenuation;
 }
 
+// Primitive_Liquid2Final's diffuse term for one point light: pointLightRate (1 - T) saturate((1 - T) N.L + T) saturate(1/d^2 - w d^2)
+vec3 LiquidPointLight(vec4 position, vec4 color, vec3 n, float t) {
+    if (dot(color.rgb, color.rgb) < 1.0e-12) {
+        return vec3(0.0);
+    }
+    vec3 delta = position.xyz - in_world;
+    float distance_to_light = max(length(delta), 0.010002136);
+    float distance_squared = distance_to_light * distance_to_light;
+    float attenuation = clamp(1.0 / distance_squared - distance_squared * position.w, 0.0, 1.0);
+    float diffuse = (1.0 - t) * clamp((1.0 - t) * dot(n, delta / distance_to_light) + t, 0.0, 1.0);
+    return color.rgb * attenuation * diffuse;
+}
+
 float LinearDepth(float d) {
     return push.frame.y / max(d, 1e-7);
 }
@@ -101,8 +114,14 @@ vec3 ReflectionSample(uint slot, vec3 direction) {
 
 // Prim_Poly_LitDP3_NS binds its source texture with clamp addressing. The shared
 // texture bank uses repeat addressing, so reproduce clamp and trilinear filtering
-// here without changing sampling for the other particle materials.
+// here without changing sampling for the other particle materials. A texture scrolled
+// past its edge repeats (tub_lit_trace_f060: the f060 bathtub's green dust plane, UV
+// rect 0..1 x 0..0.5 moving along u, draws with Prim_Poly_LitDP1_NS and a wrap sampler);
+// clamped, its rows stretched the edge texels across the water as stripes.
 vec4 LitSample(uint slot, vec2 uv, float computed_lod) {
+    if (any(lessThan(uv, vec2(-1.0e-4))) || any(greaterThan(uv, vec2(1.0001)))) {
+        return textureLod(textures[nonuniformEXT(slot)], uv, computed_lod);
+    }
     int level_count = max(textureQueryLevels(textures[nonuniformEXT(slot)]), 1);
     float lod = clamp(computed_lod, 0.0, float(level_count - 1));
     int low_level = int(floor(lod));
@@ -214,6 +233,10 @@ void main() {
         float ndv = dot(n, v);
         float through = (1.0 - t) * clamp((1.0 - t) * ndv + t, 0.0, 1.0);
         rgb = in_color.rgb * push.frame.x;
+        if (in_light_factors.w > 0.0) {
+            vec3 lights = LiquidPointLight(in_light_position0, in_light_color0, n, t) + LiquidPointLight(in_light_position1, in_light_color1, n, t);
+            rgb += vec3(unpackHalf2x16(in_info.w), in_extra.w) * lights * (in_light_factors.w * push.frame.x);
+        }
         if (push.eye.w > 0.0) {
             // Primitive_Liquid2Final: the scene copy at the pixel (FragCoord - 0.5 + 0.49609375) moved by the world-space normal's x and y
             // times the refraction in 1080p pixels (m_materials[0].w), folded into the copy; colour = inColor * (1 - T) *

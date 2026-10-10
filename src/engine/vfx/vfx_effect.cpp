@@ -423,6 +423,9 @@ private:
             m.ambient_rate = n.Float("ambientRate", 1.0f);
             m.directional_rate = n.Float("directionalLightRate");
             m.point_rate = n.Float("pointLightRate");
+            // shaderType 0, 1, 2 pick Prim_Poly_LitDP1, DP2, DP3: the draw's first one, two or three point lights (tub_lit_trace_f060:
+            // the f060 bathtub's green dust, fx_sh_wtrbld01b_s2 shaderType 0, draws with LitDP1_NS and m_lightParams[2..3] alone)
+            m.point_lights = std::clamp(n.UInt("shaderType") + 1u, 1u, 3u);
         } else if (cls == "TppLiquidMaterial2Node" || cls == "TppLiquidMaterial2HNMNode") {
             m.kind = MaterialKind::Liquid;
             m.blend = BlendMode::Alpha;

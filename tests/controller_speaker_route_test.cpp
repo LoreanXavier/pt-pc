@@ -16,6 +16,17 @@ int main() {
     const std::array devices{pt::ControllerAudioEndpointName{10, "Speakers", 2},
                              pt::ControllerAudioEndpointName{11, "DualSense USB", 2},
                              pt::ControllerAudioEndpointName{12, "DualSense USB", 4}};
+    {
+        // DualSense Bluetooth haptics report: ids, packet headers, samples and the CRC zlib gives for 0xA2 + the report
+        std::array<int8_t, 64> samples{};
+        for (int i = 0; i < 64; ++i) samples[i] = static_cast<int8_t>(static_cast<uint8_t>(i * 3 - 90));
+        std::array<uint8_t, pt::kDualSenseBtHapticsReportSize> report{};
+        pt::BuildDualSenseBtHapticsReport(samples, 5, report);
+        const uint32_t crc = report[138] | (report[139] << 8) | (report[140] << 16) | (static_cast<uint32_t>(report[141]) << 24);
+        check(report[0] == 0x32 && report[2] == 0x91 && report[3] == 7 && report[4] == 0xFE && report[9] == 0xFF && report[10] == 5 &&
+                  report[11] == 0x92 && report[12] == 64 && report[13] == static_cast<uint8_t>(-90) && crc == 0x6708FAF3u,
+              "DualSense Bluetooth haptics report layout and CRC");
+    }
     check(pt::MatchUniqueControllerAudioEndpoint(endpoints, devices, 4) == 12,
           "exact endpoint name and channel count select the SDL device associated by native identity");
 

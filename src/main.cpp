@@ -1895,6 +1895,8 @@ public:
             if (sizes[i] == glm::ivec2(s.display.width, s.display.height)) resolution.value = static_cast<int>(i);
         }
         resolution.wrap = false;
+        // borderless covers the desktop at its own size: a smaller size there shrank the picture and left the mouse on the desktop's
+        resolution.enabled = mode != 1;
         display.rows.push_back(std::move(resolution));
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
@@ -2139,6 +2141,8 @@ public:
         case kSpeedrun:
             s.extras.speedrun = std::clamp(value, 0, 2);
             game_.Speedrun().SetMode(s.extras.speedrun);
+            // turned on in play: the run starts now (not from the start, so no records) instead of at the next StartGame
+            if (game_.Controller().InGame()) game_.SpeedrunStartGame();
             Save();
             return;
         case kLiveSplit:
@@ -2180,9 +2184,11 @@ public:
             break;
         }
         case kHdr:
+            if (s.display.hdr != (value == 1)) game_.ShowNoticeDialog("pc_restart_needed");
             s.display.hdr = value == 1;
             break;
         case kSurround:
+            if (s.audio.surround != (value == 1)) game_.ShowNoticeDialog("pc_restart_needed");
             s.audio.surround = value == 1;
             break;
         case kControllerSpeaker:
@@ -3492,6 +3498,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
     bool hide_game_ui = false;
     pt::game::PhotoPanelView photo_view;
     const bool ui_ready = ui.Init(app.renderer, app.textures, vfs);
+    // PC addition: the PS4 title picture (the game folder's sce_sys/pic1.png, the forest with "P.T. 7780s") over the start's
+    // loading screen for a few seconds, then the original's black loading screen; only in a window, not in tests
+    float boot_splash_seconds = 0.0f;
+    if (ui_ready && app.window && options.input_script.empty()) {
+        const uint32_t splash = app.textures.LoadImageFile(options.game_dir / "sce_sys" / "pic1.png", "boot_splash");
+        if (splash != pt::TextureManager::kWhite) {
+            boot_splash_seconds = 4.0f;
+            ui.ShowBootSplash(splash, boot_splash_seconds);
+        } else {
+            // the archives do not carry it: installs made before 1.0.3 from a package or a copied dump have no sce_sys folder
+            pt::LogInfo("boot: no title picture at {} (the setup copies it from the dump or package), the start goes to its loading screen",
+                        pt::os::PathToUtf8(options.game_dir / "sce_sys" / "pic1.png"));
+        }
+    }
     if (ui_ready) {
         ui.SetViewExtent({app.options.width, app.options.height});
         game.SetOptionsUiAvailable(app.window != nullptr || options.first_boot_options);
@@ -3841,7 +3861,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
     uint64_t next_speaker_retry_ns = 0;
     std::string last_speaker_error;
     bool speaker_route_requested = false;
-    constexpr std::array<uint32_t, 2> kLisaCryEvents{0xAD52F3C2u, 0x0CB2A9B7u};
+    // every sound Lisa makes goes to the controller's speaker and haptics: her footsteps (the chase and the f040, f060 and f070
+    // walks), breath, laugh and cries (events.txt: the Play_ene_* and Play_voice_ene_* events)
+    constexpr std::array<uint32_t, 9> kLisaCryEvents{0xAD52F3C2u, 0x0CB2A9B7u, 0x9983E7F9u, 0xC910062Eu, 0x958C5411u,
+                                                      0x7B136101u, 0xB8D5B537u, 0xF9E2D015u, 0x52B9C804u};
+    // the player's own footsteps (Play_plr_footstep_*), felt on the DualSense actuators but not played on its speaker
+    constexpr std::array<uint32_t, 7> kPlayerStepEvents{0x28E58AD8u, 0xF688B813u, 0xF688B80Du, 0x07F2CC27u,
+                                                        0xC180CD50u, 0x07F2CC39u, 0x6A89341Eu};
     while (running) {
         // VR: the headset is the view, a minimized window does not stop it; the frame wait paces the loop. While the runtime has
         // no running session (the headset asleep or not yet ready, its compositor restarting) the game holds as a window in the
@@ -3861,7 +3887,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
         if (boot_wait) {
             const bool preparing = app.texture_requested || app.textures.EnhancedPending();
             const double waited = static_cast<double>(SDL_GetTicksNS() - boot_wait_start) * 1e-9;
-            const bool hold = preparing && waited < 20.0 && game.Controller().Step() <= 5;
+            // the title picture shows for its time and the black loading screen a moment after it before the game comes in
+            const bool hold = ((preparing && waited < 20.0) || waited < boot_splash_seconds + 1.0) && game.Controller().Step() <= 5;
             if (!hold) {
                 boot_wait = false;
                 pt::LogInfo("start: loading screen released after {:.1f} s{}", waited, preparing ? " (enhanced textures still preparing)" : "");
@@ -3943,13 +3970,16 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 last_speaker_error.clear();
             }
         }
-        const bool dualsense_route = controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseQuad;
+        const bool dualsense_route = controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseQuad ||
+                                     controller_speaker.Route() == pt::ControllerPcmRoute::DualSenseBluetoothHaptics;
         const bool controller_haptics = feedback.dualsense_haptics && dualsense_route;
         const bool route_has_output = controller_speaker.IsOpen() && (speaker_audio_requested || controller_haptics);
         if (capture_allowed && route_has_output) {
             sound.System().SetControllerCaptureEvents(kLisaCryEvents);
+            sound.System().SetControllerHapticEvents(controller_haptics ? std::span<const uint32_t>(kPlayerStepEvents) : std::span<const uint32_t>{});
         } else {
             sound.System().SetControllerCaptureEvents(std::span<const uint32_t>{});
+            sound.System().SetControllerHapticEvents(std::span<const uint32_t>{});
             controller_speaker.ClearPending();
         }
         pt::audio::ControllerPcmBlock controller_block;
@@ -4032,6 +4062,40 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                        : menu_open && !show_settings                   ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
+        // the menu's cursor hides while a controller drives the menu (issue #45); moving or clicking the mouse brings it back
+        if (app.window) {
+            static bool cursor_hidden = false;
+            static glm::vec2 cursor_last(-1.0f);
+            glm::vec2 cursor;
+            SDL_GetMouseState(&cursor.x, &cursor.y);
+            const bool mouse_moved = cursor_last.x >= 0.0f && glm::length(cursor - cursor_last) > 3.0f;
+            cursor_last = cursor;
+            const bool pad_used = (polled.any_button && polled.from_gamepad) ||
+                                  (polled.left_stick_from_pad && glm::length(polled.left_stick) > 0.5f) ||
+                                  (polled.from_gamepad && glm::length(polled.right_stick) > 0.5f);
+            const bool pointer_menu = menu_open && !show_settings && !show_debug && !mouse_captured;
+            bool hide = cursor_hidden;
+            if (pad_used) hide = true;
+            if (mouse_moved || polled.click || polled.right_click || (polled.any_button && !polled.from_gamepad)) hide = false;
+            if (!pointer_menu) hide = false;
+            // the ImGui SDL backend shows the cursor again every frame (ImGui_ImplSDL3_UpdateMouseCursor) unless told not to change it
+            if (ImGui::GetCurrentContext()) {
+                ImGuiIO& io = ImGui::GetIO();
+                if (cursor_hidden || hide) io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+                else io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+            }
+            if (cursor_hidden && hide && SDL_CursorVisible()) SDL_HideCursor();
+            if (hide != cursor_hidden) {
+                cursor_hidden = hide;
+                if (hide) {
+                    SDL_HideCursor();
+                } else {
+                    // SDL keeps the cursor hidden while relative mode captures the mouse
+                    SDL_ShowCursor();
+                }
+                pt::LogInfo("input: menu cursor {}", hide ? "hidden for the controller" : "shown");
+            }
+        }
         const bool ending_outro = pt::game::EndingOutroInputBlocked(game.Controller().Step());
         polled = pt::game::GateEndingOutroInput(game.Controller().Step(), polled);
         if (options.forced_prompts) {
@@ -4206,6 +4270,17 @@ int RunGame(App& app, pt::Vfs& vfs) {
         const auto render_offline = [&](uint32_t samples) {
             std::vector<float>& target = options.audio_capture.empty() ? offline_audio : captured;
             const size_t base = options.audio_capture.empty() ? 0 : captured.size();
+            static const uint32_t capture_channels = [] {
+                const char* v = std::getenv("PT_CAPTURE_CHANNELS");
+                const int n = v ? std::atoi(v) : 2;
+                return static_cast<uint32_t>(n == 6 || n == 8 ? n : 2);
+            }();
+            if (!options.audio_capture.empty() && capture_channels != 2) {
+                // the capture alone in the device mix's speaker layout (the clock's offline mix stays stereo)
+                target.resize(base + samples * capture_channels);
+                sound.System().RenderOfflineChannels(target.data() + base, samples, capture_channels);
+                return;
+            }
             target.resize(base + samples * 2);
             sound.System().RenderOffline(target.data() + base, samples);
             if (theater && theater->theater->Sound() && theater->theater->Sound()->Ready()) {
@@ -4514,6 +4589,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         // VR's stereo view: the eyes take the fade (the HUD draws only the UI)
         app.renderer.fade[3] = ui_ready && !(vr && !vr->ScreenMode(game)) ? 0.0f : fx.FadeShown().a;
         app.renderer.output_brightness = game.Options().BrightnessValue();
+        app.renderer.plain_output = ui.BootSplashShown();
         draw_items.clear();
         // the drawn view: the player's own (GetCamera), or the third person camera behind the shoulder (Extras), or the theater's
         pt::Camera camera = game.ViewCamera();
@@ -4580,7 +4656,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             ImGui::Render();
         }
         VkExtent2D base_render_extent{};
-        if (!vr && app.window && app.settings.display.fullscreen == 0) {
+        if (!vr && app.window && app.settings.display.fullscreen != 2) {
             int width = 0;
             int height = 0;
             SDL_GetWindowSizeInPixels(app.window, &width, &height);
@@ -4763,6 +4839,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const VkExtent2D vfx_extent = app.renderer.RenderExtent();
             view_vfx.Prepare(view, camera, static_cast<float>(vfx_extent.width) / static_cast<float>(std::max(1u, vfx_extent.height)), lighting,
                              vfx_pass, blend);
+            // while they tear the image a temporal upscaler's history only ghosts it (the DLSS 4 models read no reactive mask): the
+            // lanterns smeared into "ghost lanterns" on the f120 bug screen; each such frame starts the history again
+            const bool view_distortion = view_vfx.ViewDistortion();
+            static bool was_distorting = false;
+            if (view_distortion != was_distorting) {
+                was_distorting = view_distortion;
+                pt::LogInfo("upscale: view distortion {} (history reset every frame while on)", view_distortion ? "on" : "off");
+            }
+            if (view_distortion) app.scene.ResetUpscaleHistory();
             const auto part_t3 = std::chrono::steady_clock::now();
             struct PartsTrace {
                 std::vector<std::array<float, 7>> rows;
@@ -5000,7 +5085,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pt::LogInfo("input script: {} expectations, {} failed", script.Expectations(), script.Failures());
     }
     if (!options.audio_capture.empty()) {
-        WriteWav(options.audio_capture, captured, 48000, 2);
+        const char* capture_channels = std::getenv("PT_CAPTURE_CHANNELS");
+        const int channels = capture_channels ? std::atoi(capture_channels) : 2;
+        WriteWav(options.audio_capture, captured, 48000, static_cast<uint16_t>(channels == 6 || channels == 8 ? channels : 2));
     }
     game.SetAudio(nullptr);
     sound.Shutdown();
@@ -5089,8 +5176,36 @@ int main(int argc, char** argv) {
     }
     if (!tool) {
         // A normal launch imports the old profile folder once; a headless run never reads the player's profile.
-        const pt::platform::UserDataReport user_data = pt::platform::PrepareUserDataDirectory(
-            UserDataDir(), options.headless ? std::filesystem::path() : LegacyUserDataDir(), !options.headless);
+        // A 1.0.1 profile (settings and saves in %APPDATA%\pt-port\pt, ~/.local/share/pt-port/pt on Linux; macOS never moved) is
+        // offered once: Yes moves it into the data folder beside the game and deletes the old folder, No leaves it; the marker
+        // remembers either answer
+        const auto ask_legacy = [](const std::filesystem::path& legacy) {
+            const std::string text = "You have the old save file structure. Your save files are at:\n" + pt::os::PathToUtf8(legacy) +
+                                     "\n\nDo you want to move your save files to the new version?\nThey will be moved to:\n" +
+                                     pt::os::PathToUtf8(UserDataDir()) + "\n\nIf you choose No, you will not be asked again.";
+            const SDL_MessageBoxButtonData buttons[] = {{SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Yes"},
+                                                        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "No"}};
+            SDL_MessageBoxData box{};
+            box.flags = SDL_MESSAGEBOX_INFORMATION;
+            box.title = "P.T. saves";
+            box.message = text.c_str();
+            box.numbuttons = 2;
+            box.buttons = buttons;
+            int pressed = 0;
+            if (!SDL_ShowMessageBox(&box, &pressed)) {
+                pt::LogWarn("user data: the move question could not be shown ({}); asking again next start", SDL_GetError());
+                throw std::runtime_error("no dialog");
+            }
+            return pressed == 1;
+        };
+        pt::platform::UserDataReport user_data;
+        try {
+            user_data = pt::platform::PrepareUserDataDirectory(UserDataDir(), options.headless ? std::filesystem::path() : LegacyUserDataDir(),
+                                                               !options.headless, ask_legacy);
+        } catch (const std::runtime_error&) {
+            // no dialog (no display): the data folder only, the question waits for a start that can show it
+            user_data = pt::platform::PrepareUserDataDirectory(UserDataDir(), {}, false);
+        }
         if (!user_data.success) {
             std::string text = "P.T. cannot prepare its data folder:\n" + pt::os::PathToUtf8(UserDataDir());
             for (const auto& error : user_data.errors) text += "\n" + error;
@@ -5101,7 +5216,11 @@ int main(int argc, char** argv) {
             return 1;
         }
         pt::LogInfo("user data: {}", pt::os::PathToUtf8(UserDataDir()));
-        if (user_data.migrated_legacy) pt::LogInfo("user data: copied {} legacy files; original profile data retained", user_data.files_copied);
+        if (user_data.migrated_legacy) {
+            pt::LogInfo("user data: moved {} files from the old profile folder{}", user_data.files_copied,
+                        user_data.removed_legacy ? "; the old folder was deleted" : "");
+        }
+        if (user_data.declined_legacy) pt::LogInfo("user data: the old profile folder stays where it is (the player chose No)");
         for (const auto& warning : user_data.warnings) pt::LogWarn("user data: {}", warning);
     }
     pt::LogInfo("pt-port version {} ({})", pt::update::CurrentVersion(), pt::update::Platform());

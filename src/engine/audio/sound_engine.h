@@ -89,6 +89,8 @@ public:
     void StopPlayingId(PlayingId id, float fade_seconds, Interp curve = Interp::Linear);
     void SeekPlayingId(PlayingId id, float seconds);
     void StopAll(float fade_seconds);
+    // a new game session: the states, game parameters, switches, sends and action offsets the last one left go back to the boot's
+    void ResetSession();
     bool IsPlaying(PlayingId id) const;
     bool IsEventPlaying(uint32_t event_id) const;
     void RegisterObject(GameObjectId object, std::string name);
@@ -112,6 +114,7 @@ public:
     MotionLevels Motion() const;
     void SetControllerCaptureEvent(uint32_t event_id) { controller_pcm_capture_.SetEvent(event_id); }
     void SetControllerCaptureEvents(std::span<const uint32_t> event_ids) { controller_pcm_capture_.SetEvents(event_ids); }
+    void SetControllerHapticEvents(std::span<const uint32_t> event_ids) { controller_pcm_capture_.SetHapticEvents(event_ids); }
     bool TryReadControllerPcm(ControllerPcmBlock& block) { return controller_pcm_capture_.TryPop(block); }
     uint32_t ControllerPcmDroppedBlocks() const { return controller_pcm_capture_.DroppedBlocks(); }
     void SetFrozen(bool frozen) { frozen_.store(frozen); }
@@ -148,7 +151,7 @@ public:
 private:
     enum class CommandType : uint8_t {
         PostEvent, PostDialogue, StopPlaying, StopAll, RegisterObject, UnregisterObject, SetTransform, SetAuxSends, SetObstruction,
-        SetListener, SetState, SetSwitch, SetRtpc, ResetRtpc, SetSeed, SetMasterGain, SeekPlaying,
+        SetListener, SetState, SetSwitch, SetRtpc, ResetRtpc, SetSeed, SetMasterGain, SeekPlaying, ResetSession,
     };
 
     struct Command {
@@ -498,6 +501,7 @@ private:
     void SetStateInternal(uint32_t group, uint32_t state, uint64_t time);
     void StopPlayingInternal(PlayingId id, float fade_ms, Interp curve);
     void StopAllInternal(float fade_ms);
+    void ResetSessionInternal();
     void StopObject(GameObjectId object);
 
     float RtpcValue(uint32_t parameter, GameObjectId object) const;

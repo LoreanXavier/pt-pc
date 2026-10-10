@@ -116,6 +116,12 @@ void SoundSystem::SeekPlayingId(PlayingId id, float seconds) {
     }
 }
 
+void SoundSystem::ResetSession() {
+    if (engine_) {
+        engine_->ResetSession();
+    }
+}
+
 void SoundSystem::StopAll(float fade_seconds) {
     if (engine_) {
         engine_->StopAll(fade_seconds);
@@ -261,6 +267,14 @@ void SoundSystem::RenderOffline(float* interleaved_stereo, uint32_t frames) {
     engine_->Render(interleaved_stereo, frames);
 }
 
+void SoundSystem::RenderOfflineChannels(float* interleaved, uint32_t frames, uint32_t channels) {
+    if (!engine_ || output_) {
+        std::memset(interleaved, 0, sizeof(float) * frames * channels);
+        return;
+    }
+    engine_->Render(interleaved, frames, channels);
+}
+
 bool SoundSystem::LoadSubtitles(std::string_view language) {
     if (!vfs_ || !engine_) {
         return false;
@@ -322,6 +336,12 @@ MotionLevels SoundSystem::Motion() const {
 void SoundSystem::SetControllerCaptureEvent(uint32_t event_id) {
     if (engine_) {
         engine_->SetControllerCaptureEvent(event_id);
+    }
+}
+
+void SoundSystem::SetControllerHapticEvents(std::span<const uint32_t> event_ids) {
+    if (engine_) {
+        engine_->SetControllerHapticEvents(event_ids);
     }
 }
 

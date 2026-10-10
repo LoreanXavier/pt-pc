@@ -67,6 +67,8 @@ public:
     uint32_t Create(const std::string& name, VkFormat format, std::span<const TextureMip> mips, uint32_t layers = 1, bool cube = false);
     uint32_t Find(const std::string& name) const;
     uint32_t LoadFox(const QarArchive& qar, const std::string& path, bool* ok = nullptr, bool raw = false);
+    // a colour PNG or JPEG from disk as an sRGB texture with its mips; kWhite when it cannot be read
+    uint32_t LoadImageFile(const std::filesystem::path& path, const std::string& key);
     // Reads and unpacks the .ftex files of `paths` on a worker thread ahead of their LoadFox, which then only uploads: the f100
     // clock's maze package brings eleven effect pictures (fx_viweye01..11) whose unpacking took 311 ms of one frame. Paths loaded or
     // already queued are skipped; nothing is queued while a mod is active (LoadFox reads the overrides).

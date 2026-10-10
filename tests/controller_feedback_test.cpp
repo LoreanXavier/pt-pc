@@ -78,9 +78,9 @@ int main() {
         full_scale[i * 2] = full_scale[i * 2 + 1] = 100.0f * std::sin(2.0f * 3.14159265358979323846f * 100.0f * static_cast<float>(i) / 48000.0f);
     }
     filter.Process(full_scale, capped, full_scale.size() / 2);
-    check(std::all_of(capped.begin(), capped.end(), [](float x) { return std::abs(x) <= 0.25f; }) &&
-              std::any_of(capped.begin(), capped.end(), [](float x) { return std::abs(x) == 0.25f; }),
-          "actuator PCM is capped to a conservative 25 percent level");
+    check(std::all_of(capped.begin(), capped.end(), [](float x) { return std::abs(x) <= 0.8f; }) &&
+              std::any_of(capped.begin(), capped.end(), [](float x) { return std::abs(x) > 0.79f; }),
+          "actuator PCM is soft limited to 80 percent");
 
     pt::audio::ControllerPcmQueue queue;
     pt::audio::ControllerPcmBlock block{};
@@ -117,6 +117,18 @@ int main() {
           "event capture submits only its mixed voice PCM and leaves unused frames silent");
     capture_tap.BeginBlock(2);
     check(!capture_tap.SubmitBlock() && !capture_tap.TryPop(block), "capture with no selected voice emits no speaker block");
+    {
+        pt::audio::ControllerPcmCapture haptic_tap;
+        const std::array speaker_events{0x11111111u};
+        const std::array haptic_events{0x22222222u};
+        haptic_tap.SetEvents(speaker_events);
+        haptic_tap.SetHapticEvents(haptic_events);
+        haptic_tap.BeginBlock(1);
+        check(haptic_tap.Accumulate(0x22222222u, 0, 1.0f, 1.0f) && haptic_tap.Accumulate(0x11111111u, 0, 0.5f, 0.5f) &&
+                  haptic_tap.SubmitBlock() && haptic_tap.TryPop(block) && block.stereo[0] == 0.5f && block.haptic[0] > 0.5f &&
+                  block.haptic[0] < 1.5f,
+              "haptic-only events reach the actuator mix, lighter, and never the speaker mix");
+    }
     capture_tap.SetEvents(selected_events);
     capture_tap.BeginBlock(2);
     capture_tap.SetEvent(0x34567890u);

@@ -6,6 +6,7 @@
 namespace pt::polish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Aby ta zmiana zaczęła obowiązywać, uruchom grę ponownie."},
     {"pc_controller_speaker","Głośnik kontrolera"},
     {"pc_note_controller_speaker","Odtwarza nagrane krzyki Lisy przez głośniki obsługiwanych kontrolerów Sony. W systemie Windows wymaga połączenia USB; nieobsługiwane urządzenia i Bluetooth pozostają wyciszone. Działa niezależnie od wibracji i jest domyślnie wyłączone."},
     {"pc_controller_speaker_volume","Głośność głośnika kontrolera"},

@@ -45,6 +45,8 @@ public:
     uint32_t Word(NazoId id) const { return word_[Index(id)]; }
     NazoState State(NazoId id) const;
     void ResetAllStates();
+    // every puzzle still at word 0 (never set this session) as Deactivate leaves it
+    void DeactivateUnset();
     // a new session (loop browser pick, progress reset): every state, timer and counter as at boot; the stage assets stay
     void ResetSession();
     // the state ResetSession sets, one line (Game::DescribeSessionState)

@@ -6,6 +6,7 @@
 namespace pt::arabic {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","يجب إعادة تشغيل اللعبة حتى يسري هذا التغيير."},
     {"pc_controller_speaker","مكبر صوت وحدة التحكم"},
     {"pc_note_controller_speaker","يشغّل صرخات ليزا المسجلة في اللعبة عبر مكبرات الصوت المدعومة في وحدات تحكم Sony. يتطلب Windows اتصال USB؛ وتبقى الأجهزة غير المدعومة واتصالات Bluetooth صامتة. مستقل عن الاستجابة اللمسية، ومعطّل افتراضيًا."},
     {"pc_controller_speaker_volume","مستوى صوت مكبر وحدة التحكم"},

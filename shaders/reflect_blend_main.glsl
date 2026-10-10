@@ -119,7 +119,8 @@ void main() {
 #endif
 #ifdef PT_REFLECT_LAYER
     amount = max(amount, 0.0);
-    out_color = vec4(min(hit, vec3(1.0)) * amount, amount);
+    // premultiplied in the original's encoded space (see the mix below)
+    out_color = vec4(SrgbEncode(min(hit, vec3(1.0))) * amount, amount);
 #ifdef PT_RT_REFLECTIONS
     // a traced hit off screen has no screen position: its history follows the floor
     bool on_screen = refl.w > 1.0e-4 && refl.z > 0.0 && all(greaterThanEqual(coordinate, vec2(0.0))) && all(lessThanEqual(coordinate, vec2(1.0)));
@@ -128,6 +129,9 @@ void main() {
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * refl.xy - 1.0), true);
 #endif
 #else
-    out_color = vec4(mix(min(base.rgb, vec3(1.0)), min(hit, vec3(1.0)), amount), base.a);
+    // the original blends into its 8-bit target (ReflectMapBlend, CB 8_8_8_8 UNORM over the sRGB-encoded tonemapped image): the
+    // mix runs on the encoded values, not on linear light (sink_decal_f060 4190: a linear mix brightened the basin left of the
+    // drain where the flashlight's hot spot reflects over the dark blood, a band the original keeps dim)
+    out_color = vec4(SrgbDecode(mix(SrgbEncode(min(base.rgb, vec3(1.0))), SrgbEncode(min(hit, vec3(1.0))), amount)), base.a);
 #endif
 }

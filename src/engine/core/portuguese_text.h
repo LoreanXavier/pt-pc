@@ -6,6 +6,7 @@
 namespace pt::portuguese {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Você precisa reiniciar o jogo para que esta alteração tenha efeito."},
     {"pc_controller_speaker","Altifalante do comando"},
     {"pc_note_controller_speaker","Reproduz os gritos gravados da Lisa nos altifalantes compatíveis dos comandos Sony. No Windows, requer ligação USB; dispositivos não suportados e Bluetooth ficam em silêncio. É independente da resposta háptica e está desativado por predefinição."},
     {"pc_controller_speaker_volume","Volume do altifalante do comando"},

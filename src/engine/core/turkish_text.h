@@ -6,6 +6,7 @@
 namespace pt::turkish {
 struct Text { std::string_view key, text; };
 inline constexpr Text kMenu[] = {
+    {"pc_restart_needed","Bu değişikliğin geçerli olması için oyunu yeniden başlatmalısın."},
     {"pc_controller_speaker","Kontrolcü hoparlörü"},
     {"pc_note_controller_speaker","Lisa’nın oyunda kaydedilmiş çığlıklarını desteklenen Sony kontrolcü hoparlörlerinden çalar. Windows’ta USB bağlantısı gerekir; desteklenmeyen aygıtlar ve Bluetooth sessiz kalır. Dokunsal geri bildirimden bağımsızdır ve varsayılan olarak kapalıdır."},
     {"pc_controller_speaker_volume","Kontrolcü hoparlör sesi"},

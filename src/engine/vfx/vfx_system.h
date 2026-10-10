@@ -216,6 +216,13 @@ public:
                RenderList& out, std::vector<LightOut>& lights, float blend = 1.0f);
 
     size_t InstanceCount() const { return instances_.size(); }
+    // a live, unfinished instance whose effect name contains `part`
+    bool AnyLive(std::string_view part) const {
+        for (const auto& [key, inst] : instances_) {
+            if (inst.def && !inst.finished && inst.def->name.find(part) != std::string::npos) return true;
+        }
+        return false;
+    }
     size_t ParticleCount() const;
     std::vector<std::pair<std::string, size_t>> Stats() const;
 

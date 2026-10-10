@@ -265,6 +265,15 @@ std::string NazoManager::DescribeSession() const {
     return text;
 }
 
+void NazoManager::DeactivateUnset() {
+    LogInfo("nazo: unset puzzles deactivated as a boot leaves them");
+    for (int i = 0; i < kCount; ++i) {
+        if (word_[i] == 0) {
+            Deactivate(static_cast<NazoId>(i));
+        }
+    }
+}
+
 void NazoManager::ResetAllStates() {
     for (int i = 0; i < kCount; ++i) {
         ResetState(static_cast<NazoId>(i));

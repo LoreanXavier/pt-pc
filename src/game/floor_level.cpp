@@ -218,7 +218,10 @@ void FloorLevel::RelocateGimmicks() {
             objects.PlayGimmickMotion(GimmickType::CeilLamp, "CeilLampStrong", false);
         } else if (floor == "f120") {
             objects.PlayGimmickMotion(GimmickType::CeilLamp, "CeilLamp", true);
-            objects.PlayGimmickMotion(GimmickType::Baby, "Baby", true);
+            // issue #43: on PS4 the fake crash loop's sink is empty. Played through, the original's ResetToLocators finds the
+            // baby's maze B locator first (the f110 stage is still in its list) and the record is hidden once that stage
+            // unloads; the port placed it in the new hallway. Kept off on f120 whatever the way in (the loop browser too)
+            objects.SetGimmickEnabled(GimmickType::Baby, false);
         } else if (floor == "ending") {
             for (GimmickType type : {GimmickType::Ocho, GimmickType::Baby, GimmickType::CeilLamp, GimmickType::Freezer, GimmickType::Bag}) {
                 objects.SetGimmickEnabled(type, false);

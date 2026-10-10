@@ -119,10 +119,13 @@ def main():
         shutil.copytree(build / "licenses", resources / "licenses")
     shutil.copy2(REPO / "README.md", resources / "README.md")
     shutil.copy2(REPO / "docs" / "macos.md", resources / "macOS.md")
+    # the app icon: the PS4 game's icon0 (assets/pt.icns, as assets/pt.ico on Windows)
+    shutil.copy2(REPO / "assets" / "pt.icns", resources / "pt.icns")
     with open(contents / "Info.plist", "wb") as f:
         plistlib.dump({
             "CFBundleDevelopmentRegion": "en",
             "CFBundleExecutable": "pt",
+            "CFBundleIconFile": "pt.icns",
             "CFBundleIdentifier": BUNDLE_ID,
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleName": APP_NAME,
