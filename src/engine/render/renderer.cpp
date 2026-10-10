@@ -108,8 +108,12 @@ bool Renderer::Init(SDL_Window* window, const RendererSettings& settings) {
         VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         alloc.commandPool = frame.pool;
         alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc.commandBufferCount = 1;
-        vkAllocateCommandBuffers(ctx_.device, &alloc, &frame.cmd);
+        // two: the frame's own, and the one it continues in after SplitForExternal (Apple MetalFX)
+        VkCommandBuffer buffers[2] = {};
+        alloc.commandBufferCount = 2;
+        vkAllocateCommandBuffers(ctx_.device, &alloc, buffers);
+        frame.cmd = buffers[0];
+        frame.resume = buffers[1];
         VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vkCreateSemaphore(ctx_.device, &semaphore_info, nullptr, &frame.image_available);
         VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -452,6 +456,9 @@ bool Renderer::BeginFrame(bool present) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.cmd, &begin);
+    active_cmd_ = frame.cmd;
+    split_wait_ = VK_NULL_HANDLE;
+    split_wait_value_ = 0;
 
     vk::ImageBarrier(frame.cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -497,7 +504,7 @@ void Renderer::Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, V
 
 void Renderer::EndFrame(bool draw_ui) {
     Frame& frame = frames_[frame_index_];
-    VkCommandBuffer cmd = frame.cmd;
+    VkCommandBuffer cmd = active_cmd_;
     vk::ImageBarrier(cmd, scene_color_.image, VK_IMAGE_ASPECT_COLOR_BIT,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -651,6 +658,11 @@ void Renderer::EndFrame(bool draw_ui) {
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     wait.semaphore = frame.image_available;
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphoreSubmitInfo split{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    split.semaphore = split_wait_;
+    split.value = split_wait_value_;
+    split.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSemaphoreSubmitInfo split_waits[2] = {wait, split};
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
@@ -663,6 +675,18 @@ void Renderer::EndFrame(bool draw_ui) {
         submit.signalSemaphoreInfoCount = 1;
         submit.pSignalSemaphoreInfos = &signal;
     }
+    if (split_wait_) {
+        // the upscaler ran on a Metal command buffer between the inputs and here (SplitForExternal)
+        if (submit.waitSemaphoreInfoCount == 0) {
+            submit.waitSemaphoreInfoCount = 1;
+            submit.pWaitSemaphoreInfos = &split;
+        } else {
+            submit.waitSemaphoreInfoCount = 2;
+            submit.pWaitSemaphoreInfos = split_waits;
+        }
+        split_wait_ = VK_NULL_HANDLE;
+    }
+    active_cmd_ = VK_NULL_HANDLE;
     ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, frame.in_flight), "frame submit");
     streamline::SetMarker(streamline::Marker::RenderSubmitEnd);
     if (presenting_) {
@@ -681,6 +705,42 @@ void Renderer::EndFrame(bool draw_ui) {
         }
     }
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
+}
+
+bool Renderer::SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSemaphore wait, uint64_t wait_value) {
+    if (!active_cmd_) {
+        return false;
+    }
+    Frame& frame = frames_[frame_index_];
+    const VkResult ended = vkEndCommandBuffer(active_cmd_);
+    if (ended != VK_SUCCESS) {
+        LogError("renderer: the upscale split could not end the frame's command buffer ({})", vk::ResultName(ended));
+        return false;
+    }
+    VkSemaphoreSubmitInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    signal_info.semaphore = signal;
+    signal_info.value = signal_value;
+    signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmd_info.commandBuffer = active_cmd_;
+    submit.pCommandBufferInfos = &cmd_info;
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &signal_info;
+    ctx_.CheckDeviceLost(vkQueueSubmit2(ctx_.queue, 1, &submit, VK_NULL_HANDLE), "upscale split submit");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    const VkResult begun = vkBeginCommandBuffer(frame.resume, &begin);
+    if (begun != VK_SUCCESS) {
+        LogError("renderer: the upscale split could not begin the resume command buffer ({})", vk::ResultName(begun));
+        active_cmd_ = VK_NULL_HANDLE;
+        return false;
+    }
+    active_cmd_ = frame.resume;
+    split_wait_ = wait;
+    split_wait_value_ = wait_value;
+    return true;
 }
 
 bool Renderer::SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop) {

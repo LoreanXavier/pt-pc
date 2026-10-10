@@ -130,8 +130,9 @@ GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-on
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
 vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
-build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
-are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
+build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The Windows upscalers and the
+VR mode are left out there too, and MoltenVK has no ray queries; the macOS build upscales with Apple MetalFX instead
+(`-DPT_METALFX=OFF` leaves it out). More in docs/macos.md.
 
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the

@@ -24,7 +24,8 @@ struct KindInfo {
 };
 
 constexpr KindInfo kKinds[] = {{"Off", "off"},           {"AMD FSR 3", "fsr3"},          {"NVIDIA DLSS", "dlss"},
-                               {"Intel XeSS", "xess"},    {"Spatial (test)", "spatial"}, {"AMD FSR 4", "fsr4"}};
+                               {"Intel XeSS", "xess"},    {"Spatial (test)", "spatial"}, {"AMD FSR 4", "fsr4"},
+                               {"Apple MetalFX", "metalfx"}};
 
 constexpr const char* kDlssModels[] = {"auto", "k", "l", "m"};
 constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss"};
@@ -720,16 +721,24 @@ bool UpscaleHost::Available(UpscalerKind kind, std::string& reason, bool probe) 
         case UpscalerKind::Fsr4: backends_[i] = CreateFsrBackend(*ctx_, 4); break;
         case UpscalerKind::Dlss: backends_[i] = streamline::Active() ? CreateStreamlineDlssBackend(*ctx_) : CreateDlssBackend(*ctx_); break;
         case UpscalerKind::Xess: backends_[i] = CreateXessBackend(*ctx_); break;
+        case UpscalerKind::MetalFx: backends_[i] = CreateMetalfxBackend(*ctx_); break;
         default: break;
         }
         if (!backends_[i]) {
             probed_[i] = true;
-#ifdef _WIN32
+#if defined(_WIN32)
             reasons_[i] = "not built into this executable";
+#elif defined(__APPLE__)
+            // the SDKs ship Windows DLLs, so the macOS build leaves DLSS, FSR and XeSS out (docs/linux.md); players read the
+            // bare "not built into this executable" as a broken install. MetalFX is native to macOS, so here it is only the
+            // build choice (-DPT_METALFX=OFF).
+            reasons_[i] = kind == UpscalerKind::MetalFx ? "Apple MetalFX is not built into this executable"
+                                                        : "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
 #else
             // the SDKs ship Windows DLLs, so the Linux and macOS builds leave DLSS, FSR and XeSS out (docs/linux.md); players read the
             // bare "not built into this executable" as a broken install
-            reasons_[i] = "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
+            reasons_[i] = kind == UpscalerKind::MetalFx ? "macOS only (Apple MetalFX)"
+                                                        : "Windows only (DLSS, FSR and XeSS are not in the Linux and macOS builds)";
 #endif
             LogInfo("upscale: {} unavailable: {}", UpscalerName(kind), reasons_[i]);
         }

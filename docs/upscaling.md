@@ -1,6 +1,6 @@
 # Upscaling and frame generation (PC option)
 
-The original renders at 1920x1080 with FXAA. The port can render the 3D scene at a lower internal resolution and reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS; AMD FSR 4 is listed but has no Vulkan release, see below), or keep the display resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the upscaler off the frame is the one described in `rendering.md` section 12, bit for bit.
+The original renders at 1920x1080 with FXAA. The port can render the 3D scene at a lower internal resolution and reconstruct the output with a temporal upscaler (AMD FSR 3.1, NVIDIA DLSS 4.5, Intel XeSS, Apple MetalFX; AMD FSR 4 is listed but has no Vulkan release, see below), or keep the display resolution and use the upscaler as anti-aliasing (FSR native AA, DLAA). Everything here is off by default; with the upscaler off the frame is the one described in `rendering.md` section 12, bit for bit.
 
 ## Settings
 
@@ -8,7 +8,7 @@ The original renders at 1920x1080 with FXAA. The port can render the 3D scene at
 
 | key | values | meaning |
 | --- | --- | --- |
-| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess` | backend (`fsr`, written by the builds before FSR 4 was listed, reads as `fsr3`); the page lists every backend and shows the ones this machine or this build cannot run greyed, with the reason on its help line |
+| `upscaler` | `off`, `fsr3`, `fsr4`, `dlss`, `xess`, `metalfx` | backend (`fsr`, written by the builds before FSR 4 was listed, reads as `fsr3`; `metalfx` is the macOS build's Apple MetalFX); the page lists every backend and shows the ones this machine or this build cannot run greyed, with the reason on its help line |
 | `quality` | `native`, `quality`, `balanced`, `performance`, `ultra_performance`, `custom` | render scale 1/1.0, 1/1.5, 1/1.7, 1/2.0, 1/3.0 per axis (the FSR ratios, used for every backend), or `scale` |
 | `scale` | 0.25 to 1.0 | render scale per axis for `custom` |
 | `sharpness` | 0 to 1 | FSR: RCAS after the upscaler (DLSS has no sharpening) |
@@ -59,6 +59,10 @@ The upscaler list checks the vendor, `nvngx_dlss.dll` and the Vulkan extensions 
 XeSS Super Resolution from the XeSS SDK 3.0.2 (github.com/intel/xess, Intel Simplified Software License): the headers at build time, `libxess.dll` next to `pt.exe` at run time (loaded when XeSS is selected; it reports XeSS SR 2.0.2). GPUs other than Intel Arc run its DP4a model. The qualities keep the render sizes of the quality table and use the XeSS preset with the same ratio: native AA uses AA, quality (1.5) Ultra Quality, balanced (1.7) Quality, performance (2.0) Balanced, ultra performance (3.0) Ultra Performance; `custom` takes the preset with the nearest ratio. Init flags: inverted depth and the responsive pixel mask (the reactive mask). Execute: jitter `+jitter` (checked against the 4x supersampled render: 37.0 dB on the f020 corridor at performance, the other signs 32.3 to 34.9 dB), velocity scale = render size (the vectors are UV units from the current to the previous frame), exposure scale 1 (the colour is pre-exposed). XeSS's own mip bias formula is `log2(render / output)`, the bias used for every backend here.
 
 XeSS needs `VK_EXT_mutable_descriptor_type` with `mutableDescriptorType`, and `shaderStorageImageWriteWithoutFormat`, `shaderInt8`, `scalarBlockLayout` and `shaderIntegerDotProduct` (its query on driver 617.14). When `libxess.dll` is present the device enables them at start where supported: from the XeSS query when `pt.ini` selects XeSS, from that list otherwise. Selecting XeSS runs the query again and asks for a restart if something is missing.
+
+### Apple MetalFX
+
+MetalFX from macOS (MetalFX.framework, Apple's, part of the OS) on the macOS arm64 and x64 builds (`src/engine/render/upscale/metalfx_backend.mm`, cmake/MacOS.cmake). The port renders through MoltenVK, so the scaler's inputs and output are the Vulkan targets' own Metal textures, named by `VK_EXT_metal_objects` (`vkExportMetalObjectsEXT`), and the pass is encoded into a Metal command buffer. A Metal command buffer cannot be part of a Vulkan one, so the frame is submitted in two: the inputs (G-buffer, motion, reactive, colour, exposure) are submitted signaling a timeline semaphore value `v`, MetalFX waits `v` and signals `v+1` on the same `MTLSharedEvent`, and the resolve, the post chain and the composite are submitted waiting on `v+1` (`Renderer::SplitForExternal`, `UpscaleBackend::ExternalSubmit/ExternalSync/ExternalRun`). The jitter is `+jitter` and the motion vector scale is the render size, the conventions the other backends take; at a still corridor pose flipping either sign raises the mean difference from native from 0.10 to 0.17 and 0.30 levels (`PT_METALFX_JITTER_SIGN`, `PT_METALFX_MOTION_SIGN` flip them for tests). The colour is pre-exposed by the frame's exposure and the scaler gets `preExposure`, as DLSS. The reactive mask is used on macOS 14.4 or newer (the property is 14.4's). Temporal scaling needs Apple silicon or a supported AMD GPU: `MTLFXTemporalScalerDescriptor.supportsDevice:` decides, so the row greys out on an Intel Mac's GPU; the scaler's own texture usage requirements (`colorTextureUsage` &c.) are checked against the exported textures and a mismatch is logged. The MetalFX framework is Apple's, part of macOS; nothing of it ships with the port and no runtime is downloaded. Not on Linux or Windows: the backend is compiled only into the macOS build.
 
 ## Frame generation
 

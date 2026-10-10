@@ -54,12 +54,17 @@ public:
     // present: whether this frame goes to the window (VR draws the second eye without presenting)
     bool BeginFrame(bool present = true);
     void EndFrame(bool draw_ui);
+    // Apple MetalFX: the upscaler runs on a Metal command buffer, which cannot be part of a Vulkan one. This ends and submits
+    // the frame recorded so far, signaling `signal` at `signal_value`; the upscaler runs between the submits; the command
+    // buffer that follows (and the rest of the frame with it) waits on `wait` at `wait_value`.
+    bool SplitForExternal(VkSemaphore signal, uint64_t signal_value, VkSemaphore wait, uint64_t wait_value);
     void Resize(uint32_t width, uint32_t height);
     void SetVsync(bool enabled);
     bool SaveScreenshot(const std::filesystem::path& path, glm::vec4 crop = {0.0f, 0.0f, 1.0f, 1.0f});
 
     vk::Context& Context() { return ctx_; }
-    VkCommandBuffer Cmd() const { return frames_[frame_index_].cmd; }
+    // the command buffer the frame records into: the frame's own until SplitForExternal, then the resume buffer
+    VkCommandBuffer Cmd() const { return active_cmd_; }
     const vk::Image& SceneColor() const { return scene_color_; }
     VkExtent2D RenderExtent() const { return {scene_color_.extent.width, scene_color_.extent.height}; }
     uint32_t FrameIndex() const { return frame_index_; }
@@ -95,6 +100,8 @@ private:
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
+        // the buffer the frame continues in after SplitForExternal (Apple MetalFX)
+        VkCommandBuffer resume = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
     };
@@ -117,6 +124,11 @@ private:
     Frame frames_[kFramesInFlight];
     uint32_t frame_index_ = 0;
     uint32_t image_index_ = 0;
+    // the command buffer the frame records into (frame.cmd until the split, frames_[frame_index_].resume after)
+    VkCommandBuffer active_cmd_ = VK_NULL_HANDLE;
+    // the wait the resume buffer is submitted with (SplitForExternal)
+    VkSemaphore split_wait_ = VK_NULL_HANDLE;
+    uint64_t split_wait_value_ = 0;
     bool swapchain_dirty_ = false;
     bool imgui_ready_ = false;
     bool output_ready_ = false;
