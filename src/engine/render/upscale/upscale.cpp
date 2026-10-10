@@ -28,7 +28,7 @@ constexpr KindInfo kKinds[] = {{"Off", "off"},           {"AMD FSR 3", "fsr3"}, 
                                {"Apple MetalFX", "metalfx"}};
 
 constexpr const char* kDlssModels[] = {"auto", "k", "l", "m"};
-constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss"};
+constexpr const char* kFrameGens[] = {"off", "fsr3", "dlss", "metalfx"};
 
 struct QualityInfo {
     const char* name;
@@ -653,6 +653,14 @@ FrameGeneration* UpscaleHost::FrameGen() {
     return frame_gen_.get();
 }
 
+FrameGeneration* UpscaleHost::MetalFxFrameGen() {
+    if (!metalfx_frame_gen_created_ && ctx_) {
+        metalfx_frame_gen_created_ = true;
+        metalfx_frame_gen_ = CreateMetalfxFrameGeneration(*ctx_);
+    }
+    return metalfx_frame_gen_.get();
+}
+
 void UpscaleHost::Shutdown() {
     if (frame_intervals_.size() > 120) {
         std::vector<float> sorted(frame_intervals_.begin() + 60, frame_intervals_.end());
@@ -676,6 +684,11 @@ void UpscaleHost::Shutdown() {
         dlss_frame_gen_.reset();
     }
     dlss_frame_gen_created_ = false;
+    if (metalfx_frame_gen_) {
+        metalfx_frame_gen_->Shutdown();
+        metalfx_frame_gen_.reset();
+    }
+    metalfx_frame_gen_created_ = false;
     for (auto& backend : backends_) {
         if (backend) {
             backend->Release();

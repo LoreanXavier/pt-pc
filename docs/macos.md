@@ -56,9 +56,12 @@ port's temporal upscaler, run on a Metal command buffer beside MoltenVK's. It us
 Vulkan targets' Metal textures, and splits each frame's submission in two around the Metal pass, ordered by an
 `MTLSharedEvent` imported into a Vulkan timeline semaphore. `MTLFXTemporalScalerDescriptor.supportsDevice:` decides whether
 a machine can run it: Apple silicon and the supported AMD GPUs, not an Intel Mac's integrated GPU, which greys the row out
-with the reason. `PT_UPSCALER=metalfx` selects it for a run (upscaling.md, Test overrides). The MetalFX framework is part
-of macOS; nothing of it ships with the app. Built with `-DPT_METALFX=OFF` the backend and the Objective-C++ file are left
-out and the game behaves as the builds before.
+with the reason. `PT_UPSCALER=metalfx` selects it for a run (upscaling.md, Test overrides). On Apple silicon with macOS 26
+or newer, `frame_generation = metalfx` also enables MetalFX frame interpolation: the renderer presents a generated image
+between each pair of rendered frames, forces FIFO/v-sync while it runs, and composites the game's UI on both images. This
+is experimental; fast bright lights such as the flashlight can flicker because the frame interpolator has no reactive-mask
+input. The MetalFX framework is part of macOS; nothing of it ships with the app. Built with `-DPT_METALFX=OFF` the
+Objective-C++ backend and both features are left out and the game behaves as before.
 
 Intel Macs: the renderer indexes a bindless array of images, which MoltenVK builds on Metal argument buffers tier 2.
 Intel's own integrated GPUs and older AMD ones may not offer that; the game then stops at start with a log line naming the

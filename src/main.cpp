@@ -1359,6 +1359,27 @@ bool DrawUpscaleSettings(App& app) {
         ImGui::SameLine();
         ImGui::TextDisabled("(%s)", fg_reason.c_str());
     }
+    pt::FrameGeneration* metalfx_fg = pt::UpscaleHost::Get().MetalFxFrameGen();
+    std::string metalfx_reason;
+    bool metalfx_available = metalfx_fg && metalfx_fg->Available(metalfx_reason);
+    if (metalfx_available && (off || u.kind != pt::UpscalerKind::MetalFx)) {
+        metalfx_available = false;
+        metalfx_reason = u.kind == pt::UpscalerKind::MetalFx ? "needs an upscaler (native AA works)" : metalfx_reason;
+        if (u.kind != pt::UpscalerKind::MetalFx) {
+            metalfx_reason = "needs the MetalFX upscaler";
+        }
+    }
+    ImGui::BeginDisabled(!metalfx_available);
+    bool metalfx_fg_on = u.frame_generation == pt::FrameGenKind::Metalfx;
+    if (ImGui::Checkbox("Frame generation (MetalFX, experimental; macOS 26+)", &metalfx_fg_on)) {
+        u.frame_generation = metalfx_fg_on ? pt::FrameGenKind::Metalfx : pt::FrameGenKind::Off;
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    if (!metalfx_available) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", off ? "needs an upscaler" : metalfx_reason.c_str());
+    }
     const pt::DlssFrameGenSupport& dlss_fg = pt::UpscaleHost::Get().DlssFrameGen();
     const bool dlss_fg_available = dlss_fg.hardware && dlss_fg.built && !off;
     ImGui::BeginDisabled(!dlss_fg_available);
@@ -1900,8 +1921,11 @@ public:
         display.rows.push_back(std::move(resolution));
         const bool dlssg_vsync = pt::streamline::Active() && pt::streamline::FrameGenNeedsVsyncOff() &&
                                  app_.scene.upscale.frame_generation == pt::FrameGenKind::Dlss;
+        const bool metalfx_vsync = app_.scene.upscale.frame_generation == pt::FrameGenKind::Metalfx;
         display.rows.push_back(Row(kVsync, "pc_vsync", OffOn(), s.display.vsync ? 1 : 0,
-                                   dlssg_vsync ? "pc_note_vsync_dlssg" : s.display.vsync ? "pc_note_vsync" : "pc_note_vsync_off"));
+                                   dlssg_vsync ? "pc_note_vsync_dlssg"
+                                   : metalfx_vsync ? "pc_note_vsync_metalfx"
+                                   : s.display.vsync ? "pc_note_vsync" : "pc_note_vsync_off"));
         pt::game::PcSettingRow cap = Row(kFpsLimit, "pc_fps_limit", {"pc_unlimited","30","60","90","120","144","165","240","360"}, 0, "pc_note_fps_limit");
         constexpr int fps_caps[] = {0,30,60,90,120,144,165,240,360};
         for (int i=0;i<9;++i) if (fps_caps[i]==s.display.fps_limit) cap.value=i;
@@ -1951,8 +1975,8 @@ public:
             sharpness.wrap = false;
             upscaling.rows.push_back(std::move(sharpness));
         }
-        // Off, AMD FSR 3 and NVIDIA DLSS Frame Generation; one this machine cannot run shows greyed with its reason
-        pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS"},
+        // Off, AMD FSR 3, NVIDIA DLSS and Apple MetalFX Frame Generation; one this machine cannot run shows greyed with its reason
+        pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS", "MetalFX"},
                                                       static_cast<int>(u.frame_generation), "pc_note_frame_generation");
         std::string fg_reason;
         pt::FrameGeneration* fg = pt::UpscaleHost::Get().FrameGen();
@@ -1969,7 +1993,21 @@ public:
         if (pt::streamline::Active() && fsr_note.empty()) {
             fsr_note = "pc_note_fsr_fg_restart";
         }
-        frame_generation.value_notes = {std::string(), fsr_note, dlss_note};
+        std::string metalfx_note;
+        if (pt::FrameGeneration* metalfx_fg = pt::UpscaleHost::Get().MetalFxFrameGen()) {
+            std::string metalfx_reason;
+            if (!metalfx_fg->Available(metalfx_reason)) {
+                metalfx_note = Sentence(metalfx_reason);
+            }
+        } else {
+            metalfx_note = "pc_note_frame_generation_missing";
+        }
+        frame_generation.value_notes = {std::string(), fsr_note, dlss_note, metalfx_note};
+        if (u.frame_generation == pt::FrameGenKind::Dlss) {
+            frame_generation.note = pt::streamline::Active() ? "pc_note_frame_generation_dlss" : "pc_note_dlssg_restart";
+        } else if (u.frame_generation == pt::FrameGenKind::Metalfx) {
+            frame_generation.note = "pc_note_frame_generation_metalfx";
+        }
         if (u.frame_generation == pt::FrameGenKind::Dlss) {
             frame_generation.note = pt::streamline::Active() ? "pc_note_frame_generation_dlss" : "pc_note_dlssg_restart";
         }

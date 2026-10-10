@@ -614,7 +614,7 @@ void Context::Shutdown() {
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
     vkDeviceWaitIdle(device);
     swapchain_refused = false;
-    vsync = vsync && !force_vsync_off;
+    vsync = force_vsync ? true : (vsync && !force_vsync_off);
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
     uint32_t format_count = 0;

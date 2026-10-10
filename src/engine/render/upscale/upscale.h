@@ -20,8 +20,9 @@ class FrameGeneration;
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 // the DLSS Super Resolution model (NGX render preset): Auto takes NVIDIA's default for each quality mode
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
-// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp) or NVIDIA DLSS Frame Generation (Streamline)
-enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Count = 3 };
+// frame generation: AMD FSR 3 (FidelityFX, frame_generation.cpp), NVIDIA DLSS Frame Generation (Streamline) or Apple MetalFX
+// frame interpolation (metalfx_backend.mm, macOS 26 or newer)
+enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Count = 4 };
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
 
 struct UpscaleSettings {
@@ -165,6 +166,8 @@ public:
     void DeviceQueues(VkPhysicalDevice physical, VkSurfaceKHR surface, uint32_t family, std::vector<VkDeviceQueueCreateInfo>& queues) override;
     void DeviceCreated(vk::Context& ctx) override;
     FrameGeneration* FrameGen();
+    // Apple MetalFX frame interpolation (metalfx_backend.mm), macOS 26 or newer; null elsewhere
+    FrameGeneration* MetalFxFrameGen();
     // NVIDIA DLSS Frame Generation (streamline.cpp), only while Streamline is loaded
     FrameGeneration* DlssFrameGenImpl();
     const DlssFrameGenSupport& DlssFrameGen() const { return dlss_fg_; }
@@ -207,6 +210,8 @@ private:
     uint32_t fg_index_[3] = {};
     VkQueue fg_queue_[3] = {};
     std::unique_ptr<FrameGeneration> frame_gen_;
+    std::unique_ptr<FrameGeneration> metalfx_frame_gen_;
+    bool metalfx_frame_gen_created_ = false;
     std::unique_ptr<FrameGeneration> dlss_frame_gen_;
     bool dlss_frame_gen_created_ = false;
     DlssFrameGenSupport dlss_fg_;

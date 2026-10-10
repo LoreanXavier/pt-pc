@@ -10,6 +10,10 @@ std::unique_ptr<UpscaleBackend> CreateMetalfxBackend(vk::Context&) {
     return nullptr;
 }
 
+std::unique_ptr<FrameGeneration> CreateMetalfxFrameGeneration(vk::Context&) {
+    return nullptr;
+}
+
 }  // namespace pt
 
 #endif

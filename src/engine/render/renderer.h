@@ -39,11 +39,20 @@ struct XrTarget {
 
 struct XrFrame {
     // the composited frame (fade, brightness, film grain as the window's), cropped to the target's rect
-    const XrTarget* eye = nullptr;
-    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
+    const XrTarget* eye = nullptr;    // the overlay (the game's UI) alone on a transparent image of kHudExtent, premultiplied by its coverage
     const XrTarget* hud = nullptr;
     // the overlay over the frame as without VR (the virtual screen), else only on the hud
     bool overlay_on_frame = false;
+};
+
+// Apple MetalFX frame interpolation (metalfx_backend.mm) does not own the swapchain: the renderer presents the generated frame
+// itself, one extra swapchain image per rendered frame, before the rendered one. Set from scene_upscale.cpp only while the
+// MetalFX frame generation is generating.
+struct GeneratedFrameHooks {
+    // runs the interpolation and returns the generated frame (output extent) to composite; null repeats the rendered frame
+    std::function<const vk::Image*()> generate;
+    // the ordering semaphores of the frame's submit (signal) and of the generated frame's composite (wait)
+    std::function<bool(VkSemaphore&, uint64_t&, VkSemaphore&, uint64_t&)> sync;
 };
 
 class Renderer {
@@ -83,6 +92,7 @@ public:
     float grain_offset[2] = {0.0f, 0.0f};
     std::function<void(VkCommandBuffer, VkImageView, VkExtent2D)> overlay;
     std::function<const vk::Image*(uint32_t)> hudless;
+    GeneratedFrameHooks generated_frame;
     // frame generation's hooks, applied before swapchain creation and image acquisition
     std::function<FrameStartAction(bool)> frame_start;
     std::function<bool()> swapchain_failed;
@@ -102,13 +112,23 @@ private:
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         // the buffer the frame continues in after SplitForExternal (Apple MetalFX)
         VkCommandBuffer resume = VK_NULL_HANDLE;
+        // the buffer the generated frame's composite records into (Apple MetalFX frame interpolation)
+        VkCommandBuffer gen_cmd = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
+        // the generated frame's swapchain image acquisition (Apple MetalFX frame interpolation)
+        VkSemaphore gen_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
+        // covers the generated frame's composite, which is submitted after the frame's own (the pool is reset at the next
+        // use of this slot, when both must be done)
+        VkFence gen_in_flight = VK_NULL_HANDLE;
+        bool gen_pending = false;
     };
 
     bool CreateTargets(uint32_t width, uint32_t height);
     void DestroyTargets();
-    bool CreateCompositePipeline(VkFormat output_format);
+    // the generated frame's composite, submit and present (Apple MetalFX frame interpolation); source nullptr repeats the
+    // rendered frame
+    void PresentGeneratedFrame(Frame& frame, const vk::Image* source, VkSemaphore fg_wait, uint64_t fg_wait_value, bool draw_ui);    bool CreateCompositePipeline(VkFormat output_format);
     bool InitImGui(SDL_Window* window);
     void Composite(VkCommandBuffer cmd, VkDescriptorSet set, float mode, VkExtent2D extent, VkFormat target_format,
                    VkOffset2D offset = {0, 0});
@@ -124,6 +144,12 @@ private:
     Frame frames_[kFramesInFlight];
     uint32_t frame_index_ = 0;
     uint32_t image_index_ = 0;
+    // the swapchain image the generated frame is composited into, and whether one was acquired this frame (Apple MetalFX
+    // frame interpolation)
+    uint32_t gen_index_ = 0;
+    bool gen_acquired_ = false;
+    // the composite sets that bind the generated frame's image (one per frame slot)
+    VkDescriptorSet gen_set_[kFramesInFlight] = {};
     // the command buffer the frame records into (frame.cmd until the split, frames_[frame_index_].resume after)
     VkCommandBuffer active_cmd_ = VK_NULL_HANDLE;
     // the wait the resume buffer is submitted with (SplitForExternal)

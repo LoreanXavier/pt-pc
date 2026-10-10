@@ -49,6 +49,11 @@ const vk::Image* PresentFrameGeneration(uint32_t image_index) {
             hud = dlss->Present(image_index);
         }
     }
+    if (!hud) {
+        if (FrameGeneration* metalfx = UpscaleHost::Get().MetalFxFrameGen()) {
+            hud = metalfx->Present(image_index);
+        }
+    }
     return hud;
 }
 
@@ -93,6 +98,38 @@ void UpdateFrameGeneration(Renderer& renderer, bool wanted) {
     }
     if (fg->Update(wanted)) {
         renderer.Resize(0, 0);
+    }
+}
+
+void UpdateMetalfxFrameGeneration(Renderer& renderer, bool wanted) {
+    FrameGeneration* fg = UpscaleHost::Get().MetalFxFrameGen();
+    if (!fg) {
+        return;
+    }
+    std::string reason;
+    if (wanted && !fg->Available(reason)) {
+        wanted = false;
+    }
+    if (!renderer.hudless) {
+        renderer.hudless = PresentFrameGeneration;
+    }
+    // no swapchain recreation: the MetalFX frame generation owns no swapchain, the renderer presents the generated frame
+    // itself (GeneratedFrameHooks)
+    const bool was_generating = fg->Generating();
+    fg->Update(wanted && !UpscaleHost::Get().MenuOpen());
+    if (fg->Generating() != was_generating) {
+        // MetalFX interpolation presents two FIFO images a rendered frame; rebuild a MAILBOX/IMMEDIATE swapchain as FIFO
+        // on entry and restore the user's v-sync selection when leaving it.
+        renderer.Resize(0, 0);
+    }
+    if (fg->Generating()) {
+        renderer.generated_frame.generate = [fg]() -> const vk::Image* { return fg->GeneratedImage(); };
+        renderer.generated_frame.sync = [fg](VkSemaphore& s, uint64_t& sv, VkSemaphore& w, uint64_t& wv) {
+            return fg->ExternalSync(s, sv, w, wv);
+        };
+    } else {
+        renderer.generated_frame.generate = nullptr;
+        renderer.generated_frame.sync = nullptr;
     }
 }
 
@@ -208,6 +245,8 @@ bool SceneRenderer::BeginUpscaleFrame(VkExtent2D output) {
     const bool generate = active && up_.backend != nullptr;
     if (streamline::Active()) {
         UpdateDlssFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Dlss && generate);
+    } else if (upscale.frame_generation == FrameGenKind::Metalfx) {
+        UpdateMetalfxFrameGeneration(*renderer_, generate && vr_eye_ < 0);
     } else {
         UpdateFrameGeneration(*renderer_, upscale.frame_generation == FrameGenKind::Fsr && generate);
     }
@@ -531,27 +570,32 @@ bool SceneRenderer::RecordUpscaleDispatch() {
         return false;
     }
     const bool upscaled = up_.backend->Dispatch(up_dispatch_);
-    FrameGeneration* fg = streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
-    if (upscaled && fg && fg->Generating()) {
-        const UpscaleDispatch& d = up_dispatch_;
-        FrameGenPrepare prepare;
-        prepare.cmd = d.cmd;
-        prepare.depth = d.depth;
-        prepare.motion = d.motion;
-        prepare.render = extent_;
-        prepare.jitter = d.jitter;
-        prepare.motion_scale = d.motion_scale;
-        prepare.frame_ms = d.frame_ms;
-        prepare.near_plane = d.near_plane;
-        prepare.fov_y = d.fov_y;
-        prepare.position = camera_.position;
-        prepare.forward = camera_.Forward();
-        prepare.up = camera_.Up();
-        prepare.right = camera_.Right();
-        prepare.reset = d.reset;
-        fg->Prepare(prepare);
-    }
+    PrepareFrameGeneration(up_dispatch_, upscaled);
     return upscaled;
+}
+
+void SceneRenderer::PrepareFrameGeneration(const UpscaleDispatch& d, bool upscaled) {
+    FrameGeneration* fg = upscale.frame_generation == FrameGenKind::Metalfx ? UpscaleHost::Get().MetalFxFrameGen()
+                          : streamline::Active() ? UpscaleHost::Get().DlssFrameGenImpl() : UpscaleHost::Get().FrameGen();
+    if (!upscaled || !fg || !fg->Generating()) {
+        return;
+    }
+    FrameGenPrepare prepare;
+    prepare.cmd = d.cmd;
+    prepare.depth = d.depth;
+    prepare.motion = d.motion;
+    prepare.render = extent_;
+    prepare.jitter = d.jitter;
+    prepare.motion_scale = d.motion_scale;
+    prepare.frame_ms = d.frame_ms;
+    prepare.near_plane = d.near_plane;
+    prepare.fov_y = d.fov_y;
+    prepare.position = camera_.position;
+    prepare.forward = camera_.Forward();
+    prepare.up = camera_.Up();
+    prepare.right = camera_.Right();
+    prepare.reset = d.reset;
+    fg->Prepare(prepare);
 }
 
 void SceneRenderer::RecordUpscaleResolve(VkCommandBuffer cmd, bool upscaled) {

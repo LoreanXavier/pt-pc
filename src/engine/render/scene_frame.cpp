@@ -2722,6 +2722,11 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
                 // upscaler runs, and the rest of the frame continues in a new command buffer (Renderer::SplitForExternal)
                 BeginLabel(cmd, "upscale");
                 RecordUpscalePrepare(dt);
+                // MetalFX frame generation only records its output-image layout hand-off here; do it before the frame
+                // command buffer is submitted/split. Its interpolation itself runs later, after the frame's HUD-less copy.
+                if (upscale.frame_generation == FrameGenKind::Metalfx) {
+                    PrepareFrameGeneration(up_dispatch_, true);
+                }
                 EndLabel(cmd);
                 VkSemaphore signal = VK_NULL_HANDLE;
                 VkSemaphore wait = VK_NULL_HANDLE;

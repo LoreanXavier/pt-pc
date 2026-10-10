@@ -387,6 +387,7 @@ private:
     // backend, then Resolve on the resume buffer.
     void RecordUpscalePrepare(float dt);
     bool RecordUpscaleDispatch();
+    void PrepareFrameGeneration(const UpscaleDispatch& d, bool upscaled);
     void RecordUpscaleResolve(VkCommandBuffer cmd, bool upscaled);
     void RecordOpaqueSnapshot(VkCommandBuffer cmd, RenderTarget& output);
     void RecordSceneCopy(VkCommandBuffer cmd, RenderTarget& output);
