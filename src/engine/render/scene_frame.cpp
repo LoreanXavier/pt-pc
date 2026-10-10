@@ -2717,11 +2717,42 @@ void SceneRenderer::Render(const Camera& camera, const std::vector<DrawItem>& it
         }
         Stamp(cmd, 9);
         if (up_.enabled) {
-            BeginLabel(cmd, "upscale");
-            RecordUpscale(cmd, dt);
-            EndLabel(cmd);
-            post_bindings_ = true;
-            BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+            if (up_.backend && up_.backend->ExternalSubmit() && vr_eye_ < 0) {
+                // Apple MetalFX: the pass runs on a Metal command buffer, so the frame is submitted up to the inputs, the
+                // upscaler runs, and the rest of the frame continues in a new command buffer (Renderer::SplitForExternal)
+                BeginLabel(cmd, "upscale");
+                RecordUpscalePrepare(dt);
+                // MetalFX frame generation only records its output-image layout hand-off here; do it before the frame
+                // command buffer is submitted/split. Its interpolation itself runs later, after the frame's HUD-less copy.
+                if (upscale.frame_generation == FrameGenKind::Metalfx) {
+                    PrepareFrameGeneration(up_dispatch_, true);
+                }
+                EndLabel(cmd);
+                VkSemaphore signal = VK_NULL_HANDLE;
+                VkSemaphore wait = VK_NULL_HANDLE;
+                uint64_t signal_value = 0;
+                uint64_t wait_value = 0;
+                if (up_.backend->ExternalSync(signal, signal_value, wait, wait_value) && renderer_->SplitForExternal(signal, signal_value, wait, wait_value)) {
+                    const bool upscaled = up_.backend->ExternalRun(up_dispatch_);
+                    cmd = renderer_->Cmd();
+                    BeginLabel(cmd, "upscale resolve");
+                    BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+                    RecordUpscaleResolve(cmd, upscaled);
+                    EndLabel(cmd);
+                } else {
+                    // without the split the frame renders without the upscaler this frame, as when a backend cannot run
+                    upscale_stats_.error = "the upscaler's frame split failed";
+                    RecordUpscaleResolve(renderer_->Cmd(), false);
+                }
+                post_bindings_ = true;
+                BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+            } else {
+                BeginLabel(cmd, "upscale");
+                RecordUpscale(cmd, dt);
+                EndLabel(cmd);
+                post_bindings_ = true;
+                BindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+            }
         }
         Stamp(cmd, 10);
         BeginLabel(cmd, "post");

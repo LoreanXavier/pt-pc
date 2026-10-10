@@ -6,8 +6,9 @@ There is no installer on macOS: the app asks for the dump folder on the first st
 
 The macOS version is the port's own and does what the Linux one does, with these limits: FSR 3, DLSS and XeSS (Windows
 SDKs), the VR mode and the ray-traced shadows, ambient occlusion and reflections (MoltenVK has no ray queries) are off, and
-the settings page greys them out. Nothing of the macOS port could be built or run on the machine it was written on (a
-Windows PC); what has been tried on a Mac is in the credits below.
+the settings page greys them out. Upscaling is available through **Apple MetalFX** instead (`upscaling.md`, Apple MetalFX),
+on a GPU MetalFX supports. Nothing of the macOS port could be built or run on the machine it was written on (a Windows PC);
+what has been tried on a Mac is in the credits below.
 
 ## Running
 
@@ -49,6 +50,18 @@ macOS takes the POSIX side of `src/engine/platform` (docs/linux.md), with these 
 Off on macOS, as on Linux: FSR 3, DLSS, XeSS (Windows SDKs) and the VR mode. MoltenVK has no ray queries, so the
 ray-traced shadows, ambient occlusion and reflections are greyed out in the settings; Metal has no sampler LOD bias,
 which MoltenVK ignores.
+
+Upscaling on macOS is Apple MetalFX (`upscaling.md`, Apple MetalFX; `src/engine/render/upscale/metalfx_backend.mm`): the
+port's temporal upscaler, run on a Metal command buffer beside MoltenVK's. It uses `VK_EXT_metal_objects` to name the
+Vulkan targets' Metal textures, and splits each frame's submission in two around the Metal pass, ordered by an
+`MTLSharedEvent` imported into a Vulkan timeline semaphore. `MTLFXTemporalScalerDescriptor.supportsDevice:` decides whether
+a machine can run it: Apple silicon and the supported AMD GPUs, not an Intel Mac's integrated GPU, which greys the row out
+with the reason. `PT_UPSCALER=metalfx` selects it for a run (upscaling.md, Test overrides). On Apple silicon with macOS 26
+or newer, `frame_generation = metalfx` also enables MetalFX frame interpolation: the renderer presents a generated image
+between each pair of rendered frames, forces FIFO/v-sync while it runs, and composites the game's UI on both images. This
+is experimental; fast bright lights such as the flashlight can flicker because the frame interpolator has no reactive-mask
+input. The MetalFX framework is part of macOS; nothing of it ships with the app. Built with `-DPT_METALFX=OFF` the
+Objective-C++ backend and both features are left out and the game behaves as before.
 
 Intel Macs: the renderer indexes a bindless array of images, which MoltenVK builds on Metal argument buffers tier 2.
 Intel's own integrated GPUs and older AMD ones may not offer that; the game then stops at start with a log line naming the

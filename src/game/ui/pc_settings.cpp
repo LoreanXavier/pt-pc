@@ -307,6 +307,8 @@ constexpr Entry kTexts[] = {
     {"pc_dlss_model_auto", {"Auto"}},
     {"pc_note_dlss_model", {"Auto follows NVIDIA: K up to Balanced, M for Performance, L for Ultra performance. L and M cost about twice as much on RTX 20 and 30."}},
     {"pc_note_frame_generation_dlss", {"Experimental. NVIDIA DLSS Frame Generation shows a generated frame between two rendered frames. Takes effect at the next start."}},
+    {"pc_note_frame_generation_metalfx", {"Experimental. Apple MetalFX interpolates one frame between rendered frames. Apple silicon and macOS 26 or newer; needs the MetalFX upscaler and forces v-sync. Very bright moving lights may flicker, and frame generation feels best when the game renders at 30 FPS or more."}},
+    {"pc_note_vsync_metalfx", {"MetalFX frame generation paces its generated frames on the display's refreshes, so v-sync runs while it is on."}},
     {"pc_note_dlssg_gpu", {"DLSS Frame Generation needs an NVIDIA GeForce RTX 40 series or newer GPU."}},
     {"pc_note_fsr_fg_gpu", {"FSR 3 frame generation needs an AMD Radeon RX 5000 series or newer GPU."}},
     {"pc_note_dlssg_driver", {"DLSS Frame Generation needs a newer NVIDIA driver."}},

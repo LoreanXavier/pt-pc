@@ -4,7 +4,13 @@ cmake_minimum_required(VERSION 3.28)
 if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Oldest macOS the build runs on" FORCE)
 endif()
-project(pt_port LANGUAGES C CXX)
+# OBJCXX on macOS for the Apple MetalFX upscaler (cmake/MacOS.cmake, metalfx_backend.mm); the language is set here so its
+# variables are initialized, as enable_language after project does not
+if(CMAKE_HOST_APPLE OR APPLE)
+  project(pt_port LANGUAGES C CXX OBJCXX)
+else()
+  project(pt_port LANGUAGES C CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

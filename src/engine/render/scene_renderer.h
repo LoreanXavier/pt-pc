@@ -381,12 +381,22 @@ private:
     void WriteUpscaleDescriptors(VkDescriptorImageInfo* images, bool post);
     bool BeginUpscaleFrame(VkExtent2D output);
     bool SetupUpscaler(VkExtent2D output);
+    // the upscale split into the pass's pieces, for the backends that run outside the Vulkan command buffer (Apple MetalFX):
+    // Prepare records the inputs' barriers and exposure, Dispatch runs a Vulkan-recorded backend, Resolve reads the upscaler's
+    // output. RecordUpscale calls all three on the frame's command buffer; the external path calls Prepare, submits, runs the
+    // backend, then Resolve on the resume buffer.
+    void RecordUpscalePrepare(float dt);
+    bool RecordUpscaleDispatch();
+    void PrepareFrameGeneration(const UpscaleDispatch& d, bool upscaled);
+    void RecordUpscaleResolve(VkCommandBuffer cmd, bool upscaled);
     void RecordOpaqueSnapshot(VkCommandBuffer cmd, RenderTarget& output);
     void RecordSceneCopy(VkCommandBuffer cmd, RenderTarget& output);
     void RecordDumpCopy(VkCommandBuffer cmd, RenderTarget& target, vk::Buffer& buffer);
     void RecordEffects(VkCommandBuffer cmd, RenderTarget& output, SceneVfxContext context);
     void RecordUpscaleInputs(VkCommandBuffer cmd, const ViewSetup& view);
     void RecordUpscale(VkCommandBuffer cmd, float dt);
+    // the dispatch RecordUpscalePrepare built, for the backend that runs outside the Vulkan command buffer
+    UpscaleDispatch up_dispatch_;
     void ReadUpscaleTimestamps(FrameSlot& slot);
 
     // 0 start, 1 shadows, 2 mirror, 3 G-buffer, 4 lighting, 5 compose, forward and effects, 6 end; within them 7 the forward draws,

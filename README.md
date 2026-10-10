@@ -78,7 +78,7 @@ Display and image
   fullscreen lists supported display modes; borderless keeps the desktop window and can render at another selected size.
 - Upscalers: AMD FSR 3.1, NVIDIA DLSS 4.5 (with a choice of model) and Intel XeSS, in the usual quality steps or a
   custom scale, plus native-resolution anti-aliasing (FSR native AA, DLAA).
-- Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer.
+- Frame generation: AMD FSR 3 on Radeon RX 5000 or newer, NVIDIA DLSS Frame Generation on RTX 40 or newer, Apple MetalFX Frame Interpolation on Apple silicon with macOS 26 or newer (macOS only; experimental).
 - Graphics presets Low, Medium, Original (PS4), High, Ultra and Custom. The individual controls cover shadow map size,
   ray-traced shadows (sharp like the original or soft), contact shadows, ray-traced ambient occlusion, ray-traced floor
   reflections, anisotropic filtering, enhanced textures (2x upscaled once from your own files with Real-ESRGAN, cached
@@ -130,8 +130,10 @@ GCC 13 or clang 17, the Vulkan headers and `glslc`. The upscalers are Windows-on
 
 macOS (Apple silicon or Intel, built for the CPU it runs on): the command line tools, then `brew install cmake ninja shaderc
 vulkan-headers vulkan-loader` and `cmake -G Ninja -B build/macos -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build
-build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The upscalers and the VR mode
-are left out there too, and MoltenVK has no ray queries. More in docs/macos.md.
+build/macos --target pt`. `python3 tools/macos/make_app.py` makes the app bundle and its zip. The Windows upscalers and the
+VR mode are left out there too, and MoltenVK has no ray queries. The macOS build upscales with Apple MetalFX; on Apple silicon
+with macOS 26 or newer it can also interpolate one frame between rendered frames (experimental). `-DPT_METALFX=OFF` leaves
+both out. More in docs/macos.md.
 
 The unit tests are CMake targets (`pt_tests`, `pt_mods_test` and the others in CMakeLists.txt). `python
 tools/walkthrough.py --exe build/release/pt.exe --game <folder>` plays the whole game without a window through the

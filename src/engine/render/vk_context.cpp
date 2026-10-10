@@ -1,3 +1,9 @@
+#if defined(__APPLE__)
+// Apple MetalFX (upscale/metalfx_backend.mm): the export-intent structures of vulkan_metal.h, which the spec asks for when the
+// MetalFX backend exports the device (VkInstanceCreateInfo) and the targets' Metal textures (VkImageCreateInfo)
+#define VK_USE_PLATFORM_METAL_EXT 1
+#endif
+
 #include "engine/render/vk_context.h"
 
 #include <SDL3/SDL.h>
@@ -211,6 +217,13 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
         instance_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         instance_info.ppEnabledExtensionNames = extensions.data();
     }
+#if defined(__APPLE__)
+    // the intent MetalFX's device export needs (VUID-VkExportMetalObjectsInfoEXT-pNext-06791); MoltenVK ignores it
+    VkExportMetalObjectCreateInfoEXT export_device_info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_device_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_DEVICE_BIT_EXT;
+    export_device_info.pNext = instance_info.pNext;
+    instance_info.pNext = &export_device_info;
+#endif
     const VkResult instance_result = creator ? creator->CreateInstance(instance_info, instance) : vkCreateInstance(&instance_info, nullptr, &instance);
     if (!Check(instance_result, "vkCreateInstance")) {
         return false;
@@ -405,6 +418,12 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             features.pNext = &portability;
 #endif
         }
+#ifdef __APPLE__
+        /* Apple MetalFX (upscale/metalfx_backend.mm) exports the Vulkan targets' Metal textures through this extension */
+        if (has("VK_EXT_metal_objects")) {
+            add("VK_EXT_metal_objects");
+        }
+#endif
         if (has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
             add(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             memory_budget = true;
@@ -595,7 +614,7 @@ void Context::Shutdown() {
 bool Context::CreateSwapchain(uint32_t width, uint32_t height, bool vsync, bool want_hdr) {
     vkDeviceWaitIdle(device);
     swapchain_refused = false;
-    vsync = vsync && !force_vsync_off;
+    vsync = force_vsync ? true : (vsync && !force_vsync_off);
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &caps);
     uint32_t format_count = 0;
@@ -792,6 +811,13 @@ bool Context::CreateImage(Image& out, VkFormat format, VkExtent3D extent, VkImag
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usage;
     info.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+#if defined(__APPLE__)
+    // the intent MetalFX's vkExportMetalObjectsEXT needs (VUID-VkExportMetalObjectsInfoEXT-pNext-06795); MoltenVK ignores it
+    VkExportMetalObjectCreateInfoEXT export_info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+    export_info.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT;
+    export_info.pNext = info.pNext;
+    info.pNext = &export_info;
+#endif
     VmaAllocationCreateInfo alloc{};
     alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (!Check(vmaCreateImage(allocator, &info, &alloc, &out.image, &out.allocation, nullptr), "vmaCreateImage")) {

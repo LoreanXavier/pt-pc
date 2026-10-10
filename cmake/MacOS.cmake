@@ -38,3 +38,13 @@ add_custom_command(TARGET pt POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_dylib}" "$<TARGET_FILE_DIR:pt>/libMoltenVK.dylib"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:pt>/licenses"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${pt_moltenvk_license}" "$<TARGET_FILE_DIR:pt>/licenses/MoltenVK_LICENSE.txt" VERBATIM)
+
+# Apple MetalFX (upscaling.md, Apple MetalFX; src/engine/render/upscale/metalfx_backend.mm): the port's temporal upscaler runs on
+# a Metal command buffer beside the MoltenVK one. macOS 14.4 or newer has the reactive mask; older 14.x runs without it. No
+# runtime download: MetalFX is part of macOS.
+option(PT_METALFX "Build the Apple MetalFX upscaler" ON)
+if(PT_METALFX)
+  target_sources(pt_engine PRIVATE src/engine/render/upscale/metalfx_backend.mm)
+  target_compile_definitions(pt_engine PUBLIC PT_WITH_METALFX=1)
+  target_link_libraries(pt_engine PUBLIC "-framework Metal" "-framework MetalFX" "-framework Foundation")
+endif()
