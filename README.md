@@ -181,8 +181,8 @@ executable.
 
 ## License
 
-The port's own code is under the MIT license (see LICENSE). The third-party pieces listed above keep their own
-licenses.
+The port's own code is under the MIT license (see LICENSE). P.T. and all of its content belong to Konami, and the
+third-party pieces listed above keep their own licenses (see NOTICE).
 
 ## AI Disclosure
 

@@ -1,0 +1,3 @@
+This license covers the port's own code only. P.T. and all of its content belong
+to Konami; none of it is in this repository. The third-party code under
+third_party/ and the libraries fetched at build time keep their own licenses.
