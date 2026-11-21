@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <span>
@@ -15,6 +16,8 @@
 #include "engine/anim/gani.h"
 #include "engine/anim/help_bones.h"
 #include "engine/anim/rig.h"
+#include "engine/anim/sim_physics.h"
+#include "engine/anim/sim_rigid.h"
 #include "engine/anim/skeleton.h"
 
 namespace pt::game {
@@ -59,6 +62,16 @@ public:
                      glm::quat& end_rotation) const;
     const anim::GaniMotion* Motion(std::string_view key);
 
+    bool PoseActor(uint32_t id, const std::string& model, const std::string& parts, std::string_view key, double frame, float blend_frames,
+                   std::vector<glm::mat4>& skin);
+    void ReleaseActor(uint32_t id);
+    void ReleaseActors();
+    float ActorRootSpeed(uint32_t id) const;
+    using ShapeFn = std::function<void(const anim::Skeleton&, anim::Pose&, std::vector<glm::vec3>&)>;
+    bool RetargetActor(uint32_t id, const std::string& model, std::vector<glm::mat4>& skin, const ShapeFn& shape = {});
+    bool PoseModel(const std::string& model, std::vector<glm::mat4>& skin, const ShapeFn& shape);
+    const anim::Skeleton* RetargetSkeleton(const std::string& model);
+
 private:
     struct Record {
         std::string model;
@@ -87,24 +100,32 @@ private:
         glm::vec3 root_translation{0.0f};
         glm::quat root_rotation{1.0f, 0.0f, 0.0f, 0.0f};
         std::shared_ptr<const anim::HelpBones> help_bones;
+        std::shared_ptr<const anim::SimRig> sim_rig;
+        std::shared_ptr<anim::SimRigid> sim;
     };
 
     void EnsureArchive();
     void EnsureModel(Record& record, const Gimmick& gimmick);
+    void EnsureModelPaths(Record& record, const std::string& model, const std::string& parts);
     void SampleMotion(const Record& record, const anim::GaniMotion& motion, double frame, anim::Pose& out) const;
     void FireEvents(Record& record, const Gimmick& gimmick, double from, double to);
     void BuildFallbackPose(Record& record);
     std::shared_ptr<const anim::Rig> LoadRig(const std::string& path);
     std::shared_ptr<const anim::HelpBones> LoadHelpBones(const std::string& path);
+    std::shared_ptr<const anim::SimRig> LoadSim(const std::string& path);
     void SampleRig(Record& record, double frame, bool blending);
 
     Game& game_;
     anim::MotionArchive archive_;
     bool archive_loaded_ = false;
     std::array<Record, 5> records_;
+    std::map<uint32_t, Record> actors_;
     std::map<std::string, const anim::GaniMotion*, std::less<>> by_key_;
     std::map<std::string, std::shared_ptr<const anim::Rig>, std::less<>> rigs_;
     std::map<std::string, std::shared_ptr<const anim::HelpBones>, std::less<>> help_bones_;
+    std::map<std::string, std::shared_ptr<const anim::SimRig>, std::less<>> sims_;
+    std::map<std::string, std::shared_ptr<const anim::Skeleton>, std::less<>> retarget_skeletons_;
+    std::map<std::string, std::vector<int>, std::less<>> retarget_maps_;
     anim::Pose ocho_fallback_;
     bool ocho_fallback_ready_ = false;
 };

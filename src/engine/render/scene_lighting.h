@@ -16,10 +16,12 @@ enum class AreaClipMode : uint8_t { None = 0, Box = 1, ProjectiveAperture = 2 };
 
 constexpr uint64_t kHandyLightId = 0x48414E44594C4954ull;
 constexpr uint64_t kMirrorLightId = 0x4D4952524F524C54ull;
+constexpr uint32_t kHandyLightFitting = 63;
 constexpr uint64_t kHandyReflectionId = 0x5245464C45435430ull;
 
 struct SceneLight {
     bool path_stair_ceiling = false;
+    bool fill = false;
     bool stair_area = false;
     uint32_t light_fitting = 0;
     LightType type = LightType::Point;
@@ -52,6 +54,7 @@ struct SceneLight {
     bool masked = false;
     float mask_fov = 0.0f;
     int32_t mask_texture = -1;
+    bool mask_soft = false;
     uint8_t priority = 0x40;
     uint8_t hidden_views = 0;
     std::string name;
@@ -97,6 +100,7 @@ struct ScreenSettings {
     std::string previous_lut_path;
     float lut_blend = 1.0f;
     glm::vec3 color_scale{1.0f, 1.12f, 1.3f};
+    glm::vec3 black_lift{0.0f};
     float start_slope = 0.4f;
     float end_slope = 0.6f;
     bool film_grain = true;
@@ -181,6 +185,7 @@ struct SceneLighting {
     SceneReflectionSample reflection_sample;
     ExposureSettings exposure;
     ScreenSettings screen;
+    glm::vec3 stage_glow{1.0f};
 };
 
 namespace light_math {

@@ -52,9 +52,34 @@ vec2 MeterTexel(ivec2 t) {
     return vec2(Half(y), depth > 0.0 ? 1.0 : 0.0);
 }
 
+vec2 MeterCell(ivec2 cell) {
+    ivec2 size = ivec2(ImgSize(IMG_DIFFUSE));
+    float sum = 0.0;
+    float hits = 0.0;
+    for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < 4; ++i) {
+            vec2 uv = (vec2(cell * 4 + ivec2(i, j)) + 0.5) / 128.0;
+            ivec2 p = min(ivec2(uv * vec2(size)), size - 1);
+            if (ImgFetch(IMG_DEPTH, p).x > 0.0) {
+                vec3 c = ImgFetch(IMG_DIFFUSE, p).rgb;
+                float y = max(0.0, c.r * 0.21252441 + c.g * 0.71533203 + c.b * 0.07208252);
+                if (!isnan(y) && !isinf(y)) {
+                    sum += y;
+                    hits += 1.0;
+                }
+            }
+        }
+    }
+    return vec2(hits > 0.0 ? sum / hits : 0.0, hits / 16.0);
+}
+
 void main() {
     ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(cell, ivec2(32)))) {
+        return;
+    }
+    if (HdrOutput()) {
+        partial[cell.y * 32 + cell.x] = MeterCell(cell);
         return;
     }
     int x = cell.x * 4;

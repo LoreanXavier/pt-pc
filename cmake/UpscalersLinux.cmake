@@ -7,8 +7,9 @@
 # licence as nvngx_dlss.dll and nvngx_dlssd.dll.
 #
 # AMD FSR 3.1: AMD ships the FidelityFX API only as Windows DLLs, but the SDK is MIT source. libamd_fidelityfx_vk.so is
-# built here from the v1.1.4 sources of the FSR 3.1.4 upscaler, the Vulkan backend and the FidelityFX API, unmodified,
-# with third_party/ffx_linux (an MSVC compatibility header, the provider table and the case of two include paths). The
+# built here from the v1.1.4 sources of the FSR 3.1.4 upscaler, the Vulkan backend and the FidelityFX API, with
+# third_party/ffx_linux (an MSVC compatibility header, the provider table and the case of two include paths) and three
+# small patches below (an alignment, the luma history's format, two switches for testers). The
 # Vulkan shader permutations are compiled with AMD's FidelityFX_SC.exe and glslangValidator as on Windows: run directly
 # on a Windows host (the cross build), through wine on a Linux host. Frame generation is left out (its Vulkan swapchain
 # is written against Win32 threads and events).
@@ -146,6 +147,31 @@ else()
   set(gpu "${ffx}/sdk/include/FidelityFX/gpu")
   set(gen "${CMAKE_BINARY_DIR}/generated/ffx_fsr3upscaler")
   get_filename_component(glslang_dir "${PT_GLSLANG_VALIDATOR}" DIRECTORY)
+  # The one change to AMD's shaders: ffx_fsr3upscaler_callbacks_glsl.h declares the luma history storage image rgba8, but the
+  # upscaler creates it R16G16B16A16_FLOAT (ffx_fsr3upscaler.cpp, LumaHistory1 and 2) and the luma instability pass keeps luma
+  # divided by the exposure in it, far above 1. A format qualifier that differs from the view's format gives undefined values
+  # to the whole image (the validation layer reports it on every frame, with AMD's own Windows DLL too). NVIDIA's driver
+  # stores by the view's format; Mesa's RADV compiles stores by the qualifier (it shortened the stores of an FSR shader with
+  # the same kind of mistake in World War Z, Mesa merge request 13084). The patched copy of the header is searched before
+  # AMD's include folder and says rgba16f.
+  set(ffx_glsl_callbacks "${gpu}/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h")
+  set(ffx_glsl_dir "${CMAKE_BINARY_DIR}/generated/ffx_linux_glsl")
+  set(ffx_glsl_patched "${ffx_glsl_dir}/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h")
+  file(READ "${ffx_glsl_callbacks}" ffx_glsl_text)
+  string(REPLACE "binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba8) uniform image2D  rw_luma_history;"
+    "binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba16f) uniform image2D  rw_luma_history; // P.T. port, Linux"
+    ffx_glsl_text "${ffx_glsl_text}")
+  if(NOT ffx_glsl_text MATCHES "rgba16f\\) uniform image2D  rw_luma_history; // P\\.T\\. port, Linux")
+    message(FATAL_ERROR "FSR on Linux: the luma history patch did not apply to ${ffx_glsl_callbacks}")
+  endif()
+  set(ffx_glsl_existing "")
+  if(EXISTS "${ffx_glsl_patched}")
+    file(READ "${ffx_glsl_patched}" ffx_glsl_existing)
+  endif()
+  if(NOT ffx_glsl_existing STREQUAL ffx_glsl_text)
+    file(WRITE "${ffx_glsl_patched}" "${ffx_glsl_text}")
+  endif()
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ffx_glsl_callbacks}")
   # the arguments of the SDK's CMakeShadersFSR3Upscaler.txt and CMakeCompileFSR3UpscalerShaders.txt
   set(base -reflection -deps=gcc -DFFX_GPU=1
     -DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0 -DFFX_FSR3UPSCALER_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0
@@ -155,7 +181,7 @@ else()
     "-DFFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE={0,1}" "-DFFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT={0,1}"
     "-DFFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS={0,1}" "-DFFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS={0,1}"
     "-DFFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH={0,1}" "-DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING={0,1}"
-    "-I${gpu}" "-I${gpu}/fsr3upscaler" "-output=${gen}")
+    "-I${ffx_glsl_dir}" "-I${gpu}" "-I${gpu}/fsr3upscaler" "-output=${gen}")
   set(permutations)
   file(GLOB passes "${ffx}/sdk/src/backends/vk/shaders/fsr3upscaler/*.glsl")
   foreach(pass ${passes})
@@ -172,15 +198,19 @@ else()
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${gen}"
         COMMAND "${CMAKE_COMMAND}" -E env --modify "PATH=path_list_prepend:${glslang_dir}" -- ${pt_ffx_sc_command} ${base}
           "-name=${name}${suffix}" "-DFFX_HALF=${half}" "${pass}"
-        DEPENDS "${pass}" VERBATIM)
+        DEPENDS "${pass}" "${ffx_glsl_patched}" VERBATIM)
       list(APPEND permutations "${header}")
     endforeach()
   endforeach()
   add_custom_target(pt_ffx_fsr3upscaler_shaders DEPENDS ${permutations})
-  # The one change to AMD's code: the Vulkan backend carves its scratch memory into arrays at 4-byte steps, and its
+  # The changes to AMD's code. The Vulkan backend carves its scratch memory into arrays at 4-byte steps, and its
   # EffectContext is alignas(32). MSVC never relied on that alignment; clang stores into it with aligned SSE moves, which
   # fault where wchar_t (4 bytes here, 2 on Windows) has moved the array off a 32-byte boundary (seen in WSL1 with lavapipe:
   # movdqa in CreateBackendContextVK). The patched copy aligns that one array and reserves the padding in the size.
+  # And the upscaler picks its shaders by the device (ffx_fsr3upscaler.cpp): a subgroup size range of 32 to 64 (AMD)
+  # reprojects with the Lanczos table, float16 runs the 16-bit shaders, both of them unlike the NVIDIA path this library was
+  # checked on. PT_FSR_NO_LUT and PT_FSR_NO_FP16 make it pick the other set, for a tester whose driver draws one of them
+  # wrong (docs/upscaling.md, Linux tester checklist).
   set(ffx_vk_source "${ffx}/sdk/src/backends/vk/ffx_vk.cpp")
   set(ffx_vk_patched "${CMAKE_BINARY_DIR}/generated/ffx_linux_src/ffx_vk.cpp")
   file(READ "${ffx_vk_source}" ffx_vk_text)
@@ -194,10 +224,17 @@ else()
   string(REPLACE "                            pipelineArraySize + resourceArraySize + contextArraySize,"
     "                            pipelineArraySize + resourceArraySize + contextArraySize + alignof(BackendContext_VK::EffectContext), // P.T. port, Linux"
     ffx_vk_text "${ffx_vk_text}")
+  string(REPLACE "            deviceCapabilities->waveLaneCountMax = subgroupSizeControlProperties.maxSubgroupSize;"
+    "            deviceCapabilities->waveLaneCountMax = subgroupSizeControlProperties.maxSubgroupSize;
+            if (getenv(\"PT_FSR_NO_LUT\")) deviceCapabilities->waveLaneCountMax = deviceCapabilities->waveLaneCountMin; // P.T. port, Linux"
+    ffx_vk_text "${ffx_vk_text}")
+  string(REPLACE "            deviceCapabilities->fp16Supported = (bool)shaderFloat18Int8Features.shaderFloat16;"
+    "            deviceCapabilities->fp16Supported = (bool)shaderFloat18Int8Features.shaderFloat16 && !getenv(\"PT_FSR_NO_FP16\"); // P.T. port, Linux"
+    ffx_vk_text "${ffx_vk_text}")
   string(REGEX MATCHALL "// P\.T\. port, Linux" ffx_vk_marks "${ffx_vk_text}")
   list(LENGTH ffx_vk_marks ffx_vk_mark_count)
-  if(NOT ffx_vk_mark_count EQUAL 2)
-    message(FATAL_ERROR "FSR on Linux: the alignment patch did not apply to ${ffx_vk_source}")
+  if(NOT ffx_vk_mark_count EQUAL 4)
+    message(FATAL_ERROR "FSR on Linux: the patches did not apply to ${ffx_vk_source}")
   endif()
   set(ffx_vk_existing "")
   if(EXISTS "${ffx_vk_patched}")

@@ -116,6 +116,9 @@ def main():
         shutil.copy2(spv, resources / "shaders" / spv.name)
     copy_voice(build / "voice", resources / "voice")
     shutil.copytree(build / "fonts", resources / "fonts")
+    # the survival night's guns, pickups, reload poses and sounds (assets/survival), read from ExecutableDir() / "survival"
+    if (build / "survival").is_dir():
+        shutil.copytree(build / "survival", resources / "survival")
     # the port's data pack (src/engine/fs/data_pack.h), read from ExecutableDir(), which is Contents/Resources in the app
     if (build / "extras.pak").is_file():
         shutil.copy2(build / "extras.pak", resources / "extras.pak")

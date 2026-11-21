@@ -10,7 +10,7 @@ int main() {
     pt::vk::Context ctx;
     if (!ctx.Init(nullptr, true)) return 2;
     pt::vk::Buffer buffer;
-    constexpr uint32_t bytes = 12 * 4 * sizeof(float);
+    constexpr uint32_t bytes = 13 * 4 * sizeof(float);
     if (!ctx.CreateBuffer(buffer, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true)) return 2;
     VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -62,14 +62,14 @@ int main() {
         vkCmdPipelineBarrier2(cmd, &dep);
     });
     vmaInvalidateAllocation(ctx.allocator, buffer.allocation, 0, bytes);
-    const std::array<std::array<float, 4>, 12> expected{{
+    const std::array<std::array<float, 4>, 13> expected{{
         {0,0,0,0}, {1,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {1,0,0,0},
-        {0,0,0,0}, {1,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,1,0,1}
+        {0,0,0,0}, {1,0,0,0}, {1,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,1,0,1}, {0,0,0,0}
     }};
     const char* names[] = {"close frame blocks handheld", "anonymous lamp keeps legacy own-light pass", "alpha fitting blocks handheld",
                            "30 cm boundary blocks", "outside 30 cm blocks", "authored fixture passes its owner", "authored fixture blocks other light",
-                           "owner 63 is preserved", "handheld does not pass an authored fitting", "unmarked caster blocks", "skin fitting blocks handheld",
-                           "handheld metadata preserves authored casting"};
+                           "owner 63 is preserved", "handheld passes what carries its own fixture", "unmarked caster blocks", "skin fitting blocks handheld",
+                           "handheld metadata preserves authored casting", "handheld does not pass another fixture's fitting"};
     const auto* actual = static_cast<const float*>(buffer.mapped);
     int failures = 0;
     for (size_t i = 0; i < expected.size(); ++i) {

@@ -1,0 +1,30 @@
+# the night's radio offer taken with the mouse: the offer comes up (the night's capture step), the pointer rests on the second
+# card, which lights, then a click on the third card takes it; the click on the first card in the cards' first third of a
+# second takes nothing
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+swait 20
+sact offer
+swait 6
+sui menuclick -32.6 -2.8
+swait 54
+sui menupoint 0 -2.8
+swait 6
+sshot {shots}/survival_offer_pointer.png
+swait 4
+# the click is the fire button too: held through the card it fires nothing, let go the gun is the gun again
+sact fire+
+sui menuclick 32.6 -2.8
+swait 60
+sact fire-
+swait 10
+sact fire
+swait 30
+slog

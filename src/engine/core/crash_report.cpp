@@ -1,6 +1,8 @@
 #include "engine/platform/os.h"
 #include "engine/core/crash_report.h"
 
+#include <algorithm>
+
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -12,6 +14,7 @@
 #include <SDL3/SDL.h>
 
 #include "engine/core/log.h"
+#include "engine/core/memory_status.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -28,6 +31,8 @@ namespace {
 std::filesystem::path g_dump_dir;
 std::string g_build = "dev";
 std::string g_crash_note;
+char g_tools_note[2][512] = {};
+std::atomic<int> g_tools_note_index{-1};
 std::atomic<bool> g_exit_logged{false};
 std::atomic<int> g_dumping{0};
 
@@ -54,6 +59,33 @@ void DescribeCppException(const EXCEPTION_RECORD* record, char* out, size_t size
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         std::snprintf(out, size, " (C++ exception, unreadable)");
     }
+}
+
+const char* OutOfMemoryText() {
+    switch (PRIMARYLANGID(GetUserDefaultUILanguage())) {
+        case LANG_ARABIC: return "نفدت ذاكرة ويندوز (الذاكرة الافتراضية). أغلق البرامج الأخرى أو كبّر ملف الترحيل (page file) من إعدادات ويندوز، ثم شغّل P.T. مرة أخرى.";
+        case LANG_CZECH: return "Windows došla paměť (virtuální paměť). Zavřete ostatní programy nebo zvětšete stránkovací soubor v nastavení Windows a spusťte P.T. znovu.";
+        case LANG_CHINESE: return "Windows 内存不足（虚拟内存已用尽）。请关闭其他程序，或在 Windows 设置中增大页面文件，然后重新启动 P.T.。";
+        case LANG_FRENCH: return "Windows n’a plus de mémoire (mémoire virtuelle). Fermez d’autres programmes ou agrandissez le fichier d’échange dans les paramètres de Windows, puis relancez P.T.";
+        case LANG_GERMAN: return "Windows hat keinen Arbeitsspeicher mehr (virtueller Speicher). Schließen Sie andere Programme oder vergrößern Sie die Auslagerungsdatei in den Windows-Einstellungen und starten Sie P.T. neu.";
+        case LANG_ITALIAN: return "Windows ha esaurito la memoria (memoria virtuale). Chiudi altri programmi o ingrandisci il file di paging nelle impostazioni di Windows, poi riavvia P.T.";
+        case LANG_JAPANESE: return "Windows のメモリ（仮想メモリ）が不足しています。他のプログラムを閉じるか、Windows の設定でページファイルを大きくしてから、P.T. をもう一度起動してください。";
+        case LANG_POLISH: return "Systemowi Windows zabrakło pamięci (pamięci wirtualnej). Zamknij inne programy lub powiększ plik stronicowania w ustawieniach Windows, a następnie uruchom P.T. ponownie.";
+        case LANG_PORTUGUESE: return "O Windows ficou sem memória (memória virtual). Feche outros programas ou aumente o arquivo de paginação nas configurações do Windows e inicie o P.T. novamente.";
+        case LANG_RUSSIAN: return "В Windows закончилась память (виртуальная память). Закройте другие программы или увеличьте файл подкачки в настройках Windows и запустите P.T. снова.";
+        case LANG_SPANISH: return "Windows se ha quedado sin memoria (memoria virtual). Cierra otros programas o aumenta el archivo de paginación en la configuración de Windows y vuelve a iniciar P.T.";
+        case LANG_TURKISH: return "Windows’un belleği (sanal bellek) tükendi. Diğer programları kapatın veya Windows ayarlarından sayfa dosyasını büyütün, sonra P.T.’yi yeniden başlatın.";
+        case LANG_UKRAINIAN: return "У Windows закінчилася пам’ять (віртуальна пам’ять). Закрийте інші програми або збільште файл підкачки в налаштуваннях Windows і запустіть P.T. знову.";
+        default: return "Windows has run out of memory (virtual memory). Close other programs or enlarge the page file in Windows settings, then start P.T. again.";
+    }
+}
+
+void TellOutOfMemory(const char* thrown) {
+    if (!std::strstr(thrown, "bad_alloc")) return;
+    if (QuerySystemMemory().commit_headroom_mb > 400.0) return;
+    const char* driver = SDL_GetCurrentVideoDriver();
+    if (!driver || !std::strcmp(driver, "offscreen") || !std::strcmp(driver, "dummy")) return;
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", OutOfMemoryText(), nullptr);
 }
 
 LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* info) {
@@ -84,6 +116,7 @@ LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* info) {
         WriteCrashDump(reason, info);
     }
     LogExit(static_cast<int>(info->ExceptionRecord->ExceptionCode), "crash");
+    TellOutOfMemory(thrown);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -258,6 +291,7 @@ std::filesystem::path WriteCrashDumpFor(const char* reason, void* exception_poin
     const std::filesystem::path path = WriteDumpFile("", exception_pointers, thread_id);
     LogError("crash: {}, dump {}", reason, path.empty() ? std::string("not written") : pt::os::PathToUtf8(path));
     if (!g_crash_note.empty()) LogError("crash: {}", g_crash_note);
+    if (const int tools = g_tools_note_index.load(); tools >= 0 && g_tools_note[tools][0]) LogError("crash: third party: {}", g_tools_note[tools]);
     return path;
 }
 
@@ -301,6 +335,14 @@ bool ExitLogged() {
 
 void SetCrashNote(const std::string& note) {
     g_crash_note = note;
+}
+
+void SetThirdPartyNote(const std::string& tools) {
+    const int next = g_tools_note_index.load() == 0 ? 1 : 0;
+    const size_t n = std::min(tools.size(), sizeof(g_tools_note[next]) - 1);
+    std::memcpy(g_tools_note[next], tools.data(), n);
+    g_tools_note[next][n] = '\0';
+    g_tools_note_index.store(next);
 }
 
 void FatalError(const std::string& reason, bool show_message, int code) {

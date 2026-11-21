@@ -37,6 +37,11 @@ public:
     const ModelEntry* Get(const std::string& path, FmdlModel* parsed = nullptr);
     const ModelEntry* GetSubset(const std::string& path, const std::string& key, const std::function<bool(const Vertex&)>& keep,
                                 const std::function<void(Vertex&)>& transform = {});
+    using MaterialKeep = std::function<bool(const Vertex&, const FmdlMaterial&)>;
+    using MaterialTransform = std::function<void(Vertex&, const FmdlMaterial&)>;
+    const ModelEntry* GetSubsetByMaterial(const std::string& path, const std::string& key, const MaterialKeep& keep,
+                                          const MaterialTransform& transform = {});
+    const ModelEntry* GetRebuilt(const std::string& path, const std::string& key, const std::function<void(MeshData&)>& rebuild);
     std::unordered_set<std::string> Paths() const;
     void Clear();
     class StageScope {
@@ -68,8 +73,8 @@ public:
     TextureManager& Textures() { return textures_; }
 
 private:
-    const ModelEntry* Load(const std::string& path, const std::string& key, const std::function<bool(const Vertex&)>* keep,
-                           FmdlModel* parsed, const std::function<void(Vertex&)>* transform = nullptr);
+    const ModelEntry* Load(const std::string& path, const std::string& key, const MaterialKeep* keep, FmdlModel* parsed,
+                           const MaterialTransform* transform = nullptr, const std::function<void(MeshData&)>* rebuild = nullptr);
     uint32_t LoadTexture(const std::string& path, uint32_t fallback = TextureManager::kWhite, bool raw = false);
     MaterialGpu BuildMaterial(const FmdlMaterial& material, uint32_t alpha_flags);
     bool ViewReflection(const FmdlMaterial& material);

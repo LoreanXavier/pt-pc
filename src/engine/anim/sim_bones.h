@@ -27,6 +27,8 @@ private:
         int bones[4]{-1, -1, -1, -1};
         glm::vec3 rest_pos[4]{};
         glm::vec3 rest_local_to_chest[4]{};
+        glm::vec3 rest_local_to_waist[4]{};
+        float waist_share[4]{0.0f, 0.0f, 0.0f, 0.0f};
         float lengths[3]{0.0f, 0.0f, 0.0f};
         glm::vec3 pos[4]{};
         glm::vec3 prev_pos[4]{};

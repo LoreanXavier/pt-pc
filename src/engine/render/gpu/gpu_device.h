@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -20,6 +21,7 @@ public:
 
     virtual bool CreateImage(const ImageDesc& desc, ImageResource& out) = 0;
     virtual void DestroyImage(ImageResource& image) = 0;
+    uint64_t ImageDestroyCount() const { return image_destroys_.load(std::memory_order_relaxed); }
     virtual bool CreateBuffer(const BufferDesc& desc, BufferResource& out) = 0;
     virtual void DestroyBuffer(BufferResource& buffer) = 0;
     virtual void FlushMapped(const BufferResource& buffer, uint64_t offset, uint64_t size) {
@@ -89,6 +91,12 @@ public:
     virtual bool EndFrame(uint32_t slot, RenderTarget* final_image) = 0;
 
     virtual bool ReadImage(RenderTarget& image, std::vector<uint8_t>& out) = 0;
+
+protected:
+    void NoteImageDestroyed() { image_destroys_.fetch_add(1, std::memory_order_relaxed); }
+
+private:
+    std::atomic<uint64_t> image_destroys_{0};
 };
 
 inline bool UploadBuffer(Device& device, BufferResource& dst, const void* data, uint64_t size) {

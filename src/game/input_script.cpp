@@ -244,6 +244,8 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "archiveshown", c.args.empty() ? 3600 : static_cast<int>(arg(0))});
         } else if (c.op == "sloop") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "browse_loop", static_cast<int>(arg(0))});
+        } else if (c.op == "snight") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "browse_night", static_cast<int>(arg(0))});
         } else if (c.op == "sbrowsed" || c.op == "sfade") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, c.op.substr(1), c.args.empty() ? 3600 : static_cast<int>(arg(0))});
         } else if (c.op == "sat") {
@@ -258,6 +260,12 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "gamestep", 0, c.text});
         } else if (c.op == "sstreet") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "street"});
+        } else if (c.op == "sact") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "act", 0, c.text});
+        } else if (c.op == "ssurvival") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "survival"});
+        } else if (c.op == "sviewbody") {
+            waypoints_.push_back({glm::vec3(0.0f), false, false, "viewbody", static_cast<int>(arg(0))});
         } else if (c.op == "sbody") {
             Waypoint item{glm::vec3(0.0f), false, false, "body", static_cast<int>(arg(0))};
             item.text = c.words.empty() ? std::string() : c.words.front();
@@ -356,6 +364,10 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "freecam", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sneural") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "neural", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
+        } else if (c.op == "sorbit") {
+            Waypoint item{glm::vec3(0.0f), false, false, "orbit", 0, c.text};
+            item.extra = glm::vec4(arg(0), arg(1), c.text == "off" ? 0.0f : arg(2), c.args.size() > 3 ? arg(3) : 0.6f);
+            waypoints_.push_back(item);
         } else if (c.op == "sthird") {
             waypoints_.push_back({glm::vec3(0.0f), false, false, "third", static_cast<int>(c.args.empty() ? 1.0f : arg(0))});
         } else if (c.op == "sstate") {
@@ -425,7 +437,7 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         const glm::vec3 aim = game.HandyAim();
         glm::vec3 handy_position(0.0f);
         glm::vec3 handy_direction(0.0f);
-        HandyLightPose(camera, aim, game.HandyPickupHold(), game.HandyDemoPose(), handy_position, handy_direction);
+        HandyLightPose(camera, aim, game.HandyPickupHold(), game.HandyDemoPose(), handy_position, handy_direction, nullptr, nullptr, game.HandyBreath());
         const glm::vec2 stick = game.GetPlayer().LightStick();
         LogInfo("input script trace {}: camera ({:.4f} {:.4f} {:.4f}) yaw {:.3f} pitch {:.3f} roll {:.3f} feet ({:.4f} {:.4f} {:.4f}) vfov {:.3f} "
                 "light aim ({:.4f} {:.4f} {:.4f}) origin ({:.4f} {:.4f} {:.4f}) dir ({:.5f} {:.5f} {:.5f}) stick ({:.3f} {:.3f}) demos{}",
@@ -532,6 +544,13 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             }
         } else if (item.op == "street") {
             game.StartStreetWalk();
+        } else if (item.op == "survival") {
+            game.StartSurvival();
+        } else if (item.op == "act") {
+            game.SurvivalAct(item.text);
+        } else if (item.op == "viewbody") {
+            game.SetShowBody(item.frames != 0);
+            game.SetDetachedView(item.frames != 0);
         } else if (item.op == "offer") {
             game.OfferStreetWalk();
         } else if (item.op == "credits") {
@@ -554,7 +573,7 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             continue;
         } else if (item.op == "face_lisa") {
             Face(game, glm::vec3(game.Objects().Ocho().World()[3]) + glm::vec3(0.0f, 1.5f, 0.0f));
-        } else if (item.op == "browse_loop" || item.op == "browsed" || item.op == "fade" || item.op == "at") {
+        } else if (item.op == "browse_loop" || item.op == "browse_night" || item.op == "browsed" || item.op == "fade" || item.op == "at") {
             if (BrowseWait(game, item)) {
                 break;
             }
@@ -598,6 +617,14 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
             game.RequestFreeCamera(item.frames != 0);
         } else if (item.op == "neural") {
             game.RequestNeuralRendering(std::clamp(item.frames, 0, 3));
+        } else if (item.op == "orbit") {
+            game.SetThirdOrbit(item.extra);
+            if (static const bool trace = std::getenv("PT_ORBIT_TRACE") != nullptr; trace) {
+                const glm::vec3 front = glm::vec3(game.GetPlayer().PoseTransform() * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+                LogInfo("input script: orbit {:.0f} {:.0f} {:.2f} {:.2f}: view yaw {:.1f}, drawn camera yaw {:.1f}, body yaw {:.1f}, the pose's front as a yaw {:.1f}", item.extra.x,
+                        item.extra.y, item.extra.z, item.extra.w, glm::degrees(game.GetPlayer().yaw), glm::degrees(game.ViewCamera(true).yaw),
+                        glm::degrees(game.GetPlayer().BodyFoxYaw()), glm::degrees(std::atan2(-front.x, -front.z)));
+            }
         } else if (item.op == "third") {
             game.SetThirdPerson(item.frames != 0);
         } else if (item.op == "state") {
@@ -1259,6 +1286,9 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const int index = static_cast<int>(arg(0));
         ok = game.BrowseUnlocked(index) == (arg(1) != 0.0f);
         got = std::format("loop browser entry {} {}", index, game.BrowseUnlocked(index) ? "unlocked" : "locked");
+    } else if (what == "night") {
+        ok = game.NightUnlocked() == (arg(0) != 0.0f);
+        got = std::format("survival night {}{}", game.NightUnlocked() ? "unlocked" : "locked", game.NightUnlockKept() ? ", kept" : "");
     } else if (what == "gameplustier") {
         ok = game.GamePlusTier() == static_cast<int>(arg(0));
         got = std::format("game+ tier {}", game.GamePlusTier());
@@ -1266,6 +1296,11 @@ bool InputScript::Expect(const std::vector<std::string>& words, const std::vecto
         const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
         ok = GameUi::Active() && !row;
         got = std::format("PC setting {} {}", word(1), row ? "present" : "absent");
+    } else if (what == "pcabsentvalue") {
+        const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
+        const bool listed = row && std::find(row->values.begin(), row->values.end(), word(2)) != row->values.end();
+        ok = row && !listed;
+        got = std::format("PC setting {} {} {}", word(1), listed ? "lists" : "does not list", word(2));
     } else if (what == "pcvaluekey") {
         const PcSettingRow* row = GameUi::Active() ? GameUi::Active()->Menu().PcPage().FindRow(word(1)) : nullptr;
         const std::string key = row && row->value >= 0 && row->value < static_cast<int>(row->values.size()) ? row->values[row->value] : std::string("missing");
@@ -1511,9 +1546,10 @@ static float WaitClock() {
 bool InputScript::BrowseWait(Game& game, Waypoint& item) {
     if (item.extra.y == 0.0f) item.extra.y = WaitClock() + 1.0e-3f;
     const float waited = WaitClock() - item.extra.y;
-    if (item.op == "browse_loop") {
+    if (item.op == "browse_loop" || item.op == "browse_night") {
         if (item.text.empty() || item.text == "refused") {
-            const bool picked = game.BrowseLoop(item.frames);
+            if (item.op == "browse_night") game.SetSurvivalDifficulty(item.frames);
+            const bool picked = item.op == "browse_night" ? game.BrowseSurvival() : game.BrowseLoop(item.frames);
             if (!picked && (++item.extra.x < 1200.0f || waited < 60.0f)) {
                 item.text = "refused";
                 return true;
@@ -1645,7 +1681,7 @@ void InputScript::ApplyBot(uint64_t frame, Game& game, const InputState& input) 
             const glm::vec3 lisa(game.Objects().Ocho().World()[3]);
             LogInfo("input script: Lisa {} (state {}, spawn {}) at ({:.2f} {:.2f} {:.2f})", game.Objects().Ocho().Visible() ? "visible" : "not seen",
                     game.Objects().Ocho().State(), game.Objects().Ocho().SpawnIndex(), lisa.x, lisa.y, lisa.z);
-        } else if (op == "browse_loop" || op == "browsed" || op == "fade" || op == "at") {
+        } else if (op == "browse_loop" || op == "browse_night" || op == "browsed" || op == "fade" || op == "at") {
             if (BrowseWait(game, item)) {
                 break;
             }

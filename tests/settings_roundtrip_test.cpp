@@ -35,7 +35,7 @@ bool Same(const pt::AppSettings& a, const pt::AppSettings& b) {
            a.upscaling.frame_generation == b.upscaling.frame_generation && a.upscaling.dlssg_multiplier == b.upscaling.dlssg_multiplier && a.upscaling.ray_reconstruction == b.upscaling.ray_reconstruction &&
            a.upscaling.neural_model == b.upscaling.neural_model && a.upscaling.neural_quality == b.upscaling.neural_quality &&
            Near(a.upscaling.neural_intensity, b.upscaling.neural_intensity) &&
-           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr && a.accessibility == b.accessibility;
+           a.ray_tracing == b.ray_tracing && a.graphics == b.graphics && a.mods == b.mods && a.vr == b.vr && a.accessibility == b.accessibility && a.progress == b.progress;
 }
 
 pt::AppSettings RoundTrip(const std::filesystem::path& path, const pt::AppSettings& s) {
@@ -146,6 +146,19 @@ int main(int argc, char** argv) {
         {"graphics.motion_blur", [](auto& s) { s.graphics.motion_blur = false; }},
         {"graphics.lens_distortion", [](auto& s) { s.graphics.lens_distortion = false; }},
         {"graphics.lens_ghosts", [](auto& s) { s.graphics.lens_ghosts = false; }},
+        {"graphics.bloom_strength", [](auto& s) { s.graphics.bloom_strength = 75; }},
+        {"graphics.flare_strength", [](auto& s) { s.graphics.flare_strength = 10; }},
+        {"graphics.ghost_strength", [](auto& s) { s.graphics.ghost_strength = 5; }},
+        {"graphics.camera_motion_blur", [](auto& s) { s.graphics.camera_motion_blur = false; }},
+        {"graphics.film_grain_type", [](auto& s) { s.graphics.film_grain_type = 1; }},
+        {"graphics.pt_floor_reflection", [](auto& s) { s.graphics.pt_floor_reflection = 60; }},
+        {"graphics.pt_glass_reflection", [](auto& s) { s.graphics.pt_glass_reflection = 40; }},
+        {"graphics.pt_reflection_softness", [](auto& s) { s.graphics.pt_reflection_softness = 15; }},
+        {"display.hdr_exposure", [](auto& s) { s.display.hdr_exposure = -7; }},
+        {"display.hdr_saturation", [](auto& s) { s.display.hdr_saturation = 150; }},
+        {"display.hdr_blowout", [](auto& s) { s.display.hdr_blowout = 40; }},
+        {"display.hdr_see_through", [](auto& s) { s.display.hdr_see_through = false; }},
+        {"display.hdr_windows_switch", [](auto& s) { s.display.hdr_windows_switch = true; }},
         {"graphics.deband", [](auto& s) { s.graphics.deband = true; }},
         {"graphics.film_grain", [](auto& s) { s.graphics.film_grain = 0.75f; }},
         {"graphics.clarity", [](auto& s) { s.graphics.clarity = 0.4f; }},
@@ -154,6 +167,9 @@ int main(int argc, char** argv) {
         {"graphics.ray_quality ultra", [](auto& s) { s.graphics.ray_quality = 3; }},
         {"graphics.ray_quality path traced", [](auto& s) { s.graphics.ray_quality = 4; }},
         {"accessibility.sound_captions", [](auto& s) { s.accessibility.sound_captions = true; }},
+        {"accessibility.house_sprint", [](auto& s) { s.accessibility.house_sprint = true; }},
+        {"progress.survival_announced", [](auto& s) { s.progress.survival_announced = true; }},
+        {"game.survival_difficulty insanity", [](auto& s) { s.game.survival_difficulty = 4; }},
         {"accessibility.gyro camera", [](auto& s) { s.accessibility.gyro = 1; }},
         {"accessibility.gyro flashlight", [](auto& s) { s.accessibility.gyro = 2; s.accessibility.gyro_sensitivity = 2.0f; }},
         {"accessibility.gyro_tightening", [](auto& s) { s.accessibility.gyro_tightening = 7.5f; }},

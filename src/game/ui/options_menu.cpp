@@ -1,6 +1,7 @@
 #include "game/ui/options_menu.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <iterator>
 #include <string>
@@ -58,6 +59,7 @@ constexpr glm::vec2 kEntryAt{32.0f, -26.0f};
 constexpr glm::vec2 kButtonBarShift{3.0f, 0.0f};
 constexpr glm::vec2 kEntryBarShift{-15.5f, 0.0f};
 constexpr float kStreetReturnY = -24.0f;
+constexpr float kCrosshairY = -21.0f;
 constexpr float kSwitchOut = 9.0f;
 constexpr float kSwitchIn = 13.0f;
 constexpr const char* kChangeSound = "Play_sys_change_01";
@@ -99,6 +101,8 @@ MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t
     out.donate = (input.menu_keys_pressed & kMenuKeyDonate) != 0;
     out.update = (input.menu_keys_pressed & kMenuKeyUpdate) != 0;
     out.street_return = (input.raw_pressed & kRawL1) != 0 || input.house_pressed;
+    out.crosshair = (input.raw_pressed & kRawL3) != 0 || (input.menu_keys_pressed & kMenuKeyCrosshair) != 0;
+    out.survival_promo = (input.raw_pressed & kRawR2) != 0 || (input.menu_keys_pressed & kMenuKeySurvival) != 0;
     out.held_dirs = input.raw_held & (kRawUp | kRawDown | kRawLeft | kRawRight);
     const auto stick = [&](float v, uint32_t positive, uint32_t negative) {
         const float on = 0.5f;
@@ -109,9 +113,14 @@ MenuInput MapMenuInput(const InputState& input, uint32_t previous_held, uint32_t
     stick(input.left_stick.y, kRawUp, kRawDown);
     stick(input.left_stick.x, kRawRight, kRawLeft);
     out.click = input.click;
+    out.pointer_held = input.click_held;
     out.right_click = input.right_click;
     out.wheel = input.wheel;
     out.music = input.music_pressed;
+    out.right_stick = input.right_stick;
+    out.armory_tab = (input.menu_keys_pressed & kMenuKeyArmoryTab) != 0 || (input.raw_pressed & (kRawL2 | kRawR2)) != 0;
+    out.armory_replay = (input.menu_keys_pressed & kMenuKeyArmoryReplay) != 0 || (input.raw_pressed & kRawSquare) != 0;
+    out.armory_apply_all = (input.menu_keys_pressed & kMenuKeyArmoryApplyAll) != 0 || (input.raw_pressed & kRawTriangle) != 0;
     return out;
 }
 
@@ -125,6 +134,46 @@ bool OptionsMenu::Init(UiAssets& assets) {
     const bool icons = assets.BuildPcIcons();
     const int icon_atlas = icons ? derived_->AddTexture(kPcIconAtlas) : -1;
     const int icon_glow = icons ? derived_->AddTexture(kPcIconGlow) : -1;
+    if (const ui::UifNode* bar81 = derived_->FindById(81); bar81 && !bar81->positions.empty()) {
+        float lo = bar81->positions.front().x, hi = lo;
+        for (const glm::vec2& v : bar81->positions) {
+            lo = std::min(lo, v.x);
+            hi = std::max(hi, v.x);
+        }
+        bar_half_ = std::max(0.5f, (hi - lo) * bar81->size.x * 0.5f);
+    }
+    auto button_bar = [&](uint16_t parent_id, glm::vec2 pos, std::string_view name) {
+        ui::UifNode node = *derived_->FindById(80);
+        node.parent = derived_->IndexOfId(parent_id);
+        node.translate = glm::vec4(pos, 0.0f, 0.0f);
+        const uint16_t id = derived_->AddNode(std::move(node), StrCode64(std::format("option_{}_bar", name)));
+        ui::UifNode image = *derived_->FindById(81);
+        image.parent = derived_->IndexOfId(id);
+        image.translate.x = 0.0f;
+        image.translate.y = 0.0f;
+        derived_->AddNode(std::move(image), StrCode64(std::format("option_{}_bar_image", name)));
+        return id;
+    };
+    quit_bar_ = button_bar(kContent, {-22.0f + kButtonBarShift.x, -27.0f}, "quit");
+    street_bar_ = button_bar(kContent, {-22.0f + kButtonBarShift.x, kStreetReturnY}, "street");
+    crosshair_bar_ = button_bar(kContent, {-22.0f + kButtonBarShift.x, kCrosshairY}, "crosshair");
+    auto in_content = [&](uint16_t id) -> glm::vec2 {
+        glm::vec2 pos(0.0f);
+        int idx = derived_->IndexOfId(id);
+        const int content_idx = derived_->IndexOfId(kContent);
+        while (idx >= 0 && idx != content_idx) {
+            const ui::UifNode& n = derived_->Nodes()[idx];
+            pos += glm::vec2(n.translate);
+            idx = n.parent;
+        }
+        return pos;
+    };
+    const glm::vec2 sub_pos = in_content(kSubtitleLabel);
+    const glm::vec2 title_pos = in_content(kTitle);
+    const float promo_x = sub_pos.x;
+    const float promo_title_y = title_pos.y + 3.2f;
+    const float promo_action_y = promo_title_y - 2.7f;
+    promo_bar_ = button_bar(kContent, {promo_x + kButtonBarShift.x, promo_action_y}, "promo");
     BuildEntryRow(*derived_, icon_atlas, icon_glow);
     ui::UifNode quit = *derived_->FindById(kBack);
     quit.parent = derived_->IndexOfId(kContent);
@@ -136,18 +185,41 @@ bool OptionsMenu::Init(UiAssets& assets) {
     street.translate.x = -22.0f;
     street.translate.y = kStreetReturnY;
     street_label_ = derived_->AddNode(std::move(street), StrCode64("option_street_return"));
-    auto prompt_node = [&](uint16_t id, float y, std::string_view name) {
+    ui::UifNode crosshair = *derived_->FindById(kBack);
+    crosshair.parent = derived_->IndexOfId(kContent);
+    crosshair.translate.x = -22.0f;
+    crosshair.translate.y = kCrosshairY;
+    crosshair_label_ = derived_->AddNode(std::move(crosshair), StrCode64("option_crosshair"));
+    ui::UifNode promo_title = *derived_->FindById(kBrightnessLabel);
+    promo_title.parent = derived_->IndexOfId(kContent);
+    promo_title.translate = glm::vec4(promo_x, promo_title_y, 0.0f, 0.0f);
+    promo_title.size.x = std::max(promo_title.size.x, 420.0f);
+    promo_title_ = derived_->AddNode(std::move(promo_title), StrCode64("option_promo_title"));
+    ui::UifNode promo_line = *derived_->FindById(74);
+    promo_line.parent = derived_->IndexOfId(kContent);
+    promo_line.translate = glm::vec4(promo_x + 16.0f, promo_title_y - 1.0f, 0.0f, 0.0f);
+    promo_line_ = derived_->AddNode(std::move(promo_line), StrCode64("option_promo_line"));
+    ui::UifNode promo_action = *derived_->FindById(kBack);
+    promo_action.parent = derived_->IndexOfId(kContent);
+    promo_action.translate = glm::vec4(promo_x, promo_action_y, 0.0f, 0.0f);
+    promo_action.size.x = std::max(promo_action.size.x, 360.0f);
+    promo_action_ = derived_->AddNode(std::move(promo_action), StrCode64("option_promo_action"));
+    auto prompt_node_at = [&](uint16_t id, float x, float y, std::string_view name) {
         ui::UifNode node = *derived_->FindById(id);
         const ui::UifNode& back_text = *derived_->FindById(kBack);
         node.parent = derived_->IndexOfId(kContent);
-        node.translate.x = -22.0f + (node.translate.x - back_text.translate.x);
+        node.translate.x = x + (node.translate.x - back_text.translate.x);
         node.translate.y = y + (node.translate.y - back_text.translate.y);
         return derived_->AddNode(std::move(node), StrCode64(name));
     };
-    quit_icon_ = prompt_node(kBackIcon, -27.0f, "option_quit_icon");
-    quit_glow_ = prompt_node(kBackGlow, -27.0f, "option_quit_glow");
-    street_icon_ = prompt_node(kBackIcon, kStreetReturnY, "option_street_icon");
-    street_glow_ = prompt_node(kBackGlow, kStreetReturnY, "option_street_glow");
+    quit_icon_ = prompt_node_at(kBackIcon, -22.0f, -27.0f, "option_quit_icon");
+    quit_glow_ = prompt_node_at(kBackGlow, -22.0f, -27.0f, "option_quit_glow");
+    street_icon_ = prompt_node_at(kBackIcon, -22.0f, kStreetReturnY, "option_street_icon");
+    street_glow_ = prompt_node_at(kBackGlow, -22.0f, kStreetReturnY, "option_street_glow");
+    crosshair_icon_ = prompt_node_at(kBackIcon, -22.0f, kCrosshairY, "option_crosshair_icon");
+    crosshair_glow_ = prompt_node_at(kBackGlow, -22.0f, kCrosshairY, "option_crosshair_glow");
+    promo_icon_ = prompt_node_at(kBackIcon, promo_x, promo_action_y, "option_promo_icon");
+    promo_glow_ = prompt_node_at(kBackGlow, promo_x, promo_action_y, "option_promo_glow");
     const ui::UifNode row_template = *derived_->FindById(120);
     const ui::UifNode label_template = *derived_->FindById(121);
     for (int i = 0; i <= UiAssets::kLanguageCount; ++i) {
@@ -170,22 +242,10 @@ bool OptionsMenu::Init(UiAssets& assets) {
     bar_image.translate.x = 0.0f;
     bar_image.translate.y = 0.0f;
     derived_->AddNode(std::move(bar_image), StrCode64("option_language_bar_image"));
-    auto button_bar = [&](uint16_t label, glm::vec2 centre, std::string_view name) {
-        ui::UifNode node = *derived_->FindById(80);
-        const ui::UifNode& text = *derived_->FindById(label);
-        node.parent = text.parent;
-        node.translate = glm::vec4(glm::vec2(text.translate) + centre, 0.0f, 0.0f);
-        const uint16_t id = derived_->AddNode(std::move(node), StrCode64(std::format("option_{}_bar", name)));
-        ui::UifNode image = *derived_->FindById(81);
-        image.parent = derived_->IndexOfId(id);
-        image.translate.x = 0.0f;
-        image.translate.y = 0.0f;
-        derived_->AddNode(std::move(image), StrCode64(std::format("option_{}_bar_image", name)));
-        return id;
-    };
-    entry_bar_ = button_bar(entry_label_, kEntryBarShift, "entry");
-    back_bar_ = button_bar(kBack, kButtonBarShift, "back");
-    quit_bar_ = button_bar(quit_label_, kButtonBarShift, "quit");
+    const ui::UifNode& entry_text_node = *derived_->FindById(entry_label_);
+    entry_bar_ = button_bar(entry_group_, glm::vec2(entry_text_node.translate) + kEntryBarShift, "entry");
+    const ui::UifNode& back_text_node = *derived_->FindById(kBack);
+    back_bar_ = button_bar(kContent, glm::vec2(back_text_node.translate) + kButtonBarShift, "back");
     pc_.Build(*derived_, icon_atlas, icon_glow);
     prompt_nodes_ = {
         {kBrightnessIcon, kBrightnessGlow, {PromptButton::DpadLeftRight, KeyAction::PadLeft, KeyAction::PadRight}},
@@ -197,6 +257,8 @@ bool OptionsMenu::Init(UiAssets& assets) {
         {pc_.BackIcon(), pc_.BackGlow(), {PromptButton::Circle, KeyAction::Menu, KeyAction::Menu}},
         {quit_icon_, quit_glow_, {PromptButton::R1, KeyAction::MenuQuit, KeyAction::MenuQuit}},
         {street_icon_, street_glow_, {PromptButton::L1, KeyAction::MenuHouse, KeyAction::MenuHouse}},
+        {crosshair_icon_, crosshair_glow_, {PromptButton::L3, KeyAction::MenuCrosshair, KeyAction::MenuCrosshair}},
+        {promo_icon_, promo_glow_, {PromptButton::R2, KeyAction::MenuSurvival, KeyAction::MenuSurvival}},
     };
     root_null_hash_ = static_cast<uint32_t>(derived_->Names()[kRootNull]);
     model_ = derived_.get();
@@ -307,12 +369,30 @@ void OptionsMenu::ApplyPages() {
     }
     view_.State(kContent).visible = original > 0.0f;
     view_.State(kContent).color_scale.a = original;
-    view_.State(pc_.Root()).visible = pc > 0.0f && !pc_.IsQuestion();
+    view_.State(pc_.Root()).visible = pc > 0.0f && !pc_.IsQuestion() && !pc_.ScreenShown() &&
+                                      !(pc_source_ && (pc_source_->IsArmory() || pc_source_->IsNightHub()));
+    const bool see_through = page_ == Page::Pc && pc_.SeeThrough();
+    for (const uint16_t id : {uint16_t{2}, uint16_t{37}, uint16_t{155}, uint16_t{158}}) {
+        if (see_through) {
+            view_.State(id).color_scale.a = 0.0f;
+        } else if (see_through_) {
+            view_.State(id).color_scale.a = 1.0f;
+        }
+    }
+    see_through_ = see_through;
     view_.State(pc_.Root()).color_scale.a = pc;
     view_.State(entry_group_).visible = pc_source_ != nullptr;
     view_.State(street_label_).visible = street_shown_;
     view_.State(street_icon_).visible = street_shown_;
     view_.State(street_glow_).visible = street_shown_;
+    view_.State(crosshair_label_).visible = crosshair_shown_;
+    view_.State(crosshair_icon_).visible = crosshair_shown_;
+    view_.State(crosshair_glow_).visible = crosshair_shown_;
+    view_.State(promo_title_).visible = false;
+    view_.State(promo_line_).visible = false;
+    view_.State(promo_action_).visible = false;
+    view_.State(promo_icon_).visible = false;
+    view_.State(promo_glow_).visible = false;
     view_.State(entry_label_).text = std::string(PcText("pc_entry", text_language_));
     if (page_ == Page::Pc || next_page_ == Page::Pc) {
         pc_.SetMeasure(view_, text_language_);
@@ -490,6 +570,15 @@ void OptionsMenu::ApplyTexts() {
     view_.State(street_label_).font_type = UiFontType::PcSystem;
     view_.State(street_label_).text = std::string(PcText(leave_date_ ? "pc_lisa_date_leave" : "pc_street_return", text_language_));
     view_.State(street_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, street_confirming_ ? 1.0f : .65f);
+    view_.State(crosshair_label_).font_type = UiFontType::PcSystem;
+    view_.State(crosshair_label_).text = std::string(PcText("pc_crosshair", text_language_));
+    view_.State(crosshair_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, .65f);
+    view_.State(promo_title_).font_type = UiFontType::PcSystem;
+    view_.State(promo_title_).text = std::string(PcText("pc_survival_promo_tag", text_language_)) + ": " + std::string(PcText("pc_survival", text_language_));
+    view_.State(promo_title_).color = glm::vec4(1.0f, 1.0f, 1.0f, 0.95f);
+    view_.State(promo_action_).font_type = UiFontType::PcSystem;
+    view_.State(promo_action_).text = std::string(PcText("pc_survival_promo_play", text_language_));
+    view_.State(promo_action_).color = glm::vec4(1.0f, 1.0f, 1.0f, 0.85f);
     set(kBrightnessLabel, "op_brightness_setting");
     set(kTip, "op_britness_tip");
     view_.State(kTip).mirror_rtl = true;
@@ -526,6 +615,13 @@ void OptionsMenu::Show(Game& game, bool first_boot, Page page) {
     quit_focused_ = false;
     leave_date_ = game.LisaDateActive();
     street_shown_ = game.StreetWalkActive() || leave_date_;
+    crosshair_shown_ = game.SurvivalActive() && !leave_date_;
+    survival_promo_shown_ = !first_boot && pc_source_ && pc_source_->SurvivalPromoDue() && !game.SurvivalActive() && !leave_date_;
+    survival_promo_seen_ = false;
+    survival_locked_confirming_ = false;
+    promo_toast_t_ = 0.0f;
+    armory_view_.Reset();
+    night_hub_view_.Reset();
     street_confirming_ = false;
     street_return_ = false;
     float zoom_frame[2] = {-1.0f, -1.0f};
@@ -534,7 +630,6 @@ void OptionsMenu::Show(Game& game, bool first_boot, Page page) {
         zoom_frame[0] = players_.PlayingFrame(zoom_in->main);
         zoom_frame[1] = players_.PlayingFrame(zoom_in->shader);
     }
-    close_pending_ = false;
     resume_ = false;
     resume_sent_ = false;
     first_boot_ = first_boot;
@@ -575,6 +670,11 @@ void OptionsMenu::CancelPhotoZoom() {
 
 void OptionsMenu::Close() {
     if (state_ == State::SetIn || state_ == State::Active) {
+        if (survival_promo_seen_ && pc_source_) {
+            pc_source_->DismissSurvivalPromo();
+            survival_promo_shown_ = false;
+            survival_promo_seen_ = false;
+        }
         if (page_ == Page::Pc && pc_source_) pc_source_->Closed();
         resume_ = resume_ || !resume_sent_;
         resume_sent_ = true;
@@ -622,38 +722,109 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
         switch_frame_ = -1.0f;
     }
     const bool switching = switch_frame_ >= 0.0f;
-    if (state_ == State::SetIn && input.close && page_ == Page::Original && !switching) {
-        close_pending_ = true;
-        resume_ = resume_ || !resume_sent_;
-        resume_sent_ = true;
-    }
-    if (state_ == State::SetIn && !Playing("UI_sys_opt_setin")) {
+    if (state_ == State::SetIn && (!Playing("UI_sys_opt_setin") || ShownAlpha() >= 0.999f)) {
         state_ = State::Active;
     }
-    {
-        const bool shown = page_ == Page::Original && state_ == State::Active && !switching;
-        if (!shown) hovered_ = Button::None;
-        const float flash = SelectionFlash(hover_frame_);
-        for (const auto& [bar, button] : {std::pair{entry_bar_, Button::PcSettings}, std::pair{back_bar_, Button::Back}, std::pair{quit_bar_, Button::Quit}}) {
-            view_.State(bar).visible = shown && hovered_ == button;
-            view_.State(bar).color = glm::vec4(1.0f, 1.0f, 1.0f, flash);
-        }
-    }
-    if (state_ == State::Active && !switching) {
+    const bool taking_input = (state_ == State::Active || state_ == State::SetIn) && !switching;
+    if (taking_input) {
         if (page_ == Page::Pc) {
-            const auto result = pc_.Update(game, input, dt);
-            if(game.ProgressResetPending() || game.LoopReloadPending()) { Commit(game); Close(); }
-            if (result == PcSettingsPage::Result::Quit) {
-                Commit(game);
-                game.RequestOptionsSave();
-                LogInfo("ui: quit selected from PC settings");
-                game.RequestQuit();
-            } else if (result == PcSettingsPage::Result::Back) {
-                SwitchPage(game, Page::Original);
+            if (pc_source_ && pc_source_->IsArmory()) {
+                const auto ares = armory_view_.Update(game, *pc_source_, input, dt);
+                if (ares == ArmoryView::Result::Back) {
+                    pc_source_->Back();
+                    pc_.Refresh(false);
+                    armory_view_.Reset();
+                }
+            } else if (pc_source_ && pc_source_->IsNightHub()) {
+                const auto nres = night_hub_view_.Update(game, *pc_source_, input, dt);
+                if (nres == NightHubView::Result::Activated) {
+                    if (game.ProgressResetPending() || game.LoopReloadPending() || game.TakeMenuCloseRequest()) {
+                        Commit(game);
+                        Close();
+                    } else {
+                        pc_.Refresh(false);
+                    }
+                } else if (nres == NightHubView::Result::Back) {
+                    const bool stayed = pc_source_->Back();
+                    if (pc_source_->TakeCloseToGame()) {
+                        Commit(game);
+                        Close();
+                    } else if (!stayed || pc_source_->TakeReturnToOptions()) {
+                        SwitchPage(game, Page::Original);
+                    } else {
+                        pc_.Refresh(false);
+                    }
+                    night_hub_view_.Reset();
+                }
+            } else {
+                const auto result = pc_.Update(game, input, dt);
+                if(game.ProgressResetPending() || game.LoopReloadPending()) { Commit(game); Close(); }
+                if (result == PcSettingsPage::Result::Quit) {
+                    Commit(game);
+                    game.RequestOptionsSave();
+                    LogInfo("ui: quit selected from PC settings");
+                    game.RequestQuit();
+                } else if (result == PcSettingsPage::Result::Back || (pc_source_ && pc_source_->TakeReturnToOptions())) {
+                    SwitchPage(game, Page::Original);
+                }
             }
         } else {
             UpdateOriginal(game, input, dt);
         }
+    }
+    {
+        const bool shown = page_ == Page::Original && taking_input && !quit_confirming_ && !street_confirming_ && !survival_locked_confirming_;
+        if (!shown) hovered_ = Button::None;
+        if (shown && survival_promo_shown_) {
+            promo_toast_t_ = std::min(1.0f, promo_toast_t_ + dt * 2.5f);
+            if (state_ == State::Active) survival_promo_seen_ = true;
+        }
+        const float ramp = std::clamp(hover_frame_ / 6.0f, 0.0f, 1.0f);
+        const float flash = std::max(SelectionFlash(hover_frame_), ramp * ramp * (3.0f - 2.0f * ramp));
+        for (const auto& [bar, label, button, allowed] : {
+                 std::tuple{entry_bar_, entry_label_, Button::PcSettings, pc_source_ != nullptr},
+                 std::tuple{back_bar_, kBack, Button::Back, true},
+                 std::tuple{quit_bar_, quit_label_, Button::Quit, true},
+                 std::tuple{street_bar_, street_label_, Button::StreetReturn, street_shown_},
+                 std::tuple{crosshair_bar_, crosshair_label_, Button::Crosshair, crosshair_shown_},
+                 std::tuple{promo_bar_, promo_action_, Button::SurvivalPromo, false},
+             }) {
+            const bool hovered = shown && allowed && hovered_ == button;
+            auto& st = view_.State(bar);
+            st.visible = hovered;
+            st.color = glm::vec4(1.0f, 1.0f, 1.0f, flash);
+            if (hovered) {
+                const ui::UifNode* bar_node = derived_->FindById(bar);
+                const ui::UifNode* label_node = derived_->FindById(label);
+                if (bar_node && label_node) {
+                    std::optional<glm::vec2> span = view_.TextSpan(label);
+                    if (!span) {
+                        const auto& lstate = view_.State(label);
+                        const std::string_view txt = lstate.text ? std::string_view(*lstate.text) : std::string_view();
+                        const UiFontType ftype = lstate.font_type.value_or(UiFontType::PcSystem);
+                        if (!txt.empty()) {
+                            if (const auto m = view_.MeasureText(label, txt, text_language_, ftype)) {
+                                const float w_units = m->x / UiCanvas::kUnit;
+                                span = button == Button::PcSettings ? glm::vec2(-w_units, 0.0f) : glm::vec2(0.0f, w_units);
+                            }
+                        }
+                    }
+                    if (span) {
+                        const float left_edge = label_node->translate.x + span->x - (button == Button::PcSettings ? 3.0f : 3.2f);
+                        const float right_edge = label_node->translate.x + span->y;
+                        const float mid_x = 0.5f * (left_edge + right_edge);
+                        const float span_w = std::max(0.0f, right_edge - left_edge);
+                        st.offset = glm::vec2(mid_x - bar_node->translate.x, 0.0f);
+                        const float want_half = std::max(bar_half_ * 0.85f, span_w * 0.5f + 5.5f);
+                        st.scale = glm::vec2(want_half / bar_half_, 1.0f);
+                    }
+                }
+            }
+        }
+        view_.State(quit_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, quit_focused_ || quit_confirming_ || (shown && hovered_ == Button::Quit) ? 1.0f : .65f);
+        view_.State(street_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, street_confirming_ || (shown && hovered_ == Button::StreetReturn) ? 1.0f : .65f);
+        view_.State(crosshair_label_).color = glm::vec4(1.0f, 1.0f, 1.0f, (shown && hovered_ == Button::Crosshair) ? 1.0f : .65f);
+        view_.State(promo_action_).color = glm::vec4(1.0f, 1.0f, 1.0f, (shown && hovered_ == Button::SurvivalPromo) ? 1.0f : 0.88f);
     }
     if (state_ == State::SetOut && !Playing("UI_sys_opt_setout")) {
         Commit(game);
@@ -684,6 +855,14 @@ void OptionsMenu::OpenAsk(Game& game, bool quit, uint32_t held) {
 
 void OptionsMenu::UpdateAsk(Game& game, const MenuInput& input, float dt) {
     ask_flash_ += dt * 60.0f;
+    if (survival_locked_confirming_) {
+        const dialog::Result result = ask_nav_.Update(input, 1, text_language_, true);
+        if (result != dialog::Result::None) {
+            survival_locked_confirming_ = false;
+            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+        }
+        return;
+    }
     const bool quit = quit_confirming_;
     const dialog::Result result = ask_nav_.Update(input, 2, text_language_, true);
     if (ask_nav_.Moved()) {
@@ -716,7 +895,8 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
     MenuInput input = raw_input;
     leave_date_ = game.LisaDateActive();
     street_shown_ = game.StreetWalkActive() || leave_date_;
-    if (quit_confirming_ || street_confirming_) {
+    crosshair_shown_ = game.SurvivalActive() && !leave_date_;
+    if (quit_confirming_ || street_confirming_ || survival_locked_confirming_) {
         UpdateAsk(game, input, dt);
         return;
     }
@@ -728,9 +908,17 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
             if (over != Button::None && game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
         }
     }
-    hover_frame_ += dt * 30.0f;
+    hover_frame_ += dt * 60.0f;
     if (street_shown_ && input.street_return) {
         OpenAsk(game, false, input.held_dirs);
+        return;
+    }
+    if (crosshair_shown_ && input.crosshair) {
+        OpenCrosshair(game);
+        return;
+    }
+    if (survival_promo_shown_ && input.survival_promo) {
+        OpenSurvivalPromo(game);
         return;
     }
     if (input.switch_column || (quit_focused_ && (input.accept || input.open_pc))) {
@@ -797,7 +985,7 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
         game.Options().brightness = ++brightness_;
         HoldBrightness();
     }
-    if (game.Nazo().IsPhotoOptionPending()) {
+    if (game.Nazo().IsPhotoOptionPending() && !Playing("UI_sys_opt_setin")) {
         const bool zooming = Playing("UI_sys_opt_zoom_in");
         if (zoom_started_) zoom_elapsed_ += dt;
         if (input.zoom_pressed) {
@@ -817,13 +1005,50 @@ void OptionsMenu::UpdateOriginal(Game& game, const MenuInput& raw_input, float d
             zoom_started_ = false;
         }
     }
-    if (input.close || close_pending_) {
-        close_pending_ = false;
+    if (input.close) {
         Close();
     }
 }
 
+void OptionsMenu::OpenCrosshair(Game& game) {
+    if (!pc_source_ || !pc_source_->OpenCrosshair()) return;
+    Commit(game);
+    LogInfo("ui: crosshair selected from Options");
+    SwitchPage(game, Page::Pc);
+}
+
+void OptionsMenu::OpenSurvivalPromo(Game& game) {
+    if (!pc_source_) return;
+    pc_source_->DismissSurvivalPromo();
+    survival_promo_shown_ = false;
+    survival_promo_seen_ = false;
+    hovered_ = Button::None;
+    if (!pc_source_->SurvivalUnlocked()) {
+        survival_locked_confirming_ = true;
+        ask_nav_.Open(0, 0);
+        ask_flash_ = 0.0f;
+        if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+        LogInfo("ui: survival night promo blocked (NG+4 required)");
+        return;
+    }
+    if (!pc_source_->OpenSurvivalNight()) return;
+    Commit(game);
+    LogInfo("ui: survival night promo accepted from Options");
+    SwitchPage(game, Page::Pc);
+}
+
 OptionsMenu::Button OptionsMenu::ButtonAt(glm::vec2 units) const {
+    if (survival_promo_shown_ && !quit_confirming_ && !street_confirming_ && !survival_locked_confirming_) {
+        const glm::vec2 px(640.0f + units.x * UiCanvas::kUnit, 360.0f - units.y * UiCanvas::kUnit);
+        if (px.x >= 884.0f && px.x <= 1246.0f && px.y >= 22.0f && px.y <= 106.0f) {
+            if (px.x >= 1212.0f && px.y <= 54.0f) return Button::SurvivalPromoClose;
+            return Button::SurvivalPromo;
+        }
+    }
+    if (crosshair_shown_) {
+        const glm::vec2 line = view_.WorldPosition(crosshair_label_);
+        if (units.x >= line.x - 6.0f && units.x <= line.x + 15.0f && std::abs(units.y - line.y) <= 1.2f) return Button::Crosshair;
+    }
     if (street_shown_) {
         const glm::vec2 street = view_.WorldPosition(street_label_);
         if (units.x >= street.x - 6.0f && units.x <= street.x + 22.0f && std::abs(units.y - street.y) <= 1.2f) return Button::StreetReturn;
@@ -838,6 +1063,28 @@ OptionsMenu::Button OptionsMenu::ButtonAt(glm::vec2 units) const {
 }
 
 void OptionsMenu::OriginalClick(Game& game, glm::vec2 units, MenuInput& input) {
+    if (survival_promo_shown_) {
+        const Button b = ButtonAt(units);
+        if (b == Button::SurvivalPromoClose) {
+            if (pc_source_) pc_source_->DismissSurvivalPromo();
+            survival_promo_shown_ = false;
+            survival_promo_seen_ = false;
+            hovered_ = Button::None;
+            if (game.Audio()) game.Audio()->PostEvent(kCursorSound, nullptr);
+            return;
+        }
+        if (b == Button::SurvivalPromo) {
+            OpenSurvivalPromo(game);
+            return;
+        }
+    }
+    if (crosshair_shown_) {
+        const glm::vec2 line = view_.WorldPosition(crosshair_label_);
+        if (units.x >= line.x - 6.0f && units.x <= line.x + 15.0f && std::abs(units.y - line.y) <= 1.2f) {
+            OpenCrosshair(game);
+            return;
+        }
+    }
     if (street_shown_) {
         const glm::vec2 street = view_.WorldPosition(street_label_);
         if (units.x >= street.x - 6.0f && units.x <= street.x + 22.0f && std::abs(units.y - street.y) <= 1.2f) {
@@ -907,16 +1154,337 @@ void OptionsMenu::AdvancePresentation(float dt) {
     ApplySubtitleSelection();
 }
 
+void OptionsMenu::DrawScreen(ui::UiBatch& batch, const UiCanvas& canvas) {
+    const PcScreen screen = pc_.Screen();
+    const glm::vec2 full(static_cast<float>(batch.Extent().width), static_cast<float>(batch.Extent().height));
+    const auto plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+    constexpr float kStripTop = 0.76f * UiCanvas::kHeight;
+    if (screen.scene) {
+        const float top = canvas.ToTarget({0.0f, kStripTop}).y;
+        batch.Quad(glm::vec2(0.0f, top), full, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), plain, ui::UiShade::Solid,
+                   ui::UiBlend::Alpha);
+    } else {
+        batch.Quad(glm::vec2(0.0f), full, glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), plain, ui::UiShade::Solid,
+                   ui::UiBlend::Alpha);
+    }
+    if (screen.pattern == 4) {
+        DrawBrain(batch, canvas, {440.0f, 270.0f}, 250.0f);
+        DrawBrain(batch, canvas, {840.0f, 270.0f}, 250.0f);
+    } else if (screen.pattern == 2) {
+        DrawBrain(batch, canvas, {640.0f, 245.0f}, 300.0f);
+    } else if (screen.pattern != 0) {
+        DrawBrain(batch, canvas, {640.0f, 0.38f * UiCanvas::kHeight}, screen.pattern == 1 ? 270.0f : 320.0f);
+    }
+    UiFont* font = assets_->Font(UiFontType::PcSystem, text_language_);
+    if (!font) return;
+    const auto text = [&](std::string_view key) {
+        return key.find(kPcNoteArgument) != std::string_view::npos ? PcNoteText(key, text_language_) : std::string(PcText(key, text_language_));
+    };
+    const auto style = [&](float size) {
+        ui::TextStyle s;
+        s.font = &font->font;
+        s.font_width = size;
+        s.font_height = size;
+        s.line_space = size * 0.25f;
+        return s;
+    };
+    const bool rtl = text_language_ == dialog::kArabic;
+    const auto line = [&](const std::string& words, float size, float y0, float y1, glm::vec4 color) {
+        ui::TextLayout layout = ui::LayoutText(words, style(size), UiCanvas::kWidth - 240.0f);
+        ui::PlaceText(layout, {120.0f, y0}, {UiCanvas::kWidth - 120.0f, y1}, ui::TextAlign::Center, ui::TextAlign::Center, ui::TextAlign::Center, rtl);
+        DrawText(batch, canvas, *font, layout, color, ui::UiBlend::Alpha);
+    };
+    line(text(screen.header), 16.0f, kStripTop + 6.0f, kStripTop + 28.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.55f));
+    const float middle = UiCanvas::kWidth * 0.5f;
+    {
+        ui::TextLayout name = ui::LayoutText(text(screen.label), style(24.0f), 0.0f);
+        ui::PlaceText(name, {120.0f, kStripTop + 30.0f}, {middle - 30.0f, kStripTop + 62.0f}, ui::TextAlign::End, ui::TextAlign::End,
+                      ui::TextAlign::Center);
+        DrawText(batch, canvas, *font, name, glm::vec4(1.0f), ui::UiBlend::Alpha);
+        ui::TextLayout value = ui::LayoutText(text(screen.value), style(24.0f), 0.0f);
+        ui::PlaceText(value, {middle + 60.0f, kStripTop + 30.0f}, {middle + 300.0f, kStripTop + 62.0f}, ui::TextAlign::Center,
+                      ui::TextAlign::Center, ui::TextAlign::Center);
+        DrawText(batch, canvas, *font, value, glm::vec4(1.0f), ui::UiBlend::Alpha);
+        for (const bool right : {false, true}) {
+            ui::TextLayout arrow = ui::LayoutText(right ? ">" : "<", style(24.0f), 0.0f);
+            const float x = right ? middle + 320.0f : middle + 20.0f;
+            ui::PlaceText(arrow, {x, kStripTop + 30.0f}, {x + 20.0f, kStripTop + 62.0f}, ui::TextAlign::Center, ui::TextAlign::Center,
+                          ui::TextAlign::Center);
+            DrawText(batch, canvas, *font, arrow, glm::vec4(1.0f, 1.0f, 1.0f, (right ? screen.can_right : screen.can_left) ? 0.9f : 0.25f),
+                     ui::UiBlend::Alpha);
+        }
+    }
+    line(text(screen.note), 17.0f, kStripTop + 66.0f, kStripTop + 128.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.8f));
+    DrawPromptText(batch, canvas, *assets_, *font, text(screen.hint), prompt_style_, 16.0f, {120.0f, UiCanvas::kHeight - 36.0f},
+                   {UiCanvas::kWidth - 120.0f, UiCanvas::kHeight - 10.0f}, ui::TextAlign::Center, ui::TextAlign::Center,
+                   glm::vec4(1.0f, 1.0f, 1.0f, 0.6f), true);
+}
+
+void OptionsMenu::DrawBrain(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 center, float height) {
+    const ui::UifNode* node = derived_ ? derived_->FindById(kImageLeft) : nullptr;
+    if (!node || node->positions.empty()) return;
+    std::array<uint32_t, 4> textures{TextureManager::kWhite, TextureManager::kWhite, TextureManager::kWhite, TextureManager::kWhite};
+    for (int slot = 0; slot < 4; ++slot) {
+        const int t = clean_brain_textures_[slot];
+        if (t >= 0 && t < static_cast<int>(derived_->Textures().size())) {
+            textures[slot] = assets_->Texture(derived_->Textures()[t]);
+            textures[slot] |= assets_->TextureAddressBits(textures[slot]);
+        }
+    }
+    glm::vec2 lo(1e9f), hi(-1e9f);
+    for (const glm::vec2& p : node->positions) {
+        lo = glm::min(lo, p * node->size);
+        hi = glm::max(hi, p * node->size);
+    }
+    const glm::vec2 extent = glm::max(hi - lo, glm::vec2(1e-6f));
+    const float scale = height / extent.y;
+    std::vector<ui::UiVertex> vertices;
+    for (const uint16_t i : node->indices) {
+        if (i >= node->positions.size() || i >= node->uvs.size()) continue;
+        const glm::vec2 local = (node->positions[i] * node->size - (lo + hi) * 0.5f) * scale;
+        vertices.push_back({canvas.ToTarget(center + glm::vec2(local.x, -local.y)), node->uvs[i], glm::vec4(1.0f)});
+    }
+    batch.Draw(vertices, ui::UiDrawParams::Plain(textures[ui::kUifBase]), ui::UiShade::Material, ui::UiBlend::Alpha);
+}
+
+float OptionsMenu::ShownAlpha() const {
+    if (state_ == State::Active) return 1.0f;
+    if (state_ != State::SetIn) return 0.0f;
+    const Animation* in = Find("UI_sys_opt_setin");
+    const float frame = in ? players_.PlayingFrame(in->main) : -1.0f;
+    return frame >= 0.0f ? TrackAlpha("UI_sys_opt_setin", frame) : 1.0f;
+}
+
+void OptionsMenu::DrawCrosshairPreview(ui::UiBatch& batch, const UiCanvas& canvas, const CrosshairStyle& style) {
+    preview_clock_ += 1.0f / 60.0f;
+    const glm::vec2 lo(650.0f, 170.0f), hi(1190.0f, 474.0f);
+    const float mid_x = 0.5f * (lo.x + hi.x);
+    const ui::UiDrawParams plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+    auto gradient = [&](glm::vec2 a, glm::vec2 b, glm::vec4 top, glm::vec4 bottom) {
+        const std::vector<ui::UiVertex> v = {{canvas.ToTarget(a), {0, 0}, top}, {canvas.ToTarget({b.x, a.y}), {0, 0}, top}, {canvas.ToTarget(b), {0, 0}, bottom},
+                                             {canvas.ToTarget(a), {0, 0}, top}, {canvas.ToTarget(b), {0, 0}, bottom}, {canvas.ToTarget({a.x, b.y}), {0, 0}, bottom}};
+        batch.Draw(v, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+    };
+    gradient(lo, {mid_x, hi.y}, glm::vec4(0.02f, 0.025f, 0.03f, 0.96f), glm::vec4(0.05f, 0.055f, 0.06f, 0.96f));
+    gradient({mid_x, lo.y}, hi, glm::vec4(0.62f, 0.55f, 0.42f, 0.96f), glm::vec4(0.28f, 0.26f, 0.22f, 0.96f));
+    const glm::vec4 frame(1.0f, 1.0f, 1.0f, 0.25f);
+    gradient(lo, {hi.x, lo.y + 1.0f}, frame, frame);
+    gradient({lo.x, hi.y - 1.0f}, hi, frame, frame);
+    gradient(lo, {lo.x + 1.0f, hi.y}, frame, frame);
+    gradient({hi.x - 1.0f, lo.y}, hi, frame, frame);
+    const float cone = 5.0f + 5.0f * std::sin(preview_clock_ * 2.2f);
+    const float cycle = std::fmod(preview_clock_, 2.4f);
+    const int kind = static_cast<int>(preview_clock_ / 2.4f) % 3;
+    const float mark = style.hit_marker && cycle < 0.45f ? 1.0f - cycle / 0.45f : 0.0f;
+    for (const float x : {0.5f * (lo.x + mid_x), 0.5f * (mid_x + hi.x)}) {
+        const glm::vec2 big(x, lo.y + 120.0f), small(x, hi.y - 52.0f);
+        DrawCrosshair(batch, canvas, big, style, cone, 1.0f, 3.0f);
+        DrawHitMarker(batch, canvas, big, mark, kind == 1, kind == 2, 3.0f);
+        DrawCrosshair(batch, canvas, small, style, cone, 1.0f, 1.0f);
+        DrawHitMarker(batch, canvas, small, mark, kind == 1, kind == 2, 1.0f);
+    }
+}
+
+void OptionsMenu::DrawSurvivalToast(ui::UiBatch& batch, const UiCanvas& canvas) {
+    UiFont* font = assets_->Font(UiFontType::PcSystem, text_language_);
+    if (!font) return;
+
+    const float t = std::clamp(promo_toast_t_, 0.0f, 1.0f);
+    const float ease = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+    const float alpha = ease * ShownAlpha();
+    if (alpha <= 0.01f) return;
+
+    const float slide_x = (1.0f - ease) * 26.0f;
+    const glm::vec2 lo(884.0f + slide_x, 22.0f);
+    const glm::vec2 hi(1246.0f + slide_x, 106.0f);
+    const ui::UiDrawParams plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+
+    auto solid = [&](glm::vec2 a, glm::vec2 b, glm::vec4 c) {
+        c.a *= alpha;
+        if (c.a <= 0.001f) return;
+        batch.Quad(canvas.ToTarget(a), canvas.ToTarget(b), {0.0f, 0.0f}, {1.0f, 1.0f}, c, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+    };
+    auto hgrad = [&](float x0, float x1, float y0, float y1, glm::vec4 cl, glm::vec4 cr) {
+        cl.a *= alpha;
+        cr.a *= alpha;
+        const std::vector<ui::UiVertex> v = {
+            {canvas.ToTarget({x0, y0}), {0, 0}, cl}, {canvas.ToTarget({x1, y0}), {0, 0}, cr}, {canvas.ToTarget({x1, y1}), {0, 0}, cr},
+            {canvas.ToTarget({x0, y0}), {0, 0}, cl}, {canvas.ToTarget({x1, y1}), {0, 0}, cr}, {canvas.ToTarget({x0, y1}), {0, 0}, cl},
+        };
+        batch.Draw(v, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+    };
+    auto frame = [&](glm::vec2 a, glm::vec2 b, float w, glm::vec4 c) {
+        solid(a, {b.x, a.y + w}, c);
+        solid({a.x, b.y - w}, b, c);
+        solid({a.x, a.y + w}, {a.x + w, b.y - w}, c);
+        solid({b.x - w, a.y + w}, {b.x, b.y - w}, c);
+    };
+
+    const bool hov_card = hovered_ == Button::SurvivalPromo;
+    const bool hov_close = hovered_ == Button::SurvivalPromoClose;
+    const float breath = 0.5f + 0.5f * std::sin(clock_ * 2.4f);
+
+    solid(lo, hi, {0.02f, 0.024f, 0.03f, 0.90f});
+    frame(lo, hi, 1.5f, {1.0f, 1.0f, 1.0f, hov_card ? 0.56f : 0.26f});
+    const float mid_x = 0.5f * (lo.x + hi.x);
+    hgrad(lo.x + 12.0f, mid_x, lo.y, lo.y + 2.0f, {1.0f, 1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 0.36f + 0.14f * breath});
+    hgrad(mid_x, hi.x - 12.0f, lo.y, lo.y + 2.0f, {1.0f, 1.0f, 1.0f, 0.36f + 0.14f * breath}, {1.0f, 1.0f, 1.0f, 0.0f});
+
+    solid({lo.x + 15.0f, lo.y + 15.0f}, {lo.x + 20.0f, lo.y + 20.0f}, {1.0f, 1.0f, 1.0f, 0.55f + 0.45f * breath});
+    const std::string header = std::string(PcText("pc_survival_promo_tag", text_language_)) + ": " + std::string(PcText("pc_survival", text_language_));
+    {
+        ui::TextStyle st;
+        st.font = &font->font;
+        st.font_width = 14.5f;
+        st.font_height = 14.5f;
+        ui::TextLayout layout = ui::LayoutText(header, st, 0.0f);
+        const float max_w = (hi.x - 40.0f) - (lo.x + 28.0f);
+        if (layout.width > max_w && layout.width > 1.0f) {
+            const float s = max_w / layout.width;
+            st.font_width = std::max(10.0f, 14.5f * s);
+            st.font_height = std::max(10.0f, 14.5f * s);
+            layout = ui::LayoutText(header, st, 0.0f);
+        }
+        ui::PlaceText(layout, {lo.x + 28.0f, lo.y + 6.0f}, {hi.x - 38.0f, lo.y + 30.0f}, ui::TextAlign::Start, ui::TextAlign::Start,
+                      ui::TextAlign::Center, text_language_ == dialog::kArabic);
+        DrawText(batch, canvas, *font, layout, {1.0f, 1.0f, 1.0f, 0.72f * alpha}, ui::UiBlend::Alpha);
+    }
+
+    {
+        ui::TextStyle st;
+        st.font = &font->font;
+        st.font_width = 13.5f;
+        st.font_height = 13.5f;
+        ui::TextLayout xlay = ui::LayoutText("x", st, 0.0f);
+        ui::PlaceText(xlay, {hi.x - 30.0f, lo.y + 5.0f}, {hi.x - 8.0f, lo.y + 29.0f}, ui::TextAlign::Center, ui::TextAlign::Center,
+                      ui::TextAlign::Center, false);
+        DrawText(batch, canvas, *font, xlay, {1.0f, 1.0f, 1.0f, (hov_close ? 0.95f : 0.42f) * alpha}, ui::UiBlend::Alpha);
+    }
+
+    hgrad(lo.x + 14.0f, hi.x - 14.0f, lo.y + 34.0f, lo.y + 35.0f, {1.0f, 1.0f, 1.0f, 0.24f}, {1.0f, 1.0f, 1.0f, 0.0f});
+
+    const glm::vec2 plo(lo.x + 12.0f, lo.y + 41.0f);
+    const glm::vec2 phi(hi.x - 12.0f, hi.y - 10.0f);
+    solid(plo, phi, {1.0f, 1.0f, 1.0f, hov_card ? 0.12f : 0.04f});
+    const float glow = hov_card ? std::max(SelectionFlash(hover_frame_), 0.92f) : (0.34f + 0.14f * breath);
+    const float pw = phi.x - plo.x;
+    const float gx0 = plo.x + 2.0f, gx1 = plo.x + pw * 0.24f, gx2 = phi.x - pw * 0.24f, gx3 = phi.x - 2.0f;
+    hgrad(gx0, gx1, plo.y + 2.0f, phi.y - 2.0f, {1.0f, 1.0f, 1.0f, 0.05f * glow}, {1.0f, 1.0f, 1.0f, 0.26f * glow});
+    hgrad(gx1, gx2, plo.y + 2.0f, phi.y - 2.0f, {1.0f, 1.0f, 1.0f, 0.26f * glow}, {1.0f, 1.0f, 1.0f, 0.26f * glow});
+    hgrad(gx2, gx3, plo.y + 2.0f, phi.y - 2.0f, {1.0f, 1.0f, 1.0f, 0.26f * glow}, {1.0f, 1.0f, 1.0f, 0.05f * glow});
+    frame(plo, phi, hov_card ? 1.5f : 1.0f, {1.0f, 1.0f, 1.0f, hov_card ? 0.88f : 0.28f});
+
+    const std::string action = "{survival}  " + std::string(PcText("pc_survival_promo_yes", text_language_));
+    DrawPromptText(batch, canvas, *assets_, *font, action, prompt_style_, 16.5f, plo + glm::vec2(10.0f, 0.0f), phi - glm::vec2(10.0f, 0.0f),
+                   ui::TextAlign::Center, ui::TextAlign::Center, {1.0f, 1.0f, 1.0f, (hov_card ? 1.0f : 0.92f) * alpha}, true);
+}
+
+void OptionsMenu::DrawPcDropdown(ui::UiBatch& batch, const UiCanvas& canvas, const PcDropdownView& dd) {
+    UiFont* font = assets_->Font(UiFontType::PcSystem, text_language_);
+    if (!font) return;
+
+    const ui::UiDrawParams plain = ui::UiDrawParams::Plain(TextureManager::kWhite);
+    auto solid = [&](glm::vec2 a, glm::vec2 b, glm::vec4 c) {
+        if (c.a <= 0.001f) return;
+        batch.Quad(canvas.ToTarget(a), canvas.ToTarget(b), {0.0f, 0.0f}, {1.0f, 1.0f}, c, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+    };
+    auto hgrad = [&](float x0, float x1, float y0, float y1, glm::vec4 cl, glm::vec4 cr) {
+        const std::vector<ui::UiVertex> v = {
+            {canvas.ToTarget({x0, y0}), {0, 0}, cl}, {canvas.ToTarget({x1, y0}), {0, 0}, cr}, {canvas.ToTarget({x1, y1}), {0, 0}, cr},
+            {canvas.ToTarget({x0, y0}), {0, 0}, cl}, {canvas.ToTarget({x1, y1}), {0, 0}, cr}, {canvas.ToTarget({x0, y1}), {0, 0}, cl},
+        };
+        batch.Draw(v, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+    };
+    auto frame = [&](glm::vec2 a, glm::vec2 b, float w, glm::vec4 c) {
+        solid(a, {b.x, a.y + w}, c);
+        solid({a.x, b.y - w}, b, c);
+        solid({a.x, a.y + w}, {a.x + w, b.y - w}, c);
+        solid({b.x - w, a.y + w}, {b.x, b.y - w}, c);
+    };
+
+    solid(dd.lo - glm::vec2(6.0f), dd.hi + glm::vec2(6.0f), {0.0f, 0.0f, 0.0f, 0.55f});
+    solid(dd.lo, dd.hi, {0.02f, 0.024f, 0.03f, 0.96f});
+    frame(dd.lo, dd.hi, 1.5f, {1.0f, 1.0f, 1.0f, 0.36f});
+
+    const int n = static_cast<int>(dd.items.size());
+    const bool scrollable = n > dd.visible;
+    const float list_top = dd.lo.y + 8.0f;
+    const float right_pad = scrollable ? 16.0f : 8.0f;
+    const float glow_a = std::max(SelectionFlash(dd.flash), 0.85f);
+
+    for (int slot = 0; slot < dd.visible && dd.scroll + slot < n; ++slot) {
+        const int idx = dd.scroll + slot;
+        const float y0 = list_top + static_cast<float>(slot) * dd.row_height;
+        const float y1 = y0 + dd.row_height;
+        const bool sel = idx == dd.cursor;
+        const bool act = idx == dd.active;
+
+        if (sel) {
+            const float x0 = dd.lo.x + 6.0f;
+            const float x3 = dd.hi.x - right_pad;
+            const float w = x3 - x0;
+            const float x1 = x0 + w * 0.22f;
+            const float x2 = x3 - w * 0.22f;
+            hgrad(x0, x1, y0 + 2.0f, y1 - 2.0f, {1.0f, 1.0f, 1.0f, 0.05f * glow_a}, {1.0f, 1.0f, 1.0f, 0.28f * glow_a});
+            hgrad(x1, x2, y0 + 2.0f, y1 - 2.0f, {1.0f, 1.0f, 1.0f, 0.28f * glow_a}, {1.0f, 1.0f, 1.0f, 0.28f * glow_a});
+            hgrad(x2, x3, y0 + 2.0f, y1 - 2.0f, {1.0f, 1.0f, 1.0f, 0.28f * glow_a}, {1.0f, 1.0f, 1.0f, 0.05f * glow_a});
+        }
+        if (act) {
+            const float cy = 0.5f * (y0 + y1);
+            solid({dd.lo.x + 16.0f, cy - 2.5f}, {dd.lo.x + 21.0f, cy + 2.5f}, {1.0f, 1.0f, 1.0f, sel ? 1.0f : 0.78f});
+        }
+        ui::TextStyle st;
+        st.font = &font->font;
+        st.font_width = 16.5f;
+        st.font_height = 16.5f;
+        ui::TextLayout layout = ui::LayoutText(dd.items[static_cast<size_t>(idx)], st, 0.0f);
+        ui::PlaceText(layout, {dd.lo.x + 26.0f, y0}, {dd.hi.x - right_pad - 6.0f, y1}, ui::TextAlign::Center, ui::TextAlign::Center,
+                      ui::TextAlign::Center, false);
+        DrawText(batch, canvas, *font, layout, {1.0f, 1.0f, 1.0f, sel ? 1.0f : act ? 0.92f : 0.65f}, ui::UiBlend::Alpha);
+    }
+
+    if (scrollable) {
+        const float tx0 = dd.hi.x - 10.0f;
+        const float tx1 = dd.hi.x - 6.0f;
+        const float ty0 = list_top + 2.0f;
+        const float ty1 = list_top + static_cast<float>(dd.visible) * dd.row_height - 2.0f;
+        solid({tx0, ty0}, {tx1, ty1}, {1.0f, 1.0f, 1.0f, 0.12f});
+        const float frac = static_cast<float>(dd.visible) / static_cast<float>(n);
+        const float pos = static_cast<float>(dd.scroll) / static_cast<float>(std::max(1, n - dd.visible));
+        const float th = std::max(20.0f, (ty1 - ty0) * frac);
+        const float sy = ty0 + ((ty1 - ty0) - th) * pos;
+        solid({tx0, sy}, {tx1, sy + th}, {1.0f, 1.0f, 1.0f, 0.68f});
+    }
+
+    const float foot_y0 = dd.hi.y - 30.0f;
+    solid({dd.lo.x + 10.0f, foot_y0}, {dd.hi.x - 10.0f, foot_y0 + 1.0f}, {1.0f, 1.0f, 1.0f, 0.16f});
+    const std::string foot = std::format("{{accept}} {}   {{back}} {}", PcText("pc_ok", text_language_), PcText("pc_back", text_language_));
+    DrawPromptText(batch, canvas, *assets_, *font, foot, prompt_style_, 13.5f, {dd.lo.x + 10.0f, foot_y0 + 2.0f}, {dd.hi.x - 10.0f, dd.hi.y - 2.0f},
+                   ui::TextAlign::Center, ui::TextAlign::Center, {1.0f, 1.0f, 1.0f, 0.72f}, true);
+}
+
 void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
     if (state_ == State::Closed || !model_) {
         return;
     }
     const bool settled = page_ == Page::Pc && state_ == State::Active && switch_frame_ < 0.0f;
+    if (settled && pc_.ScreenShown()) {
+        DrawScreen(batch, canvas);
+        return;
+    }
     if (settled && pc_.FullScreen()) {
         archive_view_.DrawFullScreen(batch, canvas, *assets_, pc_.Panel(), PcText(pc_.FullScreenHint(), text_language_), prompt_style_, text_language_);
         return;
     }
-    if (pillar_alpha_ > 0.0f) {
+    if (page_ == Page::Pc && pc_source_ && pc_source_->IsArmory() && switch_frame_ < 0.0f) {
+        armory_view_.Draw(batch, canvas, *assets_, *pc_source_, prompt_style_, text_language_);
+        return;
+    }
+    if (page_ == Page::Pc && pc_source_ && pc_source_->IsNightHub() && switch_frame_ < 0.0f) {
+        night_hub_view_.Draw(batch, canvas, *assets_, *pc_source_, prompt_style_, text_language_);
+        return;
+    }
+    if (pillar_alpha_ > 0.0f && !see_through_) {
         const float left = canvas.origin.x;
         const float right = canvas.origin.x + UiCanvas::kWidth * canvas.scale;
         const float width = static_cast<float>(batch.Extent().width);
@@ -927,6 +1495,9 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
         if (width - right > 0.5f) batch.Quad(glm::vec2(right, 0.0f), glm::vec2(width, height), glm::vec2(0.0f), glm::vec2(1.0f), black, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
     }
     view_.Draw(batch, canvas, text_language_, 1.0f);
+    if (page_ == Page::Original && survival_promo_shown_ && !quit_confirming_ && !street_confirming_ && !survival_locked_confirming_ && switch_frame_ < 0.0f) {
+        DrawSurvivalToast(batch, canvas);
+    }
     if (settled) pc_.LogLayout(view_);
     if (page_ == Page::Pc && pc_.Gallery() != PcGallery::None && settled) {
         pc_.SetWallWidth(static_cast<float>(batch.Extent().width) / std::max(canvas.scale, 0.001f));
@@ -937,8 +1508,18 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
         if (pc_.IsLoopBrowser()) assets_->PreloadPreviews(pc_.PreviewFiles());
         const PcPanel panel = pc_.Panel();
         const bool text = !panel.lines.empty();
-        archive_view_.DrawPanel(batch, canvas, *assets_, panel, text ? glm::vec2(650.0f, 160.0f) : glm::vec2(650.0f, 170.0f),
-                                text ? glm::vec2(1190.0f, 560.0f) : glm::vec2(1190.0f, 474.0f), text_language_);
+        if (panel.crosshair) {
+            DrawCrosshairPreview(batch, canvas, *panel.crosshair);
+        } else {
+            archive_view_.DrawPanel(batch, canvas, *assets_, panel, text ? glm::vec2(650.0f, 160.0f) : glm::vec2(650.0f, 170.0f),
+                                    text ? glm::vec2(1190.0f, 560.0f) : glm::vec2(1190.0f, 474.0f), text_language_);
+        }
+    }
+    if (page_ == Page::Pc && (state_ == State::Active || state_ == State::SetIn) && switch_frame_ < 0.0f) {
+        PcDropdownView dd;
+        if (pc_.DropdownView(dd)) {
+            DrawPcDropdown(batch, canvas, dd);
+        }
     }
     if ((state_ == State::Active || state_ == State::SetIn) && switch_frame_ < 0.0f) {
         dialog::View view;
@@ -946,6 +1527,13 @@ void OptionsMenu::Draw(ui::UiBatch& batch, const UiCanvas& canvas) {
         if (page_ == Page::Pc) {
             shown = pc_.DialogView(view, text_language_);
             view.flash = SelectionFlash(pc_.FlashFrame());
+        } else if (survival_locked_confirming_) {
+            view.text = std::string(PcText("pc_survival_locked_ng4", text_language_));
+            view.choices = {std::string(PcText("pc_ok", text_language_))};
+            view.focus = 0;
+            view.language = text_language_;
+            view.flash = SelectionFlash(ask_flash_);
+            shown = true;
         } else if (quit_confirming_ || street_confirming_) {
             view.text = std::string(PcText(quit_confirming_ ? "pc_quit_confirm" : leave_date_ ? "pc_lisa_date_leave_confirm" : "pc_street_return_confirm",
                                            text_language_));

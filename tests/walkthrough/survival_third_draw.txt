@@ -1,0 +1,39 @@
+# third person: taking a long gun off the road and changing weapons (owner, 8 November: the shotgun was at the shoulder at once, stood up through the run and
+# came down when it ended). Pictures of the draw, the run and its stop
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+sact quiet
+sthird 1
+sact weapon=1
+swait 90
+sact drop=2@1.2,0.4
+swait 2
+sburst 66 {shots}/pick
+swait 70
+sshot {shots}/shotgun_stand.png
+skey W 1
+swait 30
+skey Left_Shift 1
+swait 60
+sburst 30 {shots}/run
+swait 34
+skey Left_Shift 0
+skey W 0
+sburst 50 {shots}/stop
+swait 54
+sact weapon=1
+sburst 50 {shots}/swap
+swait 54
+sact weapon=0
+swait 40
+sact weapon=2
+sburst 50 {shots}/fromnone
+swait 54
+slog

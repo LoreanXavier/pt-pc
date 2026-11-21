@@ -1,18 +1,20 @@
-const float kHdrSourceWhite = 3.0;
-float HdrShoulder(float m, float ratio) {
-    if (m <= 1.0 || ratio <= 1.001) {
-        return min(m, 1.0);
+
+const float kHdrRollKnee = 0.8;
+
+float HdrPeakRoll(float light, float ratio) {
+    float knee = kHdrRollKnee * ratio;
+    if (!(light > knee)) {
+        return max(light, 0.0);
     }
-    float width = min(kHdrSourceWhite - 1.0, 2.97 * (ratio - 1.0));
-    if (m >= 1.0 + width) {
-        return ratio;
-    }
-    float t = (m - 1.0) / width;
-    float t2 = t * t;
-    float t3 = t2 * t;
-    return (1.0 - 3.0 * t2 + 2.0 * t3) + (t - 2.0 * t2 + t3) * width + (3.0 * t2 - 2.0 * t3) * ratio;
+    float room = ratio - knee;
+    return knee + room * (1.0 - exp(-(light - knee) / room));
 }
 
-float HdrGain(float m, float ratio) {
-    return max(HdrShoulder(m, ratio), 1.0);
+vec3 HdrPeakRollRgb(vec3 light, float ratio) {
+    light = max(light, vec3(0.0));
+    float strongest = max(light.r, max(light.g, light.b));
+    if (!(strongest > kHdrRollKnee * ratio)) {
+        return light;
+    }
+    return light * (HdrPeakRoll(strongest, ratio) / strongest);
 }

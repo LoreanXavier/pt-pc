@@ -3,13 +3,36 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <format>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "engine/core/log.h"
 #include "engine/platform/controller_feedback.h"
 
 namespace pt {
+
+namespace {
+
+#ifdef _WIN32
+struct CaptureHotKey {
+    std::atomic<bool> pressed{false};
+    std::atomic<DWORD> thread_id{0};
+    std::thread thread;
+    ~CaptureHotKey() {
+        if (const DWORD id = thread_id.load()) PostThreadMessageW(id, WM_QUIT, 0, 0);
+        if (thread.joinable()) thread.join();
+    }
+};
+CaptureHotKey g_capture_hot_key;
+#endif
+
+}
 
 void KeyPressLatch::ProcessEvent(const SDL_Event& event, uint32_t scancode) {
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == scancode) {
@@ -29,7 +52,7 @@ constexpr float kPromptMouseTravel = 12.0f;
 /* Switching between look and pointer warps the cursor; the two frames after it would otherwise read as mouse use and flip the prompts. */
 constexpr int kPromptMouseSettle = 2;
 
-constexpr KeyBinding kKeyBindings[] = {
+constexpr KeyBinding kDefaultKeyBindings[] = {
     {KeyAction::WalkForward, SDL_SCANCODE_W, 0},
     {KeyAction::WalkBack, SDL_SCANCODE_S, 0},
     {KeyAction::WalkLeft, SDL_SCANCODE_A, 0},
@@ -67,6 +90,47 @@ constexpr KeyBinding kKeyBindings[] = {
     {KeyAction::MenuTabNext, SDL_SCANCODE_E, 0},
     {KeyAction::MenuDonate, SDL_SCANCODE_P, 0},
     {KeyAction::MenuUpdate, SDL_SCANCODE_U, 0},
+    {KeyAction::MenuCrosshair, SDL_SCANCODE_C, 0},
+    {KeyAction::MenuSurvival, SDL_SCANCODE_N, 0},
+    {KeyAction::SurvivalFire, 0, SDL_BUTTON_LEFT},
+    {KeyAction::SurvivalReload, SDL_SCANCODE_R, 0},
+    {KeyAction::SurvivalSprint, SDL_SCANCODE_LSHIFT, 0},
+    {KeyAction::SurvivalSwap, SDL_SCANCODE_Q, 0},
+    {KeyAction::SurvivalMelee, SDL_SCANCODE_V, 0},
+    {KeyAction::SurvivalFlare, SDL_SCANCODE_G, 0},
+    {KeyAction::SurvivalUse, SDL_SCANCODE_E, 0},
+    {KeyAction::SurvivalPick1, SDL_SCANCODE_1, 0},
+    {KeyAction::SurvivalPick2, SDL_SCANCODE_2, 0},
+    {KeyAction::SurvivalPick3, SDL_SCANCODE_3, 0},
+    {KeyAction::SurvivalInfo, SDL_SCANCODE_TAB, 0},
+};
+
+std::vector<KeyBinding>& MutableBindings() {
+    static std::vector<KeyBinding> bindings(std::begin(kDefaultKeyBindings), std::end(kDefaultKeyBindings));
+    return bindings;
+}
+
+struct RebindEntry {
+    KeyAction action;
+    const char* ini_name;
+    int group;
+};
+
+constexpr RebindEntry kRebindEntries[] = {
+    {KeyAction::WalkForward, "walk_forward", 0},
+    {KeyAction::WalkBack, "walk_back", 0},
+    {KeyAction::WalkLeft, "walk_left", 0},
+    {KeyAction::WalkRight, "walk_right", 0},
+    {KeyAction::Zoom, "zoom", 0},
+    {KeyAction::Act, "act", 0},
+    {KeyAction::SurvivalFire, "survival_fire", 1},
+    {KeyAction::SurvivalReload, "survival_reload", 1},
+    {KeyAction::SurvivalSprint, "survival_sprint", 1},
+    {KeyAction::SurvivalSwap, "survival_swap", 1},
+    {KeyAction::SurvivalMelee, "survival_melee", 1},
+    {KeyAction::SurvivalFlare, "survival_flare", 1},
+    {KeyAction::SurvivalUse, "survival_use", 1},
+    {KeyAction::SurvivalInfo, "survival_info", 1},
 };
 
 KeyLayoutFunction g_key_layout = nullptr;
@@ -260,6 +324,7 @@ GamepadInfo Describe(SDL_Gamepad* pad) {
 
 uint32_t ScancodeFromName(std::string_view name) {
     std::string text(name);
+    if (text.size() == 7 && text.rfind("Digit_", 0) == 0) text = text.substr(6);
     std::replace(text.begin(), text.end(), '_', ' ');
     const SDL_Scancode code = SDL_GetScancodeFromName(text.c_str());
     return code == SDL_SCANCODE_UNKNOWN ? 0u : static_cast<uint32_t>(code);
@@ -270,16 +335,142 @@ uint32_t MouseButtonFromName(std::string_view name) {
 }
 
 std::span<const KeyBinding> KeyBindings() {
-    return kKeyBindings;
+    return MutableBindings();
 }
 
 const KeyBinding* FirstBinding(KeyAction action, bool keys_only) {
-    for (const KeyBinding& binding : kKeyBindings) {
+    for (const KeyBinding& binding : MutableBindings()) {
         if (binding.action == action && (!keys_only || binding.scancode != 0)) {
             return &binding;
         }
     }
     return nullptr;
+}
+
+const char* KeyActionIniName(KeyAction action) {
+    for (const auto& entry : kRebindEntries) {
+        if (entry.action == action) return entry.ini_name;
+    }
+    return nullptr;
+}
+
+bool KeyActionFromIniName(std::string_view name, KeyAction& out) {
+    for (const auto& entry : kRebindEntries) {
+        if (name == entry.ini_name) {
+            out = entry.action;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string KeyBindingToken(const KeyBinding& binding) {
+    if (binding.mouse != 0) return std::format("mouse:{}", static_cast<int>(binding.mouse));
+    if (binding.scancode != 0) {
+        const char* name = SDL_GetScancodeName(static_cast<SDL_Scancode>(binding.scancode));
+        if (name && *name) return std::format("key:{}", name);
+    }
+    return {};
+}
+
+bool ParseKeyBindingToken(std::string_view token, uint16_t& scancode, uint8_t& mouse) {
+    scancode = 0;
+    mouse = 0;
+    if (token.starts_with("mouse:")) {
+        const std::string_view num = token.substr(6);
+        if (num == "1") { mouse = SDL_BUTTON_LEFT; return true; }
+        if (num == "2") { mouse = SDL_BUTTON_MIDDLE; return true; }
+        if (num == "3") { mouse = SDL_BUTTON_RIGHT; return true; }
+        if (num == "4") { mouse = SDL_BUTTON_X1; return true; }
+        if (num == "5") { mouse = SDL_BUTTON_X2; return true; }
+        return false;
+    }
+    if (token.starts_with("key:")) {
+        const std::string name(token.substr(4));
+        const SDL_Scancode code = SDL_GetScancodeFromName(name.c_str());
+        if (code != SDL_SCANCODE_UNKNOWN) {
+            scancode = static_cast<uint16_t>(code);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SetKeyBinding(KeyAction action, uint16_t scancode, uint8_t mouse) {
+    if ((scancode == 0 && mouse == 0) || (scancode != 0 && mouse != 0)) return false;
+    if (scancode == SDL_SCANCODE_ESCAPE) return false;
+    int action_group = -1;
+    for (const auto& entry : kRebindEntries) {
+        if (entry.action == action) {
+            action_group = entry.group;
+            break;
+        }
+    }
+    auto& bindings = MutableBindings();
+    KeyBinding* target = nullptr;
+    for (KeyBinding& b : bindings) {
+        if (b.action == action) {
+            target = &b;
+            break;
+        }
+    }
+    if (!target) return false;
+    const uint16_t old_sc = target->scancode;
+    const uint8_t old_ms = target->mouse;
+    if (old_sc == scancode && old_ms == mouse) return true;
+    if (action_group >= 0) {
+        for (const auto& entry : kRebindEntries) {
+            if (entry.action == action || entry.group != action_group) continue;
+            for (KeyBinding& other : bindings) {
+                if (other.action == entry.action) {
+                    if (other.scancode == scancode && other.mouse == mouse) {
+                        other.scancode = old_sc;
+                        other.mouse = old_ms;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    target->scancode = scancode;
+    target->mouse = mouse;
+    return true;
+}
+
+void ResetKeyBindings() {
+    auto& bindings = MutableBindings();
+    bindings.assign(std::begin(kDefaultKeyBindings), std::end(kDefaultKeyBindings));
+}
+
+void ApplyKeyBindings(const std::map<std::string, std::string>& overrides) {
+    ResetKeyBindings();
+    for (const auto& [name, token] : overrides) {
+        KeyAction action{};
+        uint16_t sc = 0;
+        uint8_t ms = 0;
+        if (KeyActionFromIniName(name, action) && ParseKeyBindingToken(token, sc, ms)) {
+            SetKeyBinding(action, sc, ms);
+        }
+    }
+}
+
+std::map<std::string, std::string> ExportKeyBindings() {
+    std::map<std::string, std::string> out;
+    for (const auto& entry : kRebindEntries) {
+        const KeyBinding* cur = FirstBinding(entry.action);
+        if (!cur) continue;
+        const KeyBinding* def = nullptr;
+        for (const KeyBinding& d : kDefaultKeyBindings) {
+            if (d.action == entry.action) {
+                def = &d;
+                break;
+            }
+        }
+        if (def && cur->scancode == def->scancode && cur->mouse == def->mouse) continue;
+        const std::string tok = KeyBindingToken(*cur);
+        if (!tok.empty()) out[entry.ini_name] = tok;
+    }
+    return out;
 }
 
 void SetKeyLayoutForTest(KeyLayoutFunction layout) {
@@ -288,7 +479,12 @@ void SetKeyLayoutForTest(KeyLayoutFunction layout) {
 
 std::string KeyBindingName(const KeyBinding& binding) {
     if (binding.mouse) {
-        return binding.mouse == SDL_BUTTON_LEFT ? "Left mouse button" : binding.mouse == SDL_BUTTON_RIGHT ? "Right mouse button" : "Middle mouse button";
+        if (binding.mouse == SDL_BUTTON_LEFT) return "Left mouse button";
+        if (binding.mouse == SDL_BUTTON_RIGHT) return "Right mouse button";
+        if (binding.mouse == SDL_BUTTON_MIDDLE) return "Middle mouse button";
+        if (binding.mouse == SDL_BUTTON_X1) return "Mouse 4";
+        if (binding.mouse == SDL_BUTTON_X2) return "Mouse 5";
+        return "Mouse button";
     }
     switch (binding.scancode) {
         case SDL_SCANCODE_ESCAPE: return "Esc";
@@ -380,11 +576,28 @@ uint32_t PlayerButtonsFromRaw(uint32_t raw) {
 void MergeFrameButtons(InputState& pending, const InputState& polled) {
     pending.pressed |= polled.pressed;
     pending.music_pressed |= polled.music_pressed;
+    pending.survival_pressed |= polled.survival_pressed;
+    pending.survival_held = polled.survival_held | (pending.survival_pressed & kSurvivalFire);
     pending.menu_keys_pressed |= polled.menu_keys_pressed;
     pending.capture_pose_pressed |= polled.capture_pose_pressed;
+    pending.support_pressed |= polled.support_pressed;
     pending.raw_pressed |= polled.raw_pressed;
     pending.held = polled.held | (pending.pressed & (kPadGouge - 1u));
     pending.raw_held = polled.raw_held | pending.raw_pressed;
+}
+
+void SpendTickInput(InputState& pending) {
+    pending.mouse_look = glm::vec2(0.0f);
+    pending.gyro_turn = glm::vec2(0.0f);
+    pending.pressed = 0;
+    pending.raw_pressed = 0;
+    pending.pause = pending.confirm = pending.cancel = pending.any_button = false;
+    pending.click = pending.right_click = pending.house_pressed = false;
+    pending.wheel = 0.0f;
+    pending.menu_keys_pressed = 0;
+    pending.music_pressed = 0;
+    pending.survival_pressed = 0;
+    pending.support_pressed = false;
 }
 
 std::string DescribeGamepad(const GamepadInfo& info) {
@@ -617,10 +830,15 @@ uint32_t InputDevice::HeldRaw(const Pad& pad) const {
             raw |= RawFromButton(button);
         }
     }
-    if (SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 0) {
+    const auto trigger = [&](SDL_GamepadAxis axis, bool& down) {
+        const Sint16 value = SDL_GetGamepadAxis(pad.handle, axis);
+        down = down ? value > 5461 : value > 10922;
+        return down;
+    };
+    if (trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, pad.l2_down)) {
         raw |= kRawL2;
     }
-    if (SDL_GetGamepadAxis(pad.handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 0) {
+    if (trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, pad.r2_down)) {
         raw |= kRawR2;
     }
     return raw;
@@ -656,12 +874,22 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         if (event.key.repeat) {
             break;
         }
+        if (capturing_key_) {
+            if (event.key.scancode == SDL_SCANCODE_ESCAPE) {
+                captured_cancel_ = true;
+            } else {
+                captured_scancode_ = static_cast<uint16_t>(event.key.scancode);
+                captured_mouse_ = 0;
+            }
+            captured_ready_ = true;
+            break;
+        }
         any_edge_ = true;
         last_from_gamepad_ = false;
         key_pressed_since_poll_ = true;
         if (event.key.scancode == SDL_SCANCODE_F9) capture_pose_edge_ = true;
         UsePrompts(PromptStyle{}, 0);
-        for (const KeyBinding& binding : kKeyBindings) {
+        for (const KeyBinding& binding : MutableBindings()) {
             if (binding.scancode == 0 || binding.scancode != event.key.scancode) {
                 continue;
             }
@@ -675,6 +903,12 @@ void InputDevice::ProcessEvent(const SDL_Event& event) {
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (capturing_key_ && event.button.button >= 1 && event.button.button <= 5) {
+            captured_scancode_ = 0;
+            captured_mouse_ = event.button.button;
+            captured_ready_ = true;
+            break;
+        }
         any_edge_ = true;
         last_from_gamepad_ = false;
         UsePrompts(PromptStyle{}, 0);
@@ -759,6 +993,28 @@ void InputDevice::InjectKey(uint32_t scancode, bool down) {
     ProcessEvent(event);
 }
 
+void InputDevice::ListenCaptureKeyEverywhere() {
+#ifdef _WIN32
+    if (g_capture_hot_key.thread.joinable()) return;
+    g_capture_hot_key.thread = std::thread([] {
+        MSG msg;
+        PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+        g_capture_hot_key.thread_id = GetCurrentThreadId();
+        constexpr int kId = 0x7039;
+        if (!RegisterHotKey(nullptr, kId, MOD_NOREPEAT, VK_F9)) {
+            LogWarn("input: F9 is not free as a Windows hot key (error {}): the capture pose only with the game window in front",
+                    GetLastError());
+            return;
+        }
+        LogInfo("input: F9 writes the capture pose wherever the focus is (a Windows hot key)");
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (msg.message == WM_HOTKEY && msg.wParam == kId) g_capture_hot_key.pressed = true;
+        }
+        UnregisterHotKey(nullptr, kId);
+    });
+#endif
+}
+
 void InputDevice::InjectMouseButton(uint8_t button, bool down) {
     if (button < 1 || button > 5) {
         return;
@@ -786,15 +1042,15 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     state.gamepad_sensitivity = settings.gamepad_sensitivity;
     uint32_t raw = 0;
     const bool video = SDL_WasInit(SDL_INIT_VIDEO) != 0;
-    const bool* sdl_keys = keyboard_free && video ? SDL_GetKeyboardState(nullptr) : nullptr;
+    const bool* sdl_keys = keyboard_free && !capturing_key_ && video ? SDL_GetKeyboardState(nullptr) : nullptr;
     auto key = [&](SDL_Scancode code) {
-        return (sdl_keys && sdl_keys[code]) || (static_cast<size_t>(code) < injected_keys_.size() && injected_keys_[code]);
+        return !capturing_key_ && ((sdl_keys && sdl_keys[code]) || (static_cast<size_t>(code) < injected_keys_.size() && injected_keys_[code]));
     };
     const SDL_MouseButtonFlags buttons =
-        mouse != MouseUse::None ? (video ? SDL_GetMouseState(nullptr, nullptr) : 0u) | injected_mouse_ | mouse_down_latch_ : injected_mouse_;
+        (!capturing_key_ && mouse != MouseUse::None) ? (video ? SDL_GetMouseState(nullptr, nullptr) : 0u) | injected_mouse_ | mouse_down_latch_ : 0u;
     mouse_down_latch_ = 0;
     auto held = [&](KeyAction action) {
-        for (const KeyBinding& binding : kKeyBindings) {
+        for (const KeyBinding& binding : MutableBindings()) {
             if (binding.action != action) {
                 continue;
             }
@@ -821,7 +1077,15 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     if (held(KeyAction::PadRight)) raw |= kRawRight;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuColumn)) raw |= kRawR1;
     if (mouse == MouseUse::Menu && held(KeyAction::MenuQuit)) raw |= kRawR1;
-    if (held(KeyAction::Zoom)) raw |= kRawR3;
+    const bool zoom_raw = held(KeyAction::Zoom);
+    if (zoom_toggle_ && mouse == MouseUse::Look) {
+        if (zoom_raw && !prev_zoom_raw_) zoom_toggled_ = !zoom_toggled_;
+    } else if (mouse != MouseUse::Look) {
+        zoom_toggled_ = false;
+    }
+    prev_zoom_raw_ = zoom_raw;
+    const bool zoom_active = (zoom_toggle_ && mouse == MouseUse::Look) ? zoom_toggled_ : zoom_raw;
+    if (zoom_active) raw |= kRawR3;
     if (held(KeyAction::Act)) raw |= kRawCross;
     const bool gouge_key = key(SDL_SCANCODE_X);
     state.gouge_pressed = gouge_key && !previous_gouge_key_;
@@ -853,11 +1117,19 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
         if (key(SDL_SCANCODE_E)) menu_keys |= kMenuKeyFromE;
         if (held(KeyAction::MenuDonate)) menu_keys |= kMenuKeyDonate;
         if (held(KeyAction::MenuUpdate)) menu_keys |= kMenuKeyUpdate;
+        if (held(KeyAction::MenuCrosshair)) menu_keys |= kMenuKeyCrosshair;
+        if (held(KeyAction::MenuSurvival)) menu_keys |= kMenuKeySurvival;
+        if (tab) menu_keys |= kMenuKeyArmoryTab;
+        if (held(KeyAction::SurvivalReload)) menu_keys |= kMenuKeyArmoryReplay;
+        if (held(KeyAction::SurvivalMelee)) menu_keys |= kMenuKeyArmoryApplyAll;
     }
     state.menu_keys_pressed = menu_keys & ~previous_menu_keys_;
     if (!(state.menu_keys_pressed & kMenuKeyTabNext)) state.menu_keys_pressed &= ~kMenuKeyFromE;
     previous_menu_keys_ = menu_keys;
     state.capture_pose_pressed = capture_pose_edge_;
+#ifdef _WIN32
+    state.capture_pose_pressed = g_capture_hot_key.pressed.exchange(false) || state.capture_pose_pressed;
+#endif
     capture_pose_edge_ = false;
     if (injected_motion_polls_ > 0) {
         --injected_motion_polls_;
@@ -961,11 +1233,71 @@ InputState InputDevice::Poll(bool keyboard_free, MouseUse mouse, bool pads_free)
     if ((pad_pressed & kRawSelect) || pad_back_edge_) state.menu_keys_pressed |= kMenuKeyDonate;
     if (pad_pressed & kRawTriangle) state.menu_keys_pressed |= kMenuKeyUpdate;
     pad_back_edge_ = false;
+    uint32_t survival = 0;
+    if (mouse == MouseUse::Look) {
+        uint32_t buttons = 0;
+        if (held(KeyAction::SurvivalFire)) buttons |= kSurvivalFire;
+        if (zoom_active) buttons |= kSurvivalAim;
+        if (previous_mouse_use_ != MouseUse::Look) swallowed_survival_ = buttons;
+        swallowed_survival_ &= buttons;
+        survival |= buttons & ~swallowed_survival_;
+        if (held(KeyAction::SurvivalReload)) survival |= kSurvivalReload;
+        if (held(KeyAction::SurvivalSprint)) survival |= kSurvivalSprint;
+        if (held(KeyAction::SurvivalSwap)) survival |= kSurvivalSwap;
+        if (held(KeyAction::SurvivalMelee)) survival |= kSurvivalMelee;
+        if (held(KeyAction::SurvivalFlare)) survival |= kSurvivalFlare;
+        if (held(KeyAction::SurvivalUse)) survival |= kSurvivalUse;
+        if (held(KeyAction::SurvivalInfo)) survival |= kSurvivalInfo;
+        if (held(KeyAction::SurvivalPick1)) survival |= kSurvivalSlot1;
+        if (held(KeyAction::SurvivalPick2)) survival |= kSurvivalSlot2;
+        if (held(KeyAction::SurvivalPick3)) survival |= kSurvivalSlot3;
+        if (key(SDL_SCANCODE_4)) survival |= kSurvivalSlot4;
+        if (key(SDL_SCANCODE_5)) survival |= kSurvivalSlot5;
+        if (key(SDL_SCANCODE_6) || key(SDL_SCANCODE_GRAVE)) survival |= kSurvivalSlot0;
+    }
+    if (mouse != MouseUse::None) {
+        if (held(KeyAction::SurvivalPick1)) survival |= kSurvivalPick1;
+        if (held(KeyAction::SurvivalPick2)) survival |= kSurvivalPick2;
+        if (held(KeyAction::SurvivalPick3)) survival |= kSurvivalPick3;
+    }
+    if (pad_raw & kRawR2) survival |= kSurvivalFire;
+    if (pad_raw & kRawL2) survival |= kSurvivalAim;
+    if (pad_raw & kRawSquare) survival |= kSurvivalReload;
+    if (pad_raw & kRawL3) survival |= kSurvivalSprint;
+    if (pad_raw & kRawTriangle) survival |= kSurvivalSwap;
+    if (pad_raw & kRawR1) survival |= kSurvivalMelee;
+    if (pad_raw & kRawL1) survival |= kSurvivalFlare;
+    if (pad_raw & kRawCross) survival |= kSurvivalUse;
+    if (pad_raw & kRawLeft) survival |= kSurvivalPick1 | kSurvivalSwapPrev;
+    if (pad_raw & kRawUp) survival |= kSurvivalPick2;
+    if (pad_raw & kRawRight) survival |= kSurvivalPick3 | kSurvivalSwap;
+    if (pad_raw & kRawSelect) survival |= kSurvivalInfo;
+    const bool sprint_raw = (survival & kSurvivalSprint) != 0;
+    if (sprint_toggle_ && mouse == MouseUse::Look) {
+        if (sprint_raw && !prev_sprint_raw_) sprint_toggled_ = !sprint_toggled_;
+        if (glm::length(state.left_stick) < 0.15f || (survival & (kSurvivalAim | kSurvivalReload | kSurvivalFire))) sprint_toggled_ = false;
+        if (sprint_toggled_) survival |= kSurvivalSprint;
+        else survival &= ~kSurvivalSprint;
+    } else {
+        sprint_toggled_ = false;
+    }
+    prev_sprint_raw_ = sprint_raw;
+    previous_mouse_use_ = mouse;
+    state.survival_held = survival;
+    state.survival_pressed = survival & ~previous_survival_;
+    if (mouse == MouseUse::Look && wheel_ != 0.0f) state.survival_pressed |= wheel_ > 0.0f ? kSurvivalSwapPrev : kSurvivalSwap;
+    previous_survival_ = survival;
+    {
+        const bool support_key = held(KeyAction::MenuDonate);
+        state.support_pressed = (support_key && !previous_support_key_) || (pad_pressed & kRawL3) != 0;
+        previous_support_key_ = support_key;
+    }
     state.pause = pause_edge_ || ((pad_pressed & kRawStart) && !(pad_pressed & kRawSelect));
     state.pause_held = held(KeyAction::Menu) || (pad_raw & kRawStart) != 0;
     state.confirm = confirm_edge_;
     state.cancel = cancel_edge_;
     state.click = click_edge_;
+    state.click_held = (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0;
     state.right_click = right_click_edge_;
     state.wheel = wheel_;
     wheel_ = 0.0f;

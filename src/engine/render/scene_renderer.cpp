@@ -1,4 +1,5 @@
 #include "engine/render/scene_renderer.h"
+#include "engine/render/hdr_output.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -114,7 +115,8 @@ bool SceneRenderer::EnsureShadowTarget() {
 
 bool SceneRenderer::Init(Renderer& renderer, TextureManager& textures) {
     renderer_ = &renderer;
-    ldr_format_ = gpu::Format::R8G8B8A8Unorm;
+    hdr_post_ = renderer.OutputMode() != RendererOutputMode::Sdr;
+    ldr_format_ = hdr_post_ ? gpu::Format::R16G16B16A16Sfloat : gpu::Format::R8G8B8A8Unorm;
     textures_ = &textures;
     gpu_ = &renderer.Gpu();
 
@@ -391,6 +393,8 @@ bool SceneRenderer::CreatePipelines() {
     forward.blend = gpu::BlendMode::PremultipliedFadeAlpha;
     forward_ = gpu_->CreateGraphicsPipeline(forward);
     forward_emissive_ = gpu_->CreateGraphicsPipeline(forward);
+    forward.depth_write = false;
+    forward_glow_ = gpu_->CreateGraphicsPipeline(forward);
 
     luminance_ = gpu_->CreateComputePipeline({layout_, "luminance.comp"});
     reflect_colour_ = gpu_->CreateComputePipeline({layout_, "reflect_colour.comp"});
@@ -408,27 +412,25 @@ bool SceneRenderer::CreatePipelines() {
     gpu::GraphicsPipelineDesc post;
     post.layout = layout_;
     post.fragment = "bright.frag";
-    post.colors = {kBloomFormat};
+    const gpu::Format bloom_format = BloomFormat();
+    post.colors = {bloom_format};
     bright_ = gpu_->CreateGraphicsPipeline(post);
     post.fragment = "kawase.frag";
     kawase_ = gpu_->CreateGraphicsPipeline(post);
     post.blend = gpu::BlendMode::Additive;
     bloom_add_ = gpu_->CreateGraphicsPipeline(post);
     post.blend = gpu::BlendMode::None;
-    post.colors = {kBloomFormat, kBloomFormat};
+    post.colors = {bloom_format, bloom_format};
     post.blends = {gpu::BlendMode::None, gpu::BlendMode::Additive};
     post.fragment = "kawase_sum.frag";
     kawase_sum_ = gpu_->CreateGraphicsPipeline(post);
     post.blends.clear();
-    post.colors = {kBloomFormat};
+    post.colors = {bloom_format};
     post.fragment = "gaussian.frag";
     gaussian_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "tonemap.frag";
     tonemap_ = gpu_->CreateGraphicsPipeline(post);
-    post.colors = {Renderer::kHdrBoostFormat};
-    post.fragment = "hdr_boost.frag";
-    hdr_boost_pipeline_ = gpu_->CreateGraphicsPipeline(post);
     post.colors = {ldr_format_};
     post.fragment = "fxaa.frag";
     fxaa_ = gpu_->CreateGraphicsPipeline(post);
@@ -443,6 +445,14 @@ bool SceneRenderer::CreatePipelines() {
     post.colors = {ldr_format_};
     post.fragment = "dof_blend.frag";
     dof_blend_ = gpu_->CreateGraphicsPipeline(post);
+    post.fragment = "dof_merge.frag";
+    dof_merge_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {kPostFormat, kPostFormat};
+    post.fragment = "dof_layers.frag";
+    dof_layers_ = gpu_->CreateGraphicsPipeline(post);
+    post.fragment = "dof_gather.frag";
+    dof_gather_ = gpu_->CreateGraphicsPipeline(post);
+    post.colors = {ldr_format_};
     post.fragment = "dof_ratio.frag";
     post.write_mask = gpu::ColorComponent::A;
     dof_ratio_ = gpu_->CreateGraphicsPipeline(post);
@@ -509,8 +519,9 @@ bool SceneRenderer::CreatePipelines() {
     post.depth_compare = gpu::CompareOp::Always;
     vfx_depth_down_ = gpu_->CreateGraphicsPipeline(post);
 
-    const gpu::PipelineHandle all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, luminance_, bright_,
-                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, hdr_boost_pipeline_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_, mb_velocity_,
+    const gpu::PipelineHandle all[] = {gbuffer_, decal_, shadow_pipeline_, probe_, probe_resolve_, light_, compose_, forward_, forward_emissive_, forward_glow_, luminance_, bright_,
+                              reflect_colour_, kawase_, bloom_add_, kawase_sum_, gaussian_, tonemap_, fxaa_, dof_ratio_, dof_down_, dof_blur_, dof_blend_,
+                              dof_layers_, dof_gather_, dof_merge_, mb_velocity_,
                               mb_tile_pipeline_, mb_bake_pipeline_, mb_mcguire_, mb_composite_, mb_decode_, velocity_pipeline_, fsblur_, banding_, screen_fx_,
                               debug_, occlusion_, occlusion_blur_, reflect_make_, reflect_blend_, vfx_composite_, vfx_depth_down_, mirror_temporal_pipeline_,
                               reflect_layer_pipeline_, reflect_temporal_pipeline_, subliminal_string_, backdrop_, date_resolve_, date_resolve_out_};
@@ -524,9 +535,30 @@ bool SceneRenderer::CreatePipelines() {
     return CreateUpscalePipelines();
 }
 
+gpu::Format SceneRenderer::BloomFormat() const {
+    return hdr_post_ ? gpu::Format::R16G16B16A16Sfloat : kBloomFormat;
+}
+
+void SceneRenderer::SetHdrPost(bool on) {
+    if (on == hdr_post_) {
+        return;
+    }
+    gpu_->WaitIdle();
+    hdr_post_ = on;
+    ldr_format_ = on ? gpu::Format::R16G16B16A16Sfloat : gpu::Format::R8G8B8A8Unorm;
+    DestroyPipelines();
+    if (!CreatePipelines()) {
+        LogError("graphics: the {} post chain's pipelines could not be made", on ? "HDR" : "SDR");
+    }
+    history_valid_ = false;
+    date_history_valid_ = false;
+    LogInfo("graphics: post chain for {} output ({} targets)", on ? "an HDR" : "an SDR", on ? "half float" : "8-bit");
+}
+
 void SceneRenderer::DestroyPipelines() {
-    gpu::PipelineHandle* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &luminance_, &bright_,
-                         &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &gaussian_, &tonemap_, &hdr_boost_pipeline_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
+    gpu::PipelineHandle* all[] = {&gbuffer_, &decal_, &shadow_pipeline_, &probe_, &probe_resolve_, &light_, &compose_, &forward_, &forward_emissive_, &forward_glow_, &luminance_, &bright_,
+                         &reflect_colour_, &kawase_, &bloom_add_, &kawase_sum_, &gaussian_, &tonemap_, &fxaa_, &dof_ratio_, &dof_down_, &dof_blur_, &dof_blend_,
+                         &dof_layers_, &dof_gather_, &dof_merge_,
                          &mb_velocity_, &mb_tile_pipeline_, &mb_bake_pipeline_, &mb_mcguire_, &mb_composite_, &mb_decode_, &velocity_pipeline_, &fsblur_,
                          &banding_, &screen_fx_, &debug_, &occlusion_, &occlusion_blur_, &reflect_make_, &reflect_blend_, &vfx_composite_, &vfx_depth_down_,
                          &mirror_temporal_pipeline_, &reflect_layer_pipeline_, &reflect_temporal_pipeline_, &subliminal_string_, &backdrop_,
@@ -710,7 +742,7 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
         return false;
     }
     if (extent.width == extent_.width && extent.height == extent_.height && output.width == output_extent_.width &&
-        output.height == output_extent_.height && upscaling == targets_upscaled_) {
+        output.height == output_extent_.height && upscaling == targets_upscaled_ && ldr_[0].image.format == ldr_format_) {
         return true;
     }
     gpu_->WaitIdle();
@@ -752,15 +784,15 @@ bool SceneRenderer::EnsureTargets(gpu::Extent2D extent, gpu::Extent2D output, bo
                            color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(mirror_capture_cache_[1], kHdrFormat, {std::min(512u, extent.width), std::min(512u, extent.height)},
                            color | gpu::ImageUsage::TransferDst | gpu::ImageUsage::TransferSrc, c) &&
-              CreateTarget(bloom_[0], kBloomFormat, quarter, color, c) && CreateTarget(bloom_[1], kBloomFormat, quarter, color, c) &&
-              CreateTarget(bloom_[2], kBloomFormat, quarter, color, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
+              CreateTarget(bloom_[0], BloomFormat(), quarter, color, c) && CreateTarget(bloom_[1], BloomFormat(), quarter, color, c) &&
+              CreateTarget(bloom_[2], BloomFormat(), quarter, color, c) && CreateTarget(flare_, kPostFormat, output, color, c) &&
               CreateTarget(ldr_[0], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(ldr_[1], ldr_format_, output, color | gpu::ImageUsage::TransferSrc, c) &&
               CreateTarget(history_, ldr_format_, output, color | gpu::ImageUsage::TransferDst, c) &&
               CreateTarget(ao_[0], kAoFormat, extent, color, c) && CreateTarget(ao_[1], kAoFormat, extent, color | gpu::ImageUsage::TransferSrc, c);
     const gpu::Extent2D shift1{std::max(output.width >> 1, 1u), std::max(output.height >> 1, 1u)};
-    const gpu::Extent2D shift2{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
-    const gpu::Extent2D shift3{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
+    const gpu::Extent2D shift2 = hdr_post_ ? shift1 : gpu::Extent2D{std::max(output.width >> 2, 1u), std::max(output.height >> 2, 1u)};
+    const gpu::Extent2D shift3 = hdr_post_ ? shift1 : gpu::Extent2D{std::max(output.width >> 3, 1u), std::max(output.height >> 3, 1u)};
     ok = ok && CreateTarget(dof_half_, kPostFormat, shift1, color, c) && CreateTarget(dof_quarter_[0], kPostFormat, shift2, color, c) &&
          CreateTarget(dof_quarter_[1], kPostFormat, shift2, color, c) && CreateTarget(dof_eighth_[0], kPostFormat, shift3, color, c) &&
          CreateTarget(dof_eighth_[1], kPostFormat, shift3, color, c) && CreateTarget(velocity_, kPostFormat, output, color, c) &&
@@ -1128,7 +1160,21 @@ bool SceneRenderer::LoadResources(Vfs& vfs) {
             LogWarn("scene renderer: resource {} missing", path);
         }
     }
-    load("/Assets/sh/effect/vfx_pic/fx_flr23_iy_alp_clp", mask_, false);
+    {
+        FtexTexture ftex;
+        const char* path = "/Assets/sh/effect/vfx_pic/fx_flr23_iy_alp_clp";
+        if (LoadFtex(vfs.Textures(), path, ftex) && !ftex.mips.empty() && !ftex.mips[0].empty()) {
+            std::vector<std::vector<uint8_t>> mips;
+            for (uint32_t level = 0; level < ftex.mip_count && !ftex.mips[level].empty(); ++level) {
+                mips.push_back(ftex.mips[level]);
+            }
+            UploadImageMips(mask_, ftex.Format(), {ftex.width, ftex.height, 1}, mips);
+            LogInfo("scene renderer: resource {} {}x{} format {} with {} levels", path, ftex.width, ftex.height, static_cast<int>(ftex.Format()),
+                    mips.size());
+        } else {
+            LogWarn("scene renderer: resource {} missing", path);
+        }
+    }
     color_lut_key_.clear();
     if (extent_.width > 0) {
         gpu_->WaitIdle();
@@ -1137,7 +1183,7 @@ bool SceneRenderer::LoadResources(Vfs& vfs) {
     return true;
 }
 
-bool SceneRenderer::BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out) {
+bool SceneRenderer::BuildColorLut(const std::string& path, const ScreenSettings& screen, std::vector<uint8_t>& out, std::vector<float>* fine) {
     std::vector<glm::vec4> filter;
     if (!path.empty() && vfs_) {
         FtexTexture ftex;
@@ -1187,7 +1233,22 @@ bool SceneRenderer::BuildColorLut(const std::string& path, const ScreenSettings&
                 const glm::vec4 v = sample(glm::vec3(r, g, b) * screen.color_scale);
                 uint8_t* p = &out[(static_cast<size_t>(g) * 256 + b * 16 + r) * 4];
                 for (int c = 0; c < 4; ++c) {
-                    p[c] = ToByte(Hermite(std::clamp(v[c], 0.0f, 1.0f), screen.start_slope, screen.end_slope));
+                    const float graded = Hermite(std::clamp(v[c], 0.0f, 1.0f), screen.start_slope, screen.end_slope);
+                    p[c] = ToByte(c < 3 ? graded + screen.black_lift[c] * (1.0f - graded) : graded);
+                }
+            }
+        }
+    }
+    if (fine) {
+        fine->assign(size_t{64} * 64 * 64 * 4, 0.0f);
+        for (int g = 0; g < 64; ++g) {
+            for (int b = 0; b < 64; ++b) {
+                for (int r = 0; r < 64; ++r) {
+                    const glm::vec4 v = sample(glm::vec3(r, g, b) * (15.0f / 63.0f) * screen.color_scale);
+                    float* p = &(*fine)[(static_cast<size_t>(g) * 4096 + b * 64 + r) * 4];
+                    for (int c = 0; c < 4; ++c) {
+                        p[c] = Hermite(std::clamp(v[c], 0.0f, 1.0f), screen.start_slope, screen.end_slope);
+                    }
                 }
             }
         }
@@ -1196,18 +1257,30 @@ bool SceneRenderer::BuildColorLut(const std::string& path, const ScreenSettings&
 }
 
 void SceneRenderer::UpdateColorLut(const ScreenSettings& screen) {
-    const std::string key = std::format("{}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}", screen.lut_path, screen.color_scale.x, screen.color_scale.y,
-                                        screen.color_scale.z, screen.start_slope, screen.end_slope);
-    if (key == color_lut_key_) {
+    const glm::vec3 lift = hdr_post_ ? glm::vec3(0.0f) : screen.black_lift;
+    const std::string key = std::format("{}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}|{:.4f}", screen.lut_path, screen.color_scale.x, screen.color_scale.y,
+                                        screen.color_scale.z, screen.start_slope, screen.end_slope, lift.x, lift.y, lift.z);
+    if (color_lut_fine_ != hdr_post_) {
+        color_lut_key_.clear();
+        color_lut_fine_ = hdr_post_;
+    } else if (key == color_lut_key_) {
         return;
     }
     std::vector<uint8_t> lut;
-    BuildColorLut(screen.lut_path, screen, lut);
+    std::vector<float> fine;
+    BuildColorLut(screen.lut_path, screen, lut, hdr_post_ ? &fine : nullptr);
     gpu_->WaitIdle();
     std::swap(color_lut_, color_lut_prev_);
-    UploadImage(color_lut_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
+    const auto upload = [&](gpu::ImageResource& image) {
+        if (hdr_post_) {
+            UploadImage(image, gpu::Format::R32G32B32A32Sfloat, {4096, 64, 1}, fine.data(), fine.size() * sizeof(float));
+        } else {
+            UploadImage(image, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
+        }
+    };
+    upload(color_lut_);
     if (color_lut_key_.empty()) {
-        UploadImage(color_lut_prev_, gpu::Format::R8G8B8A8Unorm, {256, 16, 1}, lut.data(), lut.size());
+        upload(color_lut_prev_);
     }
     color_lut_prev_key_ = color_lut_key_;
     color_lut_key_ = key;
@@ -1365,6 +1438,10 @@ float SceneRenderer::MeterLuminance(const glm::vec2* texels, uint32_t count) {
     return std::isfinite(measured) ? std::max(measured, 0.0f) : -1.0f;
 }
 
+float SceneRenderer::Meter(const glm::vec2* texels, uint32_t count) const {
+    return hdr_post_ ? render::MeterWeighted(texels, count) : MeterLuminance(texels, count);
+}
+
 void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSettings& settings) {
     const bool advance_exposure = std::isfinite(dt) && dt > 0.0f;
     constexpr double kExposureFrame = 1.0 / 30.0;
@@ -1435,7 +1512,7 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
         return;
     }
     gpu_->InvalidateMapped(slot.luminance, 0, ~0ull);
-    const float measured = MeterLuminance(static_cast<const glm::vec2*>(slot.luminance.mapped), slot.luminance_groups);
+    const float measured = Meter(static_cast<const glm::vec2*>(slot.luminance.mapped), slot.luminance_groups);
     slot.measured = false;
     if (measured < 0.0f) {
         return;
@@ -1446,6 +1523,18 @@ void SceneRenderer::ReadMeasurements(FrameSlot& slot, float dt, const ExposureSe
     }
     if (!adaptation_valid_ || !toggles.adaptation || !lighting_ || !lighting_->valid) {
         exposure_samples_.clear();
+        return;
+    }
+    if (hdr_post_) {
+        ev_ = std::clamp(ev_, settings.min_ev, settings.max_ev);
+        const float raw = measured / std::max(slot.exposure_used, 1.0e-12f);
+        if (raw > 0.0f && std::isfinite(raw)) {
+            const float target = std::clamp(std::log2(settings.key / raw), settings.min_ev, settings.max_ev);
+            ev_ = render::AdaptEv(ev_, target, dt, settings.speed);
+            if (static const bool ev_trace = std::getenv("PT_EV_TRACE") != nullptr; ev_trace) {
+                LogInfo("ev trace: measured {:.5f} raw {:.5f} target {:.3f} ev {:.3f} dt {:.4f}", measured, raw, target, ev_, dt);
+            }
+        }
         return;
     }
     exposure_samples_.push_back({slot.exposure_sample_time, measured});
@@ -1497,6 +1586,88 @@ void SceneRenderer::RecordDumpCopy(gpu::CommandList& cmd, RenderTarget& target, 
     region.extent = {e.width, e.height, 1};
     cmd.CopyImageToBuffer(target.image, gpu::Layout::TransferSrc, buffer, {&region, 1});
     cmd.UseTargets({{&target, back}});
+}
+
+void SceneRenderer::DumpDraws(const std::vector<DrawItem>& items, const std::string& path) {
+    gpu_->WaitIdle();
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return;
+    std::vector<const GpuMesh*> meshes;
+    std::vector<std::pair<const GpuMesh*, uint32_t>> ids;
+    auto find = [&](const GpuMesh* m) -> int64_t {
+        for (const auto& [mesh, id] : ids) {
+            if (mesh == m) return id;
+        }
+        return -1;
+    };
+    for (const DrawItem& d : items) {
+        if (!d.mesh || find(d.mesh) >= 0) continue;
+        ids.emplace_back(d.mesh, static_cast<uint32_t>(meshes.size()));
+        meshes.push_back(d.mesh);
+    }
+    const uint32_t count = static_cast<uint32_t>(meshes.size());
+    std::fwrite(&count, 4, 1, f);
+    for (const GpuMesh* m : meshes) {
+        gpu::BufferResource vb, ib;
+        const bool ok = m->vertices.Valid() && m->indices.Valid() && MakeBuffer(vb, m->vertices.size, gpu::BufferUsage::TransferDst, true) && MakeBuffer(ib, m->indices.size, gpu::BufferUsage::TransferDst, true);
+        if (ok) {
+            gpu_->Submit([&](gpu::CommandList& cmd) {
+                cmd.CopyBuffer(m->vertices, 0, vb, 0, m->vertices.size);
+                cmd.CopyBuffer(m->indices, 0, ib, 0, m->indices.size);
+            });
+            gpu_->InvalidateMapped(vb, 0, ~0ull);
+            gpu_->InvalidateMapped(ib, 0, ~0ull);
+        }
+        const uint32_t name_length = static_cast<uint32_t>(m->name.size());
+        const uint32_t nv = ok ? static_cast<uint32_t>(m->vertices.size / sizeof(Vertex)) : 0u;
+        const uint32_t ni = ok ? static_cast<uint32_t>(m->indices.size / 4) : 0u;
+        const uint32_t ns = static_cast<uint32_t>(m->submeshes.size());
+        std::fwrite(&name_length, 4, 1, f);
+        std::fwrite(m->name.data(), 1, name_length, f);
+        std::fwrite(&nv, 4, 1, f);
+        std::fwrite(&ni, 4, 1, f);
+        std::fwrite(&ns, 4, 1, f);
+        if (ok) {
+            const Vertex* v = static_cast<const Vertex*>(vb.mapped);
+            std::vector<float> packed(size_t(nv) * 5);
+            for (uint32_t i = 0; i < nv; ++i) {
+                packed[size_t(i) * 5 + 0] = v[i].position.x;
+                packed[size_t(i) * 5 + 1] = v[i].position.y;
+                packed[size_t(i) * 5 + 2] = v[i].position.z;
+                packed[size_t(i) * 5 + 3] = v[i].uv0.x;
+                packed[size_t(i) * 5 + 4] = v[i].uv0.y;
+            }
+            std::fwrite(packed.data(), 4, packed.size(), f);
+            std::fwrite(ib.mapped, 4, ni, f);
+        }
+        for (const SubMesh& s : m->submeshes) {
+            const int32_t row[8] = {static_cast<int32_t>(s.first_index), static_cast<int32_t>(s.index_count), s.vertex_offset, static_cast<int32_t>(s.material), static_cast<int32_t>(s.pass),
+                                    s.double_sided ? 1 : 0, s.skinned ? 1 : 0, static_cast<int32_t>(s.group)};
+            std::fwrite(row, 4, 8, f);
+        }
+        if (vb.Valid()) gpu_->DestroyBuffer(vb);
+        if (ib.Valid()) gpu_->DestroyBuffer(ib);
+    }
+    uint32_t drawn = 0;
+    for (const DrawItem& d : items) drawn += d.mesh ? 1u : 0u;
+    std::fwrite(&drawn, 4, 1, f);
+    for (const DrawItem& d : items) {
+        if (!d.mesh) continue;
+        const uint32_t id = static_cast<uint32_t>(find(d.mesh));
+        std::fwrite(&id, 4, 1, f);
+        std::fwrite(&d.transform[0][0], 4, 16, f);
+        std::fwrite(&d.source, 8, 1, f);
+        const int32_t row[4] = {d.material_override, d.skin.empty() ? 0 : 1, d.view_attached ? 1 : 0, d.hidden_views};
+        std::fwrite(row, 4, 4, f);
+        uint8_t hidden[32] = {};
+        for (size_t i = 0; i < kMaxHiddenMeshes; ++i) {
+            if (d.hidden_meshes[i]) hidden[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
+        }
+        std::fwrite(hidden, 1, 32, f);
+        std::fwrite(&d.tint[0], 4, 4, f);
+    }
+    std::fclose(f);
+    LogInfo("draw dump: {} meshes, {} draws in {}", count, drawn, path);
 }
 
 bool SceneRenderer::DumpTargets(const std::string& prefix) {

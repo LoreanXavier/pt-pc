@@ -2688,6 +2688,7 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
     bool panned = false;
     bool front_custom = false;
     v.sum_scale = 1.0f;
+    v.object_ok = false;
     const Positioning* pos = v.node ? v.node->positioning : nullptr;
     if (pos && pos->has_3d) {
         const glm::vec3 emitter = EmitterPosition(v, obj);
@@ -2746,6 +2747,10 @@ void SoundEngine::UpdateVoiceParams(Voice& v) {
                 front_custom = true;
                 for (int s = 0; s < kSpeakers; ++s) {
                     v.sc_matrix[0][s] = gains[kFl][s];
+                }
+                if (spread < 50.0f && distance > 1e-4f) {
+                    v.object_ok = true;
+                    v.object_position = glm::vec3(glm::dot(rel, listener_right_), height, glm::dot(rel, listener_forward_));
                 }
             } else {
                 uint32_t mask = v.media->Info().channel_mask;
@@ -3256,14 +3261,27 @@ uint32_t SoundEngine::RenderVoice(Voice& v, uint32_t offset, uint32_t frames) {
         if (v.sc_mode == 1) {
             const float norm = v.mix_l[0] + v.mix_r[0];
             const float scale = norm > 1e-9f ? 1.0f / norm : 0.0f;
-            for (int s = 0; s < 8; ++s) {
-                const float m = v.sc_matrix[0][s] * scale;
-                if (m == 0.0f) {
-                    continue;
+            if (AudioObjectBlock* object = ObjectFor(v)) {
+                float power = 0.0f;
+                for (int s = 0; s < 8; ++s) {
+                    const float m = v.sc_matrix[0][s] * scale;
+                    power += m * m;
                 }
-                float* dst = sc_[s].data() + offset;
+                power = std::sqrt(power);
+                float* dst = object->samples.data() + object_block_base_ + offset;
                 for (uint32_t i = 0; i < produced; ++i) {
-                    dst[i] += (out_l[i] + out_r[i]) * m * weight[i];
+                    dst[i] += (out_l[i] + out_r[i]) * power * weight[i];
+                }
+            } else {
+                for (int s = 0; s < 8; ++s) {
+                    const float m = v.sc_matrix[0][s] * scale;
+                    if (m == 0.0f) {
+                        continue;
+                    }
+                    float* dst = sc_[s].data() + offset;
+                    for (uint32_t i = 0; i < produced; ++i) {
+                        dst[i] += (out_l[i] + out_r[i]) * m * weight[i];
+                    }
                 }
             }
         } else {
@@ -3635,6 +3653,38 @@ void SoundEngine::Render(float* out, uint32_t frames) {
     Render(out, frames, 2);
 }
 
+SoundEngine::AudioObjectBlock* SoundEngine::ObjectFor(const Voice& v) {
+    if (!object_mix_ || !v.object_ok) {
+        return nullptr;
+    }
+    ObjectMix& mix = *object_mix_;
+    for (uint32_t i = 0; i < mix.count; ++i) {
+        if (mix.objects[i].key == v.serial) {
+            mix.objects[i].position = v.object_position;
+            return &mix.objects[i];
+        }
+    }
+    if (mix.count >= mix.capacity) {
+        return nullptr;
+    }
+    if (mix.objects.size() <= mix.count) {
+        mix.objects.resize(mix.count + 1);
+    }
+    AudioObjectBlock& object = mix.objects[mix.count++];
+    object.key = v.serial;
+    object.position = v.object_position;
+    object.samples.assign(object_frames_, 0.0f);
+    return &object;
+}
+
+void SoundEngine::RenderObjects(float* bed, uint32_t frames, ObjectMix& mix) {
+    mix.count = 0;
+    object_mix_ = &mix;
+    object_frames_ = frames;
+    Render(bed, frames, 8);
+    object_mix_ = nullptr;
+}
+
 void SoundEngine::Render(float* out, uint32_t frames, uint32_t output_channels) {
     if (output_channels != 2 && output_channels != 6 && output_channels != 8) {
         output_channels = 2;
@@ -3663,6 +3713,7 @@ void SoundEngine::Render(float* out, uint32_t frames, uint32_t output_channels) 
     uint32_t done = 0;
     while (done < frames) {
         const uint32_t n = std::min(kBlockFrames, frames - done);
+        object_block_base_ = done;
         RenderBlock(out + static_cast<size_t>(done) * output_channels, n, output_channels);
         done += n;
     }

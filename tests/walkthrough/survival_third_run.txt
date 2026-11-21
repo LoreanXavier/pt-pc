@@ -1,0 +1,24 @@
+# third person: the handgun through a sprint and its stop (owner, 8 November: the gun left the hand while running and was drawn
+# again when the run ended). Pictures standing, running (a burst over the stride) and through the stop
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sthird 1
+sact weapon=1
+swait 90
+sshot {shots}/third_stand.png
+sact sprint+
+sstick 0 1 120
+sburst 40 {shots}/third_run
+sstick 0 1 40
+sburst 60 {shots}/third_stop
+sact sprint-
+swait 120
+sshot {shots}/third_after.png
+slog

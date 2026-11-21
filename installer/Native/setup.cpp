@@ -28,6 +28,7 @@ namespace fs=std::filesystem;
 namespace {
 using namespace pt::setup;
 constexpr const wchar_t* kProduct=L"P.T. PC Port";constexpr const wchar_t* kSetupTitle=L"P.T. PC Port Setup";constexpr const wchar_t* kFolder=L"P.T. PC Port";
+constexpr const wchar_t* kUninstallRegKey=L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\PT_PC_Port";
 constexpr UINT kStatus=WM_APP+1,kFinished=WM_APP+2,kProgress=WM_APP+3;
 HWND window,pkg_edit,dest_edit,status_label,install_button,cancel_button,shortcut_check,progress_bar,update_label;
 pt::update::Checker updates;constexpr UINT_PTR kUpdateTimer=1;
@@ -153,8 +154,110 @@ void Shortcut(const fs::path& destination){
     }
     CoUninitialize();
 }
+void RegisterUninstallEntry(const fs::path& destination){
+    HKEY key=nullptr;
+    if(RegCreateKeyExW(HKEY_CURRENT_USER,kUninstallRegKey,0,nullptr,0,KEY_SET_VALUE,nullptr,&key,nullptr)!=ERROR_SUCCESS)return;
+    auto set_str=[&](const wchar_t* name,const std::wstring& value){
+        RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));
+    };
+    auto set_dword=[&](const wchar_t* name,DWORD value){
+        RegSetValueExW(key,name,0,REG_DWORD,reinterpret_cast<const BYTE*>(&value),sizeof(value));
+    };
+    const fs::path root=FolderPath(destination);
+    const std::wstring updater=(root/L"pt-updater.exe").native();
+    const std::wstring quoted_updater=pt::os::QuoteWindowsArgument(updater);
+    const std::wstring quoted_root=pt::os::QuoteWindowsArgument(root.native());
+    set_str(L"DisplayName",kProduct);
+    set_str(L"DisplayVersion",Widen(std::string(pt::update::CurrentVersion())));
+    set_str(L"Publisher",kProduct);
+    set_str(L"InstallLocation",root.native());
+    set_str(L"DisplayIcon",(root/L"pt.exe").native()+L",0");
+    set_str(L"UninstallString",quoted_updater+L" --uninstall "+quoted_root);
+    set_str(L"QuietUninstallString",quoted_updater+L" --uninstall --silent "+quoted_root);
+    set_dword(L"NoModify",1);
+    set_dword(L"NoRepair",1);
+    const uint64_t kb=FolderBytes(root)/1024;
+    if(kb>0 && kb<=UINT32_MAX)set_dword(L"EstimatedSize",DWORD(kb));
+    RegCloseKey(key);
+}
+void UnregisterUninstallEntry(){
+    RegDeleteTreeW(HKEY_CURRENT_USER,kUninstallRegKey);
+}
+void RemoveMatchingShortcut(const fs::path& destination){
+    const fs::path existing=ShortcutInstall();
+    std::error_code ec;
+    if(existing.empty() || !fs::equivalent(existing,FolderPath(destination),ec))return;
+    PWSTR desktop=nullptr;
+    if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop,0,nullptr,&desktop)) && desktop){
+        fs::remove(fs::path(desktop)/(std::wstring(kProduct)+L".lnk"),ec);
+    }
+    CoTaskMemFree(desktop);
+}
+fs::path CurrentExePath(){
+    std::wstring buf(32768,L'\0');
+    const DWORD n=GetModuleFileNameW(nullptr,buf.data(),DWORD(buf.size()));
+    buf.resize(n);
+    return fs::path(buf);
+}
+bool PathIsInside(const fs::path& child,const fs::path& parent){
+    std::error_code ec;
+    const fs::path rel=fs::relative(fs::weakly_canonical(child,ec),fs::weakly_canonical(parent,ec),ec);
+    if(ec || rel.empty())return false;
+    const std::wstring s=rel.native();
+    return !(s.size()>=2 && s[0]==L'.' && s[1]==L'.');
+}
+int RunUninstall(const fs::path& destination,bool silent,bool remove_data,bool self_delete){
+    const fs::path root=FolderPath(destination);
+    if(!InspectInstall(root).found){
+        if(!silent)MessageBoxW(nullptr,(L"No P.T. PC Port installation was found in:\n"+root.native()).c_str(),kSetupTitle,MB_OK|MB_ICONERROR);
+        return 1;
+    }
+    if(!silent){
+        const std::wstring msg=L"Uninstall P.T. PC Port from:\n"+root.native()+
+            (remove_data?L"\n\nProgram files, saves and settings will be removed. Continue?":L"\n\nProgram files and desktop shortcut will be removed.\nYour saves, settings (data/) and mods will be kept. Continue?");
+        if(MessageBoxW(nullptr,msg.c_str(),kSetupTitle,MB_YESNO|MB_ICONQUESTION)!=IDYES)return 0;
+    }
+    const fs::path self=CurrentExePath();
+    if(!self_delete && !self.empty() && PathIsInside(self,root)){
+        std::error_code ec;
+        const fs::path temp_exe=fs::temp_directory_path(ec)/(L"pt-uninstall-"+std::to_wstring(GetCurrentProcessId())+L".exe");
+        if(fs::copy_file(self,temp_exe,fs::copy_options::overwrite_existing,ec)){
+            std::wstring cmd=pt::os::QuoteWindowsArgument(temp_exe.native())+L" --uninstall --silent --self-delete";
+            if(remove_data)cmd+=L" --remove-data";
+            cmd+=L" "+pt::os::QuoteWindowsArgument(root.native());
+            STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
+            if(CreateProcessW(temp_exe.c_str(),cmd.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi)){
+                CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+                return 0;
+            }
+        }
+    }
+    if(self_delete){
+        const fs::path locked=root/L"pt-updater.exe";
+        for(int i=0;i<30;++i){
+            std::error_code ec;
+            if(!fs::exists(locked,ec) || fs::remove(locked,ec))break;
+            Sleep(100);
+        }
+    }
+    RemoveMatchingShortcut(root);
+    const UninstallResult r=UninstallInstallFiles(root,remove_data);
+    UnregisterUninstallEntry();
+    if(!silent && !self_delete){
+        const std::wstring done=L"P.T. PC Port has been uninstalled ("+std::to_wstring(r.removed_files)+L" files removed).";
+        MessageBoxW(nullptr,done.c_str(),kSetupTitle,MB_OK|MB_ICONINFORMATION);
+    }
+    if(self_delete && !self.empty()){
+        std::wstring cleanup=L"cmd.exe /c ping -n 2 127.0.0.1 >nul & del /f /q "+pt::os::QuoteWindowsArgument(self.native());
+        STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
+        if(CreateProcessW(nullptr,cleanup.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){
+            CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+        }
+    }
+    return 0;
+}
 constexpr size_t kMaxGamePath=250;
-InstallOutcome Install(const fs::path& input,const fs::path& destination,bool shortcut){
+InstallOutcome Install(const fs::path& input,const fs::path& destination,bool shortcut,bool register_app=true){
     if(!destination.empty() && (FolderPath(destination)/L"pt.exe").native().size()>=kMaxGamePath)
         throw std::runtime_error("This installation folder's path is too long: the game cannot start when its path has 250 characters or more. Choose a folder with a shorter path.");
     InstallSteps steps;steps.version=std::string(pt::update::CurrentVersion());
@@ -176,7 +279,9 @@ InstallOutcome Install(const fs::path& input,const fs::path& destination,bool sh
         if(const char* at=std::getenv("PT_UPDATE_TEST_PAUSE_AT"))steps.pause_at=std::atoi(at);
         if(const char* file=std::getenv("PT_UPDATE_TEST_CORRUPT"))steps.corrupt_after_swap=file;
     }
-    return RunInstall(input,destination,shortcut,steps);
+    const InstallOutcome outcome=RunInstall(input,destination,shortcut,steps);
+    if(register_app)RegisterUninstallEntry(destination);
+    return outcome;
 }
 std::wstring Outcome(const InstallOutcome& outcome){
     std::wstring text;
@@ -250,7 +355,20 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
     bool preview=argc==3 && std::wstring(argv[1])==L"--preview";fs::path preview_file=preview?argv[2]:L"";
     if(argc>1 && !preview){
         int result=0;try{
-            if(std::wstring(argv[1])==L"--install" && argc==5){window=nullptr;if(!ResultPathWritable(argv[4]))throw std::runtime_error("refusing to overwrite the result file");auto outcome=Install(argv[2],argv[3],false);std::ofstream out(argv[4]);
+            if(std::wstring(argv[1])==L"--uninstall"){
+                bool silent=false,remove_data=false,self_delete=false;
+                fs::path target;
+                for(int i=2;i<argc;++i){
+                    const std::wstring arg(argv[i]);
+                    if(arg==L"--silent")silent=true;
+                    else if(arg==L"--remove-data")remove_data=true;
+                    else if(arg==L"--self-delete")self_delete=true;
+                    else target=arg;
+                }
+                if(target.empty())target=CurrentExePath().parent_path();
+                result=RunUninstall(target,silent,remove_data,self_delete);
+            }
+            else if(std::wstring(argv[1])==L"--install" && argc==5){window=nullptr;if(!ResultPathWritable(argv[4]))throw std::runtime_error("refusing to overwrite the result file");auto outcome=Install(argv[2],argv[3],false,false);std::ofstream out(argv[4]);
                 out<<(outcome.updated?"PASS updated":"PASS installed");if(outcome.updated)out<<"\nfrom "<<(outcome.old_version.empty()?"older install":outcome.old_version)<<" replaced "<<outcome.swap.replaced<<" added "<<outcome.swap.added<<" removed "<<outcome.swap.removed<<" archives "<<(outcome.archives_restored?"restored":"kept")
                     <<"\nunchanged "<<outcome.unchanged<<" verified "<<outcome.verified<<" repaired "<<outcome.repaired<<" written "<<outcome.written_bytes<<" bytes";
                 for(const auto& note:outcome.notes)out<<"\nnote: "<<note;if(outcome.title_picture_missing)out<<"\ntitle picture missing";if(outcome.recovered)out<<"\nrecovered an interrupted update";out<<"\n"<<trace.Summary();}
@@ -285,6 +403,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                 failures+=SelfTestPortableUpdate(root/L"portable",Hash);
                 failures+=SelfTestFgUnlockFiles(root/L"fg-unlock");
                 failures+=SelfTestUnicodePaths(root);
+                failures+=SelfTestUninstall(root/L"uninstall");
                 fs::remove_all(root);
                 if(!failures.empty())throw std::runtime_error("Self test failed:"+failures);
                 using pt::update::CompareVersions;

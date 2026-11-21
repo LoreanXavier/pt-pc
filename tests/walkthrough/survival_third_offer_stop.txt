@@ -1,0 +1,36 @@
+# third person: the radio's offer coming on a body at a run and at a walk, in a run paced as a window at 170 Hz (--display-rate): the body must
+# go to its stand without a shake (owner, 8 November). Pictures on every tick through the stop; PT_BODY_MOTION=1 for tools/survival_guns/motion_check.py
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 90
+sact offer
+sburst 70 {shots}/run_offer
+swait 90
+sact pick=0
+skey Left_Shift 0
+skey W 0
+swait 90
+steleport -1.15 27
+swait 30
+skey W 1
+swait 90
+sact offer
+sburst 70 {shots}/walk_offer
+swait 90
+sact pick=0
+skey W 0
+swait 30
+slog

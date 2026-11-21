@@ -14,6 +14,7 @@
 
 #include "engine/anim/help_bones.h"
 #include "engine/anim/sim_physics.h"
+#include "engine/anim/sim_rigid.h"
 #include "engine/anim/skeleton.h"
 #include "engine/render/camera.h"
 #include "game/demo_stream.h"
@@ -148,7 +149,7 @@ struct DemoModel {
     std::set<uint64_t> hidden_meshes;
     bool player_own = false;
     std::shared_ptr<const anim::SimRig> sim_rig;
-    std::shared_ptr<anim::SimPhysics> sim;
+    std::shared_ptr<anim::SimRigid> sim;
     double sim_frame = -1.0;
     bool sim_suspended = false;
     std::vector<std::pair<int32_t, int32_t>> sim_suspend_sections;
@@ -179,6 +180,7 @@ struct PlayingDemo {
     double advance_wait = 0.0;
     double finish_wait = 0.0;
     bool skip_requested = false;
+    bool quiet = false;
     bool end_reached = false;
     bool finish_motion_sent = false;
     std::shared_ptr<DemoStreamData> stream;
@@ -210,6 +212,7 @@ struct PlayingDemo {
     bool player_released = false;
     std::string player_model;
     bool player_visible = false;
+    bool third_person_body = false;
     std::vector<DemoModel> models;
     std::set<std::string> locators;
     std::vector<DemoLight> lights;
@@ -239,12 +242,16 @@ public:
 
     void IndexStage(Stage& stage);
     void ForgetStage(const Stage& stage);
-    bool Play(std::string_view demo_id);
+    bool IndexPackageDemo(std::string_view fpk_path, std::string_view demo_id, uint32_t stage_id);
+    bool Play(std::string_view demo_id, bool quiet = false);
     bool PlayScenery(std::string_view demo_id, double frame);
+    std::vector<glm::mat4> ModelsDrawn(std::string_view part) const;
     bool SceneryReady() const;
     bool IsHeld(std::string_view demo_id) const;
     const DemoCameraParams* SceneryCameraParams() const;
     void SetDemoTransform(std::string_view demo_id, const glm::quat& rotation, const glm::vec3& translation);
+    void SetDemoThirdPersonBody(std::string_view demo_id, bool on);
+    bool PlayerBoneWorld(std::string_view demo_id, std::string_view bone_name, glm::mat4& out) const;
     void StopAll();
     void ToggleLoop(std::string_view demo_id);
     void Skip(std::string_view demo_id = {});
@@ -257,6 +264,7 @@ public:
     bool CameraOverride(Camera& camera) const;
     bool CameraWorld(glm::vec3& position, glm::quat& rotation, float& fov_y) const;
     double PlayTime(std::string_view demo_id) const;
+    double PlayFrame(std::string_view demo_id) const;
     const std::vector<PlayingDemo>& Playing() const { return playing_; }
     const DemoInfo* Find(std::string_view demo_id) const;
     void Update(float dt);

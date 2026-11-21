@@ -1,0 +1,96 @@
+# third person, three moves the owner reported on 8 November. The radio's offer coming while walking (the body must stand, not keep
+# a stride); Shift tapped over and over at a walk (the left arm must not swing with each tap); the shotgun lowered from the aim at the
+# top of the view (pictures for its path)
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+swait 60
+# the offer while the walk's key is held
+skey W 1
+swait 90
+sact offer
+sburst 40 {shots}/offer
+swait 400
+sshot {shots}/offer_after.png
+sact pick=0
+skey W 0
+swait 60
+# a steady walk (the measure's baseline)
+slog
+skey W 1
+swait 120
+slog
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+skey Left_Shift 1
+swait 7
+skey Left_Shift 0
+swait 7
+slog
+skey W 0
+swait 60
+# the shotgun: up to the top of the view, aimed, let go
+sact weapon=2
+swait 60
+slook 0 -0.03 60
+swait 10
+sshot {shots}/shotgun_low_top.png
+sact aim+
+swait 40
+sshot {shots}/shotgun_aimed_top.png
+sact aim-
+sburst 30 {shots}/shotgun_down
+swait 30
+sshot {shots}/shotgun_rest.png
+slog

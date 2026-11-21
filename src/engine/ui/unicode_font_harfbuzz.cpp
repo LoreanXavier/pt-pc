@@ -38,6 +38,10 @@ const char* FontFile(std::string_view family) {
     if (family == "Noto Kufi Arabic") return "NotoKufiArabic.ttf";
     if (family == "Noto Naskh Arabic") return "NotoNaskhArabic.ttf";
     if (family == "Noto Sans SC") return "NotoSansSC.ttf";
+    if (family == "Marck Script") return "MarckScript.ttf";
+    if (family == "Yomogi") return "Yomogi.ttf";
+    if (family == "Long Cang") return "LongCang.ttf";
+    if (family == "Aref Ruqaa") return "ArefRuqaa.ttf";
     return nullptr;
 }
 uint16_t Be16(const unsigned char* p) { return uint16_t((p[0] << 8) | p[1]); }

@@ -218,6 +218,7 @@ int TrapSystem::ExecDemo(const Context& ctx, const fox2::Entity& e) {
     }
     game_.OnTrapDemo(demo_id, origin, f.GetBool(e, "loopDemo"));
     if (f.GetBool(e, "nextFloorDemo")) {
+        if (game_.OpenNightDoor()) return 1;
         if (f.GetBool(e, "needSave")) game_.OnBasementExit();
         game_.Floor().GoNextFloor(f.GetBool(e, "needSave"));
     }

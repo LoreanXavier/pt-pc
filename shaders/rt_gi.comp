@@ -76,7 +76,7 @@ void main() {
             Material m = materials[h.material];
             bool front = rayQueryGetIntersectionFrontFaceEXT(rq, true) || (m.flags & MAT_TWO_SIDED) != 0u;
             if (front && m.kind == KIND_DEFERRED) {
-                vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), h.uv, pass.f0.y).rgb;
+                vec3 albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), h.uv, pass.f0.y).rgb) * h.tint;
                 vec3 hit = origin + dir * travel;
                 result = albedo * RtFullDirect(hit, h.normal, pass.ids.y, true, rng, vec2(half_pixel), v.exposure.w);
             }
@@ -92,5 +92,5 @@ void main() {
     if (pass.f0.z > 0.5) {
         result = fract(world * 0.5);
     }
-    imageStore(rt_gi_raw, half_pixel, vec4(min(result, vec3(64.0)), travel));
+    imageStore(rt_gi_raw, half_pixel, vec4(LightCap(result, 64.0), travel));
 }

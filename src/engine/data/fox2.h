@@ -49,6 +49,7 @@ struct Entity {
     uint64_t id = 0;
     uint16_t class_id = 0;
     uint16_t class_version = 0;
+    uint32_t trace_file = 0;
     std::vector<Property> properties;
     std::vector<Property> dynamic_properties;
 

@@ -6,6 +6,7 @@ struct StartOptions {
     bool gamepad = false;
     bool audio = false;
     bool background = false;
+    bool virtual_only = false;
 };
 
 void Start(const StartOptions& options);

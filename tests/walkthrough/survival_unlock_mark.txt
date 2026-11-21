@@ -1,0 +1,14 @@
+# the night's Extras entry (Game::NightUnlocked): four finishes (NG+3 finished -> NG+4 started) still keep it locked;
+# it unlocks only the moment the NG+4 exit door opens onto the street night
+sexpect night 0
+sgameplus
+sgameplus
+sgameplus
+swait 10
+sexpect gameplustier 3
+sexpect night 0
+sgameplus
+swait 10
+sexpect gameplustier 4
+sexpect night 0
+slog

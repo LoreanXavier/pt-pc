@@ -449,23 +449,25 @@ const ModSet* Active() {
 namespace {
 std::mutex g_generated_mutex;
 std::unordered_map<std::string, std::vector<uint8_t>> g_generated;
+std::atomic<bool> g_any_generated{false};
 }
 
 void RegisterGenerated(std::string asset_path, std::vector<uint8_t> bytes) {
     std::lock_guard lock(g_generated_mutex);
     g_generated[LowerCopy(asset_path)] = std::move(bytes);
+    g_any_generated.store(true, std::memory_order_release);
 }
 
 std::optional<std::vector<uint8_t>> ReadOverride(std::string_view asset_path) {
-    const ModSet* set = Active();
-    if (!set) {
-        return std::nullopt;
-    }
-    {
+    if (g_any_generated.load(std::memory_order_acquire)) {
         std::lock_guard lock(g_generated_mutex);
         if (auto it = g_generated.find(LowerCopy(asset_path)); it != g_generated.end()) {
             return it->second;
         }
+    }
+    const ModSet* set = Active();
+    if (!set) {
+        return std::nullopt;
     }
     const OverrideIndex::Hit* hit = set->index.Find(asset_path);
     if (!hit) {

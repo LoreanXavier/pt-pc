@@ -5,6 +5,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -22,6 +23,7 @@
 #include "game/game.h"
 #include "game/stage_data.h"
 #include "game/stage_manager.h"
+#include "game/survival/survival.h"
 
 namespace pt::game {
 namespace {
@@ -45,6 +47,35 @@ constexpr HandyPose kHandyPoses[] = {{-55.0f, {-0.2402f, 0.0431f, 0.2678f}}, {-3
 constexpr HandyPose kPickupHoldPoses[] = {{-55.0f, {-0.2446f, -0.0958f, 0.1462f}}, {-45.8f, {-0.2442f, -0.1141f, 0.1072f}},
                                           {-38.15f, {-0.2459f, -0.1183f, 0.0859f}}, {-22.17f, {-0.2484f, -0.1213f, 0.0380f}}};
 
+struct BreathLoop {
+    float seconds;
+    float c[5][6];
+};
+constexpr BreathLoop kPlayBreath{50.0f / 30.0f,
+                                 {{-0.2049f, 0.3639f, 0.0040f, 0.0025f, 0.0133f, 0.0059f},
+                                  {0.1032f, 0.5280f, -0.0113f, 0.0153f, -0.0011f, 0.0100f},
+                                  {0.8702f, 0.0298f, -0.0437f, 0.1596f, -0.0671f, -0.0205f},
+                                  {0.3388f, -1.9833f, -0.0440f, -0.1835f, 0.0302f, -0.0566f},
+                                  {-3.1988f, -0.0074f, -0.1765f, 0.0261f, -0.0551f, 0.0004f}}};
+constexpr BreathLoop kHoldBreath{36.0f / 30.0f,
+                                 {{-0.1091f, 0.0006f, 0.0042f, 0.0074f, -0.0082f, 0.0047f},
+                                  {-0.0811f, 0.1397f, -0.0016f, -0.0074f, -0.0037f, -0.0005f},
+                                  {1.6042f, 0.5580f, -0.1545f, -0.1505f, 0.1551f, -0.0670f},
+                                  {1.6803f, -2.3867f, 0.0950f, 0.1597f, 0.1054f, 0.0317f},
+                                  {-4.0313f, 1.9254f, -0.5143f, -0.1750f, -0.1193f, 0.0645f}}};
+
+std::array<float, 5> BreathAt(const BreathLoop& loop, float time) {
+    const float phase = 6.2831853f * (time / loop.seconds - std::floor(time / loop.seconds));
+    std::array<float, 5> out{};
+    for (size_t k = 0; k < out.size(); ++k) {
+        for (int harmonic = 0; harmonic < 3; ++harmonic) {
+            const float a = static_cast<float>(harmonic + 1) * phase;
+            out[k] += loop.c[k][2 * harmonic] * std::cos(a) + loop.c[k][2 * harmonic + 1] * std::sin(a);
+        }
+    }
+    return out;
+}
+
 template <size_t N>
 HandyPose PoseAt(const HandyPose (&poses)[N], float view_pitch) {
     if (view_pitch <= poses[0].view_pitch) {
@@ -64,7 +95,7 @@ HandyPose PoseAt(const HandyPose (&poses)[N], float view_pitch) {
 }
 
 void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pickup_hold, float demo_pose, glm::vec3& position,
-                    glm::vec3& direction, glm::vec3* right_out, glm::vec3* up_out) {
+                    glm::vec3& direction, glm::vec3* right_out, glm::vec3* up_out, glm::vec2 breath) {
     const glm::vec3 forward = camera.Forward();
     const glm::vec3 right = camera.Right();
     const glm::vec3 up = glm::normalize(glm::cross(right, forward));
@@ -90,6 +121,17 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
         u_cam = glm::cross(d_cam, r_cam);
         light_cam = pose.pivot + r_cam * kHandOffset.x + u_cam * kHandOffset.y + d_cam * kHandOffset.z;
     }
+    if (breath.y > 0.0f) {
+        const std::array<float, 5> play = BreathAt(kPlayBreath, breath.x), hold = BreathAt(kHoldBreath, breath.x);
+        const float w = std::min(pickup_hold, 1.0f);
+        std::array<float, 5> v{};
+        for (size_t k = 0; k < v.size(); ++k) v[k] = (play[k] + (hold[k] - play[k]) * w) * breath.y;
+        light_cam += glm::vec3(v[2], v[3], v[4]) * 0.001f;
+        const glm::quat turn = glm::angleAxis(glm::radians(-v[1]), r_cam) * glm::angleAxis(glm::radians(v[0]), glm::vec3(0.0f, 1.0f, 0.0f));
+        d_cam = glm::normalize(turn * d_cam);
+        r_cam = glm::normalize(turn * r_cam);
+        u_cam = glm::normalize(turn * u_cam);
+    }
     position = camera.position + right * light_cam.x + up * light_cam.y + forward * light_cam.z;
     direction = glm::normalize(right * d_cam.x + up * d_cam.y + forward * d_cam.z);
     if (right_out) {
@@ -106,6 +148,38 @@ void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pick
             direction = glm::normalize(to_target);
         }
     }
+}
+
+glm::vec3 HandyMaskUp(const Camera& camera, const glm::vec3& direction, float clip_roll_degrees, glm::vec2 pickup) {
+    const float kRestYaw = glm::radians(-0.023f);
+    const float kRestPitch = glm::radians(25.828f);
+    const float kRestRoll = glm::radians(-57.311f);
+    const glm::vec3 y(0.0f, 1.0f, 0.0f);
+    const glm::vec3 heading(-std::sin(camera.yaw), 0.0f, -std::cos(camera.yaw));
+    const glm::vec3 side = glm::cross(heading, y);
+    const glm::vec3 rest = side * (std::sin(kRestYaw) * std::cos(kRestPitch)) + y * std::sin(kRestPitch) + heading * (std::cos(kRestYaw) * std::cos(kRestPitch));
+    const glm::vec3 rest_ref = glm::normalize(y - rest * glm::dot(y, rest));
+    const glm::vec3 rest_up = rest_ref * std::cos(kRestRoll) + glm::cross(rest, rest_ref) * std::sin(kRestRoll);
+    const glm::vec3 d = glm::normalize(direction);
+    const glm::vec3 hand_up = glm::quat(rest, d) * rest_up;
+    const auto square = [&](const glm::vec3& v) {
+        const glm::vec3 s = v - d * glm::dot(v, d);
+        return glm::length(s) > 1.0e-5f ? glm::normalize(s) : glm::vec3(0.0f);
+    };
+    Camera level = camera;
+    level.roll = 0.0f;
+    const glm::vec3 level_up = square(level.Up());
+    const glm::vec3 view_up = square(camera.Up());
+    const glm::vec3 up = square(hand_up);
+    if (level_up == glm::vec3(0.0f) || view_up == glm::vec3(0.0f) || up == glm::vec3(0.0f)) {
+        return up == glm::vec3(0.0f) ? view_up : up;
+    }
+    const float hand_angle = std::atan2(glm::dot(glm::cross(level_up, up), d), glm::dot(level_up, up));
+    float angle = hand_angle + glm::radians(clip_roll_degrees);
+    if (pickup.y > 0.0f) {
+        angle += std::remainder(glm::radians(pickup.x) - angle, glm::two_pi<float>()) * std::min(pickup.y, 1.0f);
+    }
+    return glm::normalize(view_up * std::cos(angle) + glm::cross(d, view_up) * std::sin(angle));
 }
 
 namespace {
@@ -455,10 +529,18 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
     const HandyLightParameters& p = game.Parameters().handy_light;
     SceneLight l;
     l.id = kHandyLightId;
+    l.light_fitting = kHandyLightFitting;
     l.name = "PlayerHandyLight";
     l.type = LightType::Spot;
     const glm::vec3 up = glm::normalize(glm::cross(camera.Right(), camera.Forward()));
-    HandyLightPose(camera, aim_point, game.HandyPickupHold(), game.HandyDemoPose(), l.position, l.direction);
+    HandyLightPose(camera, aim_point, game.HandyPickupHold(), game.HandyDemoPose(), l.position, l.direction, nullptr, nullptr, game.HandyBreath());
+    if (static const bool pose_log = std::getenv("PT_HANDY_POSE_LOG") != nullptr; pose_log) {
+        const glm::vec3 rel = l.position - camera.position, f = camera.Forward(), r = camera.Right(), u = glm::normalize(glm::cross(r, f));
+        const glm::vec3 d(glm::dot(l.direction, r), glm::dot(l.direction, u), glm::dot(l.direction, f));
+        LogInfo("handy pose: frame {} at ({:.1f} {:.1f} {:.1f}) aim {:+.3f} {:+.3f} breath {:.2f}", game.Frame(), 1000.0f * glm::dot(rel, r),
+                1000.0f * glm::dot(rel, u), 1000.0f * glm::dot(rel, f), glm::degrees(std::atan2(d.x, d.z)), glm::degrees(std::asin(std::clamp(d.y, -1.0f, 1.0f))),
+                game.HandyBreath().y);
+    }
     if (const auto& pose = game.HandyPoseOverride()) {
         l.position = pose->first;
         l.direction = pose->second;
@@ -468,20 +550,37 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
             lens = glm::mix(blend->handy_lens, lens, blend->t);
         }
         if (game.ThirdPerson() && !game.FreeView()) {
-            const float weight = game.ThirdPersonWeight();
-            const float pose_weight = weight * weight * (3.0f - 2.0f * weight);
-            l.position = glm::mix(l.position, lens, pose_weight);
+            if (game.BodyShown()) {
+                l.position = lens;
+            } else {
+                const float weight = std::clamp(game.ThirdPersonWeight() / 0.25f, 0.0f, 1.0f);
+                const float pose_weight = weight * weight * (3.0f - 2.0f * weight);
+                l.position = glm::mix(l.position, lens, pose_weight);
+            }
         } else if (game.DetachedView()) {
             l.position = lens;
         }
     }
-    l.up = glm::normalize(up - l.direction * glm::dot(up, l.direction));
+    if (game.HandyPoseOverride() || game.SurvivalActive()) {
+        l.up = glm::normalize(up - l.direction * glm::dot(up, l.direction));
+    } else {
+        l.up = HandyMaskUp(camera, l.direction, blend ? glm::mix(blend->handy_mask_roll, game.HandyMaskRoll(), blend->t) : game.HandyMaskRoll(),
+                           blend ? glm::mix(blend->handy_pickup_roll, game.HandyPickupMaskRoll(), blend->t) : game.HandyPickupMaskRoll());
+    }
+    if (static const bool mask_log = std::getenv("PT_HANDY_POSE_LOG") != nullptr; mask_log) {
+        const glm::vec3 d = glm::normalize(l.direction);
+        glm::vec3 view_up = camera.Up() - d * glm::dot(camera.Up(), d);
+        view_up = glm::normalize(view_up);
+        LogInfo("handy mask: frame {} roll {:+.3f} clip roll {:+.3f}", game.Frame(),
+                glm::degrees(std::atan2(glm::dot(glm::cross(view_up, l.up), d), glm::dot(view_up, l.up))), game.HandyMaskRoll());
+    }
     const glm::vec3 color = glm::vec3(p.color[0], p.color[1], p.color[2]) * handy_color_;
     const glm::vec3 rgb = light_math::ColorFromTemperature(p.temperature, 0.0f, p.lumen, color);
     const float omega = light_math::SpotSolidAngle(p.umbra_angle, p.penumbra_angle, p.attenuation_exponent);
     l.intensity = rgb / omega * p.power_scale / kPi;
     static const float street_gain = [] { const char* g = std::getenv("PT_STREET_HANDY_GAIN"); return g ? static_cast<float>(std::atof(g)) : 16.0f; }();
     if (game.StreetWalkActive()) l.intensity *= street_gain;
+    game.SetHandyLensRadiance(l.intensity / (kPi * 0.020f * 0.020f));
     l.source_radius = light_math::SourceRadius(p.light_size);
     l.inner_range = p.inner_range;
     l.outer_range = p.outer_range;
@@ -500,6 +599,7 @@ void RenderSceneBuilder::AddHandyLight(Game& game, const Camera& camera, const g
     l.cast_shadow = true;
     l.masked = true;
     l.mask_fov = p.umbra_angle * kPi / 180.0f;
+    l.mask_soft = game.StreetWalkActive();
     out.lights.push_back(l);
     AddHandyReflection(game, l, out);
 }
@@ -773,7 +873,7 @@ void RenderSceneBuilder::AddMirrorLight(Game& game, const Camera& camera, SceneL
         }
     }
     const auto handy = std::find_if(out.lights.begin(), out.lights.end(), [](const SceneLight& l) { return l.id == kHandyLightId; });
-    const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
+    static const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
     auto trace_line = [&](const char* why) {
         if (trace) {
             LogInfo("mirror trace: off ({}) handy {} mirror {} area {}", why, handy != out.lights.end(), mirror != nullptr,
@@ -1020,6 +1120,12 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
                   blended ? blend : nullptr);
     AddLisaGlint(game, out);
     AddIntercomLight(game, out);
+    if (const SurvivalNight* survival = game.Survival()) {
+        survival->AddLights(out);
+    }
+    if (const StreetHouse* house = game.House()) {
+        house->AddLights(out, game.SurvivalActive() ? game.Survival()->StreetLight() : 1.0f);
+    }
     for (const DemoLight& light : game.Demos().Lights()) {
         AddDemoLight(light, blended ? blend : nullptr, out);
     }
@@ -1099,6 +1205,18 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     screen.focus_distance = focus;
     screen.focal_length = game.Parameters().player.focal_length;
     screen.aperture = kCameraAperture;
+    if (game.SurvivalActive() && !game.ThirdPersonCameraActive()) screen.dof_flags |= 1u;
+    if (game.SurvivalActive()) {
+        const SurvivalHud& hud = game.Survival()->Hud();
+        const float since = std::max(0.0f, hud.run_seconds - hud.last_beat);
+        const float beat = hud.heart_rate > 0.0f ? std::exp(-since * 7.0f) : 0.0f;
+        const float low = hud.low_health * (0.75f + 0.25f * beat);
+        const float hurt = hud.hurt * 0.5f;
+        const float k = std::clamp(low + hurt, 0.0f, 1.0f);
+        screen.color_scale *= glm::mix(glm::vec3(1.0f), glm::vec3(1.0f, 0.62f, 0.58f), k);
+        screen.grain_strength *= 1.0f + 2.2f * low;
+        screen.film_grain = screen.film_grain || low > 0.05f;
+    }
     screen.shutter_speed = kCameraShutter;
     if (const LightingRow* row = game.Parameters().Lighting(game.FloorLightingRow())) {
         screen.shutter_speed = row->shutter_speed;
@@ -1116,6 +1234,9 @@ void RenderSceneBuilder::Build(Game& game, const Camera& camera, float dt, Scene
     }
     stamp();
     AddTppAtmosphere(game, out);
+    if (const SurvivalNight* survival = game.Survival()) {
+        survival->ApplyStreetEvents(out);
+    }
     stamp();
     if (profile && mark == 7) {
         static double sums[6] = {};
@@ -1297,7 +1418,10 @@ void RenderSceneBuilder::AddDemoLight(const DemoLight& d, const TickBlend* blend
 
 void RenderSceneBuilder::ApplyDemoCamera(Game& game, SceneLighting& out) const {
     const DemoSystem& demos = game.Demos();
-    const DemoCameraParams* camera_params = demos.CameraParams() ? demos.CameraParams() : demos.SceneryCameraParams();
+    const DemoCameraParams* camera_params =
+        (game.SurvivalActive() && demos.SceneryCameraParams()) ? demos.SceneryCameraParams()
+        : demos.CameraParams()                                 ? demos.CameraParams()
+                                                               : demos.SceneryCameraParams();
     if (const DemoCameraParams* cam = camera_params) {
         const uint32_t set = cam->set_mask;
         ExposureSettings& e = out.exposure;
@@ -1322,7 +1446,8 @@ void RenderSceneBuilder::ApplyDemoCamera(Game& game, SceneLighting& out) const {
         }
         apply(3, cam->shutter_speed, out.screen.shutter_speed);
     }
-    if (const DemoCameraParams* lens = demos.DofLens()) {
+    const bool skip_dof = game.Survival() && game.Survival()->WakingThirdPerson();
+    if (const DemoCameraParams* lens = skip_dof ? nullptr : demos.DofLens()) {
         ScreenSettings& s = out.screen;
         s.focal_length = lens->focal_length;
         if (lens->set_mask & 1u) {

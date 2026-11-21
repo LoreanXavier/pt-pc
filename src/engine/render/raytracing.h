@@ -42,6 +42,7 @@ struct RtStats {
     uint32_t static_triangles = 0;
     VkDeviceSize static_bytes = 0;
     uint32_t built_this_frame = 0;
+    uint32_t effect_triangles = 0;
 };
 
 class RayTracing {
@@ -51,6 +52,10 @@ public:
     virtual void Shutdown() = 0;
     virtual void Forget(const GpuMesh& mesh) = 0;
     virtual bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) = 0;
+    virtual void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
+        (void)vertices;
+        (void)indices;
+    }
     virtual bool Valid(uint32_t slot) const = 0;
     virtual bool Ready(uint32_t slot) const = 0;
     virtual void SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) = 0;
@@ -81,6 +86,7 @@ public:
     void Shutdown() override;
     void Forget(const GpuMesh& mesh) override;
     bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) override;
+    void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) override;
     bool Valid(uint32_t slot) const override { return slots_[slot].valid; }
     bool Ready(uint32_t slot) const override;
     void SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) override;
@@ -111,6 +117,9 @@ private:
         vk::Buffer scratch;
         vk::Buffer positions;
         vk::Buffer dynamic_storage;
+        vk::Buffer effect_vertices;
+        vk::Buffer effect_indices;
+        vk::Buffer effect_storage;
         std::vector<VkAccelerationStructureKHR> dynamic;
         std::vector<vk::Buffer> retired;
         VkDescriptorSet set = VK_NULL_HANDLE;
@@ -145,6 +154,8 @@ private:
     VkPipeline skin_ = VK_NULL_HANDLE;
     Slot slots_[Renderer::kFramesInFlight];
     std::unordered_map<const GpuMesh*, std::vector<Blas>> static_;
+    std::vector<Vertex> effect_vertices_;
+    std::vector<uint32_t> effect_indices_;
     RtStats stats_;
     std::chrono::steady_clock::time_point retry_after_{};
 };

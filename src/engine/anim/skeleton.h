@@ -35,6 +35,7 @@ struct Pose {
 
 void ComputeBoneWorld(const Skeleton& skeleton, const Pose& pose, std::vector<glm::mat4>& world);
 void ComputeSkin(const Skeleton& skeleton, const std::vector<glm::mat4>& world, std::vector<glm::mat4>& skin);
+void ComputeScaledSkin(const Skeleton& skeleton, const Pose& pose, const std::vector<glm::vec3>& scale, std::vector<glm::mat4>& skin);
 void BlendPose(const Pose& from, const Pose& to, float weight, Pose& out);
 
 }

@@ -25,20 +25,20 @@ int main(int argc,char** argv) {
     check("Original then contact shadows is Custom with the ghosts still on",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom && s.graphics.lens_ghosts);
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::High,true);
     check("Low, High and Ultra keep the dither",[]{for(auto p:{pt::GraphicsPreset::Low,pt::GraphicsPreset::High,pt::GraphicsPreset::Ultra}){pt::AppSettings t;pt::ApplyGraphicsPreset(t,p,true);if(!t.graphics.deband) return false;}return true;}());
-    check("High leaves the flare ghosts out",!s.graphics.lens_ghosts && pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::High);
-    s.graphics.lens_ghosts=true;
+    check("High holds the flares at half and the ghosts at a quarter",s.graphics.flare_strength==50 && s.graphics.ghost_strength==25 && s.graphics.film_grain_type==1 && s.graphics.film_grain==.5f && pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::High);
+    s.graphics.ghost_strength=30;
     check("ghosts by hand make High Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
-    s.graphics.lens_ghosts=false;
+    s.graphics.ghost_strength=25;
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,true);
     check("Ultra has every traced effect and fine detail",s.ray_tracing.shadows==2 && s.ray_tracing.reflections && s.ray_tracing.ambient_occlusion && s.ray_tracing.contact_shadows && s.graphics.ray_quality==4 && s.graphics.clarity==.4f);
     check("Ultra is path traced and keeps the Ultra tier parts set",s.ray_tracing.full_shadows && s.ray_tracing.bounce_light && s.ray_tracing.glossy_reflections);
-    check("Ultra preserves the complete cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
+    check("Ultra preserves the complete cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==.5f && s.graphics.flare_strength==50);
     check("Ultra detected",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Ultra);
     s.graphics.bloom=false;
     check("manual change becomes Custom",pt::DetectGraphicsPreset(s,true)==pt::GraphicsPreset::Custom);
     pt::ApplyGraphicsPreset(s,pt::GraphicsPreset::Ultra,false);
     check("unsupported RT retains raster fallback",s.ray_tracing==pt::AppSettings{}.ray_tracing && s.graphics.ambient_occlusion && s.graphics.reflections);
-    check("unsupported Ultra keeps cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==1.0f);
+    check("unsupported Ultra keeps cinematic effects",s.graphics.depth_of_field && s.graphics.motion_blur && s.graphics.bloom && s.graphics.lens_distortion && s.graphics.film_grain==.5f);
     check("unsupported Ultra detected",pt::DetectGraphicsPreset(s,false)==pt::GraphicsPreset::Ultra);
     check("unsupported Ultra keeps the Ultra ray quality",s.graphics.ray_quality==3);
     {

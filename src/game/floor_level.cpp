@@ -126,6 +126,7 @@ void FloorLevel::NextFloor() {
         ++loop_count_;
     }
     LogInfo("floor: NextFloor {} -> {} (loop {})", current, CurrentFloorName(), loop_count_);
+    if (current != "ending" && CurrentFloorName() == "ending") game_.OpenNightExit();
     if (ModLua* mods = game_.ModScripts()) {
         mods->FloorEnter(CurrentFloorName(), loop_count_);
     }

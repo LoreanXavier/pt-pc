@@ -51,14 +51,20 @@ vec4 GlossyLayers(vec3 origin, vec3 ray, float t_end) {
             break;
         }
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
-                                        rayQueryGetIntersectionObjectToWorldEXT(rq, true), ray);
-        Material m = materials[hs.material];
-        if (m.kind == KIND_CONSTANT) {
-            vec4 tex = textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0);
-            float a = Saturate(m.albedo_factor.a * tex.a);
-            sum += seen * min(vec3(32.0), m.albedo_factor.rgb * tex.rgb * m.params.y) * a;
-            seen *= 1.0 - a;
+        if (RtEffectRecord(record)) {
+            vec4 e = RtEffectLayer(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
+            sum += seen * LightCap(e.rgb, 32.0);
+            seen *= 1.0 - e.a;
+        } else {
+            RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
+                                            rayQueryGetIntersectionObjectToWorldEXT(rq, true), ray);
+            Material m = materials[hs.material];
+            if (m.kind == KIND_CONSTANT) {
+                vec4 tex = textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0);
+                float a = Saturate(m.albedo_factor.a * tex.a);
+                sum += seen * LightCap(m.albedo_factor.rgb * tex.rgb * m.params.y, 32.0) * a;
+                seen *= 1.0 - a;
+            }
         }
         t_start = rayQueryGetIntersectionTEXT(rq, true) + 1.0e-3;
         if (!(t_start < t_end)) {
@@ -135,9 +141,9 @@ void main() {
             vec3 hit = origin + dir * travel;
             if (m.kind == KIND_CONSTANT || m.kind == KIND_SKY) {
                 vec4 tex = textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0);
-                result = min(vec3(32.0), m.albedo_factor.rgb * tex.rgb * m.params.y) * Saturate(m.albedo_factor.a * tex.a);
+                result = LightCap(m.albedo_factor.rgb * tex.rgb * m.params.y, 32.0) * Saturate(m.albedo_factor.a * tex.a);
             } else if (m.kind == KIND_DEFERRED) {
-                vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0).rgb;
+                vec3 albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), hs.uv, 2.0).rgb) * hs.tint;
                 vec3 ambient = RtFullAmbient(hit, hs.normal, pass.ids.w);
                 result = albedo * (ambient + RtFullDirect(hit, hs.normal, pass.ids.y, false, rng, vec2(half_pixel), v.exposure.w));
             }
@@ -148,5 +154,5 @@ void main() {
     if (any(isnan(result)) || any(isinf(result))) {
         result = vec3(0.0);
     }
-    imageStore(rt_glossy_raw, half_pixel, vec4(min(result, vec3(64.0)), travel));
+    imageStore(rt_glossy_raw, half_pixel, vec4(LightCap(result, 64.0), travel));
 }

@@ -135,6 +135,7 @@ void SceneRenderer::DestroyPathTargets() {
 }
 
 void SceneRenderer::DestroyRrTargets() {
+    DestroyFsrRrSamples();
     for (RenderTarget* t : {&rr_diffuse_albedo_, &rr_specular_albedo_, &rr_normal_roughness_, &rr_hit_distance_,
                           &fsr_rr_input_[0], &fsr_rr_input_[1], &fsr_rr_input_[2], &fsr_rr_input_[3],
                           &fsr_rr_depth_, &fsr_rr_motion_, &fsr_rr_normal_}) {

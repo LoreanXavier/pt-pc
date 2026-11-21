@@ -20,6 +20,8 @@
 namespace pt::vfx {
 
 void SetFlareGhostScale(float scale);
+void SetFlareStrength(float flares, float ghosts);
+void SetFlareSmooth(bool smooth);
 
 struct ViewInfo {
     glm::vec3 position{0.0f};
@@ -141,6 +143,7 @@ struct LightBlock {
     glm::vec3 position[3]{};
     glm::vec3 color[3]{};
     float inv_r4[3]{};
+    float min_dist[3]{0.01f, 0.01f, 0.01f};
 };
 using LightBlockProbe = std::function<LightBlock(const glm::vec3& center, const glm::vec3& half)>;
 using LightsReady = std::function<void(const std::vector<LightOut>& lights)>;
@@ -195,6 +198,8 @@ public:
     void Update(float dt, const ViewInfo& view);
     void SetLightBlockProbe(LightBlockProbe probe) { light_block_ = std::move(probe); }
     void SetLightsReady(LightsReady ready) { lights_ready_ = std::move(ready); }
+    void SetGlowingDust(bool on) { glowing_dust_ = on; }
+    void SetSmokeLight(float scale) { smoke_light_ = scale; }
     void Build(const ViewInfo& view, const TextureResolver& textures, const TextureResolver& cubes, const LightingProbe& lighting,
                RenderList& out, std::vector<LightOut>& lights, float blend = 1.0f);
 
@@ -268,6 +273,8 @@ private:
         float ratio = 0.0f;
     };
 
+    bool glowing_dust_ = false;
+    float smoke_light_ = 1.0f;
     struct Instance {
         std::shared_ptr<const EffectDef> def;
         glm::mat4 world{1.0f};

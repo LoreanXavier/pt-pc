@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include "game/ui/crosshair.h"
+
 namespace pt::game {
 
 struct PcSettingRow {
@@ -17,6 +19,7 @@ struct PcSettingRow {
     bool wrap = true;
     bool action = false;
     bool link = false;
+    bool dropdown = false;
     int label_lines = 1;
     std::string note;
     std::string confirm_note;
@@ -54,13 +57,75 @@ struct PcPanel {
     bool music_playing = false;
     bool music_loop = false;
     float lift = 1.0f;
+    std::optional<CrosshairStyle> crosshair;
     bool Empty() const { return texture.empty() && photo.empty() && file.empty() && lines.empty() && thumbnail.empty(); }
     bool HasPicture() const { return !texture.empty() || !photo.empty() || !file.empty() || !thumbnail.empty(); }
+};
+
+struct PcScreen {
+    std::string header;
+    std::string label;
+    std::string value;
+    std::string note;
+    std::string hint;
+    bool scene = false;
+    int pattern = 0;
+    bool can_left = true;
+    bool can_right = true;
 };
 
 enum class PcGallery : uint8_t { None, Halls, Wall };
 
 enum class PcMusicCommand : uint8_t { PlayPause, SeekBy, SeekTo, Restart, Loop };
+
+struct ArmorySnapshot {
+    int weapon = 1;
+    int mode = 0;
+    int filter = 0;
+    int selected_skin = 0;
+    int selected_anim = 0;
+    int selected_torch = 0;
+    int credits = 0;
+    int best_wave = 0;
+    int daily_wins = 0;
+    int equipped_skin = 0;
+    int equipped_anim = 0;
+    int equipped_torch = 0;
+    bool playing_reload = false;
+    int playing_style = 0;
+    uint64_t owned_skins = 1ull;
+    uint32_t owned_reloads = 1u;
+    uint32_t owned_torches = 1u;
+    std::vector<int> filtered_skins;
+};
+
+struct NightHubStat {
+    std::string label_key;
+    std::string value;
+    bool value_is_key = false;
+};
+
+struct NightHubItem {
+    int id = 0;
+    std::string label_key;
+    std::string tag;
+    bool tag_is_key = false;
+    std::string note;
+    std::string detail_sub;
+    std::vector<NightHubStat> stats;
+};
+
+struct NightHubSection {
+    std::string title_key;
+    std::vector<NightHubItem> items;
+};
+
+struct NightHubSnapshot {
+    int credits = 0;
+    int best_wave = 0;
+    int daily_streak = 0;
+    std::vector<NightHubSection> sections;
+};
 
 class PcSettingsSource {
 public:
@@ -92,6 +157,10 @@ public:
     }
     virtual bool FullScreen() const { return false; }
     virtual std::string_view FullScreenHint() const { return {}; }
+    virtual bool ScreenShown() const { return false; }
+    virtual bool SeeThrough() const { return false; }
+    virtual PcScreen Screen() const { return {}; }
+    virtual void ScreenInput(int, int, bool, bool) {}
     virtual void CursorMoved() {}
     virtual void Music(int, PcMusicCommand, float) {}
     virtual int TakeCursor() { return -1; }
@@ -99,7 +168,6 @@ public:
     virtual std::vector<std::string> PreviewFiles(int) const { return {}; }
     virtual std::string_view Credit() const { return {}; }
     virtual std::string_view Question() const { return {}; }
-    virtual bool QuestionBackShown() const { return true; }
     virtual bool FindSettingRow(std::string_view, PcSettingRow&) { return false; }
     virtual int TabCount() const { return 0; }
     virtual int Tab() const { return 0; }
@@ -107,8 +175,29 @@ public:
     virtual std::string_view TabNote(int) const { return {}; }
     virtual void SelectTab(int) {}
     virtual void Donate() {}
+    virtual bool SupportPrompts() const { return true; }
     virtual void MenuShown() {}
     virtual bool ShowSettingPage(std::string_view) { return false; }
+    virtual bool OpenCrosshair() { return false; }
+    virtual bool OpenSurvivalNight() { return false; }
+    virtual bool OpenSurvivalNightFromDeath() { return false; }
+    virtual bool OpenSurvivalPromo() { return false; }
+    virtual bool TakeReturnToOptions() { return false; }
+    virtual bool TakeCloseToGame() { return false; }
+    virtual bool SurvivalPromoDue() const { return false; }
+    virtual bool SurvivalUnlocked() const { return false; }
+    virtual void DismissSurvivalPromo() {}
+    virtual bool IsArmory() const { return false; }
+    virtual ArmorySnapshot ArmoryData() const { return {}; }
+    virtual void ArmorySelectWeapon(int) {}
+    virtual void ArmorySelectMode(int) {}
+    virtual void ArmorySelectFilter(int) {}
+    virtual void ArmoryFocusItem(int) {}
+    virtual void ArmoryAction(bool) {}
+    virtual void ArmoryPreviewReload() {}
+    virtual void ArmoryOrbit(float, float) {}
+    virtual bool IsNightHub() const { return false; }
+    virtual NightHubSnapshot NightHubData() const { return {}; }
 };
 
 std::vector<std::string_view> PcDescriptionKeys();

@@ -294,6 +294,16 @@ uint32_t GameSound::PlayMedia(std::shared_ptr<const audio::Media> media, const g
     return playing;
 }
 
+uint32_t GameSound::PlayMediaAs(std::shared_ptr<const audio::Media> media, uint32_t donor_event_id, const glm::vec3& position) {
+    if (!ready_) {
+        return 0;
+    }
+    const audio::GameObjectId object = OneShotObject(position);
+    const audio::PlayingId playing = system_.PlayMediaAs(std::move(media), donor_event_id, object);
+    one_shot_objects_.Track(object, playing);
+    return playing;
+}
+
 void GameSound::SeekPlayingId(uint32_t playing_id, float seconds) {
     if (ready_ && playing_id) {
         system_.SeekPlayingId(playing_id, seconds);

@@ -75,6 +75,7 @@ private:
         gpu::BufferResource draws;
         gpu::BindingSetHandle set;
         gpu::ImageViewHandle scene_view;
+        uint64_t scene_destroys = 0;
     };
 
     void RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t first, uint32_t last, bool coverage);
@@ -89,7 +90,7 @@ private:
     gpu::BindingLayoutHandle set_layout_;
     gpu::BindingPoolHandle pool_;
     gpu::PipelineLayoutHandle layout_;
-    gpu::PipelineHandle pipelines_[4] = {};
+    gpu::PipelineHandle pipelines_[6] = {};
     bool coverage_ = false;
     uint32_t top_first_ = UINT32_MAX;
     bool uploaded_ = false;

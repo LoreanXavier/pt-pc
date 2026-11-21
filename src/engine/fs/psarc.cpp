@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "engine/core/log.h"
+#include "engine/fs/data_trace.h"
 #include "engine/fs/io_stats.h"
 #include "engine/platform/os.h"
 
@@ -52,9 +53,16 @@ bool Psarc::Open(const std::filesystem::path& path) {
     const uint32_t entry_size = ReadBe32(header + 16);
     const uint32_t entry_count = ReadBe32(header + 20);
     block_size_ = ReadBe32(header + 24);
+    if (toc_length <= sizeof(header) || toc_length > (64u << 20) || entry_size < 30 || entry_count == 0 || block_size_ == 0 || block_size_ > (16u << 20) ||
+        uint64_t(entry_count) * entry_size > toc_length - sizeof(header)) {
+        LogError("psarc: damaged table in {} (table {} bytes, {} entries of {} bytes, blocks of {})", pt::os::PathToUtf8(path), toc_length, entry_count,
+                 entry_size, block_size_);
+        return false;
+    }
 
     std::vector<uint8_t> toc(toc_length - sizeof(header));
     if (std::fread(toc.data(), 1, toc.size(), file_) != toc.size()) {
+        LogError("psarc: {} ends inside its table", pt::os::PathToUtf8(path));
         return false;
     }
     entries_.resize(entry_count);
@@ -113,10 +121,14 @@ std::optional<std::vector<uint8_t>> Psarc::Read(std::string_view name) const {
     if (it == index_.end()) {
         return std::nullopt;
     }
+    DataTraceFile(name);
     return ReadEntry(it->second);
 }
 
 std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
+    if (index >= entries_.size()) {
+        return std::nullopt;
+    }
     const Entry& entry = entries_[index];
     /* TOC sizes are 40-bit and nothing in P.T. comes near 1 GB, so anything larger is a corrupt table. */
     if (entry.size > (uint64_t(1) << 30)) {
@@ -135,6 +147,10 @@ std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     IoSimulatedLatency();
     uint32_t block_index = entry.first_block;
     while (out.size() < entry.size) {
+        if (block_index >= block_sizes_.size()) {
+            LogError("psarc: entry {} runs past the block table ({} blocks), bad TOC", index, block_sizes_.size());
+            return std::nullopt;
+        }
         const uint32_t stored = block_sizes_[block_index] ? block_sizes_[block_index] : block_size_;
         block.resize(stored);
         if (std::fread(block.data(), 1, stored, file_) != stored) {

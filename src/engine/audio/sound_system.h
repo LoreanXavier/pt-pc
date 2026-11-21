@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include "engine/audio/audio_objects.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -86,6 +88,7 @@ public:
 
     PlayingId PlayStream(std::vector<uint8_t> wem_riff, GameObjectId object = 0);
     PlayingId PlayStreamAs(std::vector<uint8_t> wem_riff, std::string_view donor_event, GameObjectId object);
+    PlayingId PlayMediaAs(std::shared_ptr<const Media> media, uint32_t donor_event_id, GameObjectId object);
     PlayingId PlayMedia(std::shared_ptr<const Media> media, GameObjectId object = 0);
     std::shared_ptr<const Media> FindMedia(uint32_t media_id) const;
     void SetPostObserver(std::function<void(uint32_t event_id, const std::optional<glm::vec3>& position)> observer);
@@ -95,6 +98,7 @@ public:
     void Update(float dt);
     void RenderOffline(float* interleaved_stereo, uint32_t frames);
     void RenderOfflineChannels(float* interleaved, uint32_t frames, uint32_t channels);
+    void RenderOfflineObjects(float* bed, uint32_t frames, AudioObjectMix& mix);
 
     bool LoadSubtitles(std::string_view language);
     const SubtitleTable& Subtitles() const { return subtitles_; }

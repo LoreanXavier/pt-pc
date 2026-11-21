@@ -33,6 +33,7 @@ struct PrimarySurface {
     vec3 bitangent;
     vec2 uv;
     uint material;
+    vec3 tint;
 };
 
 PrimarySurface PrimaryHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 ray) {
@@ -65,12 +66,13 @@ PrimarySurface PrimaryHit(uint record, uint primitive, vec2 bary, mat4x3 to_worl
         s.normal = -nw;
     }
     s.material = r.material;
+    s.tint = RtRecordTint(r.flags);
     return s;
 }
 
 PtMaterial PrimaryMaterial(Material m, PrimarySurface ps, bool front, out vec3 n) {
     PtMaterial s;
-    s.albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), ps.uv, 0.0).rgb;
+    s.albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), ps.uv, 0.0).rgb) * ps.tint;
     n = ps.normal;
     if ((m.flags & MAT_NORMAL_MAP) != 0u) {
         vec4 nt = textureLod(PT_TEX2D(m.normal), ps.uv, 0.0);

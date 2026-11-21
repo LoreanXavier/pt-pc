@@ -112,10 +112,11 @@ gpu::Format UiBatch::TargetFormat() const {
 
 bool UiBatch::CreatePipelines(gpu::Format format) {
     DestroyPipelines();
-    gpu::GraphicsPipelineDesc descs[4];
-    for (int i = 0; i < 4; ++i) {
+    gpu::GraphicsPipelineDesc descs[6];
+    for (int i = 0; i < 6; ++i) {
+        const bool marks = i >= 4;
         const bool additive = (i & 1) != 0;
-        const bool coverage = i >= 2;
+        const bool coverage = !marks && i >= 2;
         gpu::GraphicsPipelineDesc& d = descs[i];
         d.vertex = "ui_sprite.vert";
         d.fragment = "ui_sprite.frag";
@@ -133,8 +134,9 @@ bool UiBatch::CreatePipelines(gpu::Format format) {
         b.src_color = gpu::BlendFactor::SrcAlpha;
         b.dst_color = !additive ? gpu::BlendFactor::OneMinusSrcAlpha : gpu::BlendFactor::One;
         b.color_op = gpu::BlendOp::Add;
-        b.src_alpha = coverage && !additive ? gpu::BlendFactor::One : gpu::BlendFactor::Zero;
-        b.dst_alpha = coverage && !additive ? gpu::BlendFactor::OneMinusSrcAlpha : gpu::BlendFactor::One;
+        const bool covers = coverage && !additive;
+        b.src_alpha = covers ? gpu::BlendFactor::One : gpu::BlendFactor::Zero;
+        b.dst_alpha = covers || marks ? gpu::BlendFactor::OneMinusSrcAlpha : gpu::BlendFactor::One;
         b.alpha_op = gpu::BlendOp::Add;
         b.write_mask = gpu::kColorMaskAll;
         d.blend_states = {b};
@@ -237,20 +239,25 @@ void UiBatch::RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t 
         uploaded_ = true;
     }
     const gpu::ImageViewHandle scene = renderer_->SceneColor().view;
-    if (scene != frame.scene_view) {
+    const uint64_t destroys = gpu_->ImageDestroyCount();
+    if (scene != frame.scene_view || destroys != frame.scene_destroys) {
         const gpu::ImageBinding image_info{scene, gpu::Layout::ShaderReadOnly, clamp_sampler_};
         const gpu::BindingWrite write{frame.set, 1, 0, gpu::BindingType::CombinedImageSampler, {&image_info, 1}};
         gpu_->WriteBindings({&write, 1});
         frame.scene_view = scene;
+        frame.scene_destroys = destroys;
     }
+    cmd.BeginLabel("ui");
     cmd.SetViewport({{0, 0}, extent});
     const gpu::BindingSetHandle sets[2] = {textures_->BindingSet(), frame.set};
     cmd.BindSets(gpu::BindPoint::Graphics, layout_, 0, sets);
     cmd.BindVertexBuffer(frame.vertices.buffer, 0);
+    const bool hdr = renderer_->OutputMode() != RendererOutputMode::Sdr;
     int bound = -1;
     for (uint32_t i = first; i < last; ++i) {
         const Command& command = commands_[i];
-        const int pipeline = (command.blend == UiBlend::Alpha ? 0 : 1) + (coverage ? 2 : 0);
+        const int additive = command.blend != UiBlend::Alpha ? 1 : 0;
+        const int pipeline = coverage ? 2 + additive : hdr ? 4 + additive : additive;
         if (pipeline != bound) {
             cmd.BindPipeline(gpu::BindPoint::Graphics, pipelines_[pipeline]);
             bound = pipeline;
@@ -259,6 +266,7 @@ void UiBatch::RecordRange(gpu::CommandList& cmd, gpu::Extent2D extent, uint32_t 
         cmd.PushConstants(layout_, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment, 0, sizeof(push), &push);
         cmd.Draw(command.count, 1, command.first, 0);
     }
+    cmd.EndLabel();
 }
 
 }

@@ -156,6 +156,7 @@ void PcSettingsPage::Open(PcSettingsSource* source) {
     tab_scroll_ = 0.0f;
     open_time_ = 0.0f;
     confirming_ = false;
+    dropdown_open_ = false;
     flash_frame_ = 0.0f;
     held_dirs_ = 0;
     last_pointer_ = glm::vec2(-1.0f);
@@ -186,6 +187,7 @@ void PcSettingsPage::Refresh(bool preserve_focus) {
     cursor_ = std::clamp(cursor_, Tabbed() ? -1 : 0, static_cast<int>(rows_.size()));
     const PcSettingRow* current = CurrentRow();
     if (confirming_ && (!found || !current || !current->action || !current->enabled)) confirming_ = false;
+    if (dropdown_open_ && (!found || !current || !current->dropdown || !current->enabled)) dropdown_open_ = false;
     if (!confirming_) update_dialog_ = false;
     if (preserve_focus && focused && !found) preview_id_ = -1;
     Scroll();
@@ -317,6 +319,7 @@ void PcSettingsPage::SourceChanged() {
     first_ = 0;
     scroll_y_ = 0.0f;
     confirming_ = false;
+    dropdown_open_ = false;
     flash_frame_ = 0.0f;
     Refresh(false);
     if (source_) {
@@ -605,6 +608,17 @@ void PcSettingsPage::Change(Game& game, int delta, bool accept) {
     if (n <= 1) {
         return;
     }
+    if (row->dropdown) {
+        dropdown_open_ = true;
+        dropdown_cursor_ = std::clamp(row->value, 0, n - 1);
+        constexpr int kVisible = 8;
+        const int max_scroll = std::max(0, n - kVisible);
+        dropdown_scroll_ = std::clamp(dropdown_cursor_ - kVisible / 2, 0, max_scroll);
+        dropdown_flash_ = 0.0f;
+        repeat_time_ = -kRepeatDelay;
+        if (game.Audio()) PlayCursor(game);
+        return;
+    }
     const int from = ShownValue(*row);
     int value = from + delta;
     value = row->wrap ? (value % n + n) % n : std::clamp(value, 0, n - 1);
@@ -674,6 +688,7 @@ void PcSettingsPage::PlayCursor(Game& game) {
 }
 
 PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input, float dt) {
+    if (source_ && source_->ScreenShown()) return UpdateScreen(game, input, dt);
     if (source_ && source_->FullScreen()) {
         const uint32_t pressed = input.held_dirs & ~held_dirs_;
         held_dirs_ = input.held_dirs;
@@ -697,8 +712,9 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
     }
     if (IsQuestion()) return UpdateQuestion(game, input);
     if (confirming_) return UpdateDialog(game, input);
+    if (dropdown_open_) return UpdateDropdown(game, input, dt);
     open_time_ += dt;
-    if (input.donate && open_time_ > 0.5f && Tabbed()) {
+    if (input.donate && open_time_ > 0.5f && DonateShown()) {
         Donate(game);
         return Result::None;
     }
@@ -731,6 +747,14 @@ PcSettingsPage::Result PcSettingsPage::Update(Game& game, const MenuInput& input
         }
     } else {
         arrow_up_hover_ = arrow_down_hover_ = false;
+    }
+    if (input.pointer_valid && DonateShown() && !Tabbed()) {
+        donate_hover_ = DonateAt(input.pointer);
+        if (input.click && donate_hover_) {
+            Donate(game);
+            last_pointer_ = input.pointer;
+            return Result::None;
+        }
     }
     if (input.pointer_valid && Tabbed()) {
         donate_hover_ = DonateAt(input.pointer);
@@ -887,12 +911,185 @@ PcSettingsPage::Result PcSettingsPage::UpdateDialog(Game& game, const MenuInput&
     const int id = row->id;
     const bool yes = result == dialog::Result::Chosen && dialog_nav_.Chosen() == 0;
     confirming_ = false;
+    dropdown_open_ = false;
     flash_frame_ = 0.0f;
     if (yes) {
         source_->Activate(id);
         Refresh();
     }
     if (game.Audio()) game.Audio()->PostEvent(yes ? kChangeSound : kCursorSound, nullptr);
+    return Result::None;
+}
+
+bool PcSettingsPage::DropdownView(PcDropdownView& out) const {
+    if (!dropdown_open_ || cursor_ < 0 || cursor_ >= static_cast<int>(rows_.size())) return false;
+    const Placed& placed = rows_[static_cast<size_t>(cursor_)];
+    const PcSettingRow& row = RowOf(placed);
+    if (!row.dropdown || !row.enabled || row.values.size() <= 1) return false;
+
+    const int n = static_cast<int>(row.values.size());
+    constexpr int kMaxVisible = 8;
+    const int vis = std::min(n, kMaxVisible);
+    constexpr float kRowH = 34.0f;
+    constexpr float kPadY = 8.0f;
+    constexpr float kFooterH = 30.0f;
+    constexpr float kWidth = 312.0f;
+
+    const glm::vec2 shown_lbl = Shown(placed);
+    const float val_cx = 640.0f + UiCanvas::kUnit * (placed.value.x - kCenterX);
+    const float val_cy = 360.0f - UiCanvas::kUnit * shown_lbl.y;
+    const float total_h = static_cast<float>(vis) * kRowH + 2.0f * kPadY + kFooterH;
+
+    float x0 = std::clamp(val_cx - kWidth * 0.5f, 40.0f, UiCanvas::kWidth - kWidth - 40.0f);
+    float y0 = val_cy + 18.0f;
+    if (y0 + total_h > 642.0f) {
+        y0 = std::max(84.0f, 642.0f - total_h);
+    }
+
+    out = PcDropdownView{};
+    out.lo = {x0, y0};
+    out.hi = {x0 + kWidth, y0 + total_h};
+    out.cursor = std::clamp(dropdown_cursor_, 0, n - 1);
+    out.active = std::clamp(row.value, 0, n - 1);
+    const int max_scroll = std::max(0, n - vis);
+    out.scroll = std::clamp(dropdown_scroll_, 0, max_scroll);
+    out.visible = vis;
+    out.row_height = kRowH;
+    out.flash = std::clamp(dropdown_flash_, 0.0f, 1000.0f);
+    out.items = row.values;
+    return true;
+}
+
+PcSettingsPage::Result PcSettingsPage::UpdateDropdown(Game& game, const MenuInput& input, float dt) {
+    PcDropdownView dd;
+    if (!DropdownView(dd) || !source_) {
+        dropdown_open_ = false;
+        return Result::None;
+    }
+    const PcSettingRow* row = CurrentRow();
+    if (!row) {
+        dropdown_open_ = false;
+        return Result::None;
+    }
+    dropdown_flash_ += dt * 60.0f;
+    const int n = static_cast<int>(dd.items.size());
+    const int max_scroll = std::max(0, n - dd.visible);
+
+    auto close_cancel = [&]() {
+        dropdown_open_ = false;
+        held_dirs_ = input.held_dirs;
+        if (game.Audio()) PlayCursor(game);
+    };
+    auto apply_pick = [&](int chosen) {
+        chosen = std::clamp(chosen, 0, n - 1);
+        const int row_id = row->id;
+        const bool changed = chosen != row->value;
+        dropdown_open_ = false;
+        held_dirs_ = input.held_dirs;
+        if (changed) {
+            source_->Set(row_id, chosen);
+            Refresh();
+        }
+        if (game.Audio()) game.Audio()->PostEvent(changed ? kChangeSound : kCursorSound, nullptr);
+    };
+
+    if (input.back || input.close || input.right_click) {
+        close_cancel();
+        return Result::None;
+    }
+
+    if (std::abs(input.wheel) > 0.01f && max_scroll > 0) {
+        dropdown_scroll_ = std::clamp(dropdown_scroll_ + (input.wheel > 0.0f ? -1 : 1), 0, max_scroll);
+    }
+
+    if (input.pointer_valid) {
+        const glm::vec2 px(640.0f + input.pointer.x * UiCanvas::kUnit, 360.0f - input.pointer.y * UiCanvas::kUnit);
+        const bool inside = px.x >= dd.lo.x && px.x <= dd.hi.x && px.y >= dd.lo.y && px.y <= dd.hi.y;
+        const float list_top = dd.lo.y + 8.0f;
+        const float list_bot = list_top + static_cast<float>(dd.visible) * dd.row_height;
+        int hovered = -1;
+        if (px.x >= dd.lo.x && px.x <= dd.hi.x && px.y >= list_top && px.y < list_bot) {
+            const int slot = static_cast<int>((px.y - list_top) / dd.row_height);
+            if (slot >= 0 && slot < dd.visible && dd.scroll + slot < n) {
+                hovered = dd.scroll + slot;
+            }
+        }
+        if (input.pointer != last_pointer_ && hovered >= 0 && hovered != dropdown_cursor_) {
+            dropdown_cursor_ = hovered;
+            dropdown_flash_ = 0.0f;
+            if (game.Audio()) PlayCursor(game);
+        }
+        last_pointer_ = input.pointer;
+        if (input.click) {
+            if (hovered >= 0) {
+                apply_pick(hovered);
+            } else if (!inside) {
+                close_cancel();
+            }
+            return Result::None;
+        }
+    }
+
+    const uint32_t pressed = input.held_dirs & ~held_dirs_;
+    uint32_t act = pressed;
+    if (pressed) {
+        repeat_time_ = -kRepeatDelay;
+    } else if (input.held_dirs & (kRawUp | kRawDown)) {
+        repeat_time_ += dt;
+        if (repeat_time_ >= kRepeatStep) {
+            repeat_time_ -= kRepeatStep;
+            act = input.held_dirs & (kRawUp | kRawDown);
+        }
+    }
+    held_dirs_ = input.held_dirs;
+
+    int step = 0;
+    if (act & kRawUp) step = -1;
+    else if (act & kRawDown) step = 1;
+    if (step != 0) {
+        const int next = std::clamp(dropdown_cursor_ + step, 0, n - 1);
+        if (next != dropdown_cursor_) {
+            dropdown_cursor_ = next;
+            if (dropdown_cursor_ < dropdown_scroll_) dropdown_scroll_ = dropdown_cursor_;
+            if (dropdown_cursor_ >= dropdown_scroll_ + dd.visible) dropdown_scroll_ = dropdown_cursor_ - dd.visible + 1;
+            dropdown_scroll_ = std::clamp(dropdown_scroll_, 0, max_scroll);
+            dropdown_flash_ = 0.0f;
+            if (game.Audio()) PlayCursor(game);
+        }
+    }
+
+    if (input.accept) {
+        apply_pick(dropdown_cursor_);
+    }
+    return Result::None;
+}
+
+PcSettingsPage::Result PcSettingsPage::UpdateScreen(Game& game, const MenuInput& input, float dt) {
+    const uint32_t pressed = input.held_dirs & ~held_dirs_;
+    uint32_t act = pressed;
+    if (pressed) {
+        repeat_time_ = -kRepeatDelay;
+    } else if (input.held_dirs & (kRawLeft | kRawRight)) {
+        repeat_time_ += dt;
+        if (repeat_time_ >= kRepeatStep) {
+            repeat_time_ -= kRepeatStep;
+            act = input.held_dirs & (kRawLeft | kRawRight);
+        }
+    }
+    held_dirs_ = input.held_dirs;
+    const int dx = (act & kRawLeft) ? -1 : (act & kRawRight) ? 1 : 0;
+    const int dy = (pressed & kRawUp) ? -1 : (pressed & kRawDown) ? 1 : 0;
+    const bool accept = input.accept || input.click;
+    const bool back = input.back || input.close || input.right_click;
+    if (dx == 0 && dy == 0 && !accept && !back) {
+        return Result::None;
+    }
+    source_->ScreenInput(dx, dy, accept, back);
+    flash_frame_ = 0.0f;
+    if (!source_->ScreenShown()) {
+        Refresh();
+    }
+    if (game.Audio()) game.Audio()->PostEvent(dx != 0 || accept ? kChangeSound : kCursorSound, nullptr);
     return Result::None;
 }
 
@@ -935,7 +1132,7 @@ bool PcSettingsPage::DialogView(dialog::View& view, int language) const {
         view.text = PcNoteText(source_->Question(), language);
         for (const Placed& p : rows_) view.choices.push_back(std::string(PcText(RowOf(p).label, language)));
         view.focus = cursor_;
-        if (!source_->QuestionBackShown()) view.back_label.clear();
+        view.back_label.clear();
         view.dim = 0.0f;
         return true;
     }
@@ -1005,16 +1202,20 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     }
     {
         auto& state = view.State(donate_text_);
-        state.visible = tabbed;
-        state.text = "{donate} " + std::string(PcText("pc_patreon", language));
+        state.visible = DonateShown();
+        state.text = "{donate} " + std::string(PcText("pc_support_patreon", language));
         state.font_type = UiFontType::PcSystem;
         const std::optional<glm::vec4> drawn = view.TextRect(donate_text_);
         if (drawn) donate_rect_ = *drawn;
-        if (drawn && donate_latch_language_ != language) {
+        const int latch = language;
+        const std::string shown_text = state.text.value_or(std::string());
+        const bool same_text = donate_prev_text_ == shown_text;
+        donate_prev_text_ = shown_text;
+        if (drawn && same_text && donate_latch_language_ != latch) {
             donate_latched_ = (drawn->z - drawn->x) / UiCanvas::kUnit;
-            donate_latch_language_ = language;
+            donate_latch_language_ = latch;
         }
-        const float width = donate_latch_language_ == language ? donate_latched_ : donate_width_;
+        const float width = donate_latch_language_ == latch ? donate_latched_ : donate_width_;
         state.offset = glm::vec2(std::round((kStripRight - 1.0f - width) * 10.0f) * 0.1f, -31.0f);
         state.color = glm::vec4(1.0f, 1.0f, 1.0f, donate_hover_ ? 1.0f : 0.8f);
     }
@@ -1105,14 +1306,23 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
         const bool adjustable = !row.link && row.values.size() > 1;
         for (const auto [node, delta] : {std::pair{row_nodes_[i].decrease, -1}, std::pair{row_nodes_[i].increase, 1}}) {
             auto& state = view.State(node);
-            state.visible = adjustable;
-            state.font_type = UiFontType::PcSystem;
-            state.text = delta < 0 ? "<" : ">";
-            state.font_language = 0;
-            state.offset = p.value + glm::vec2(arrow * static_cast<float>(delta), 0.0f);
-            const int at = ShownValue(row);
-            const bool available = row.enabled && (row.wrap || (delta < 0 ? at > 0 : at + 1 < static_cast<int>(row.values.size())));
-            state.color = glm::vec4(1.0f, 1.0f, 1.0f, available ? (selected ? 1.0f : .65f) : .25f);
+            if (row.dropdown && adjustable) {
+                state.visible = delta > 0;
+                state.font_type = UiFontType::PcSystem;
+                state.text = "v";
+                state.font_language = 0;
+                state.offset = p.value + glm::vec2(arrow, 0.0f);
+                state.color = glm::vec4(1.0f, 1.0f, 1.0f, row.enabled ? (selected ? 1.0f : 0.65f) : 0.25f);
+            } else {
+                state.visible = adjustable;
+                state.font_type = UiFontType::PcSystem;
+                state.text = delta < 0 ? "<" : ">";
+                state.font_language = 0;
+                state.offset = p.value + glm::vec2(arrow * static_cast<float>(delta), 0.0f);
+                const int at = ShownValue(row);
+                const bool available = row.enabled && (row.wrap || (delta < 0 ? at > 0 : at + 1 < static_cast<int>(row.values.size())));
+                state.color = glm::vec4(1.0f, 1.0f, 1.0f, available ? (selected ? 1.0f : .65f) : .25f);
+            }
         }
         text(row_nodes_[i].label, row.label);
         view.State(row_nodes_[i].label).offset = p.label;
@@ -1178,7 +1388,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     }
     if (current && !UpdateDialogOpen()) {
         view.State(bar_group_).offset = rows_[cursor_].value + glm::vec2(0.0f, scroll_y_);
-        if (Browser()) view.State(bar_group_).offset = glm::vec2(-27.0f, Shown(rows_[cursor_]).y);
+        if (Browser() && ValueLess(*current)) view.State(bar_group_).offset = glm::vec2(-27.0f, Shown(rows_[cursor_]).y);
         else if (ValueLess(*current)) {
             const Placed& p = rows_[cursor_];
             const std::optional<glm::vec2> span = view.TextSpan(row_nodes_[cursor_].label);
@@ -1201,7 +1411,7 @@ void PcSettingsPage::Apply(UifView& view, int language) const {
     }
     std::string_view note = current && !audio_entry ? ShownNote(*current) : std::string_view();
     if (tabbed && cursor_ < 0) note = source_->TabNote(source_->Tab());
-    if (tabbed && donate_hover_) note = "pc_note_patreon";
+    if (DonateShown() && donate_hover_) note = "pc_note_patreon";
     if (tabbed && update_hover_ && footer_) note = footer_->note;
     if (quit_selected) note = "pc_note_quit";
     if (source_ && std::getenv("PT_AUDIT_PC_DESCRIPTIONS")) view.State(help_).description_samples = source_->DescriptionSamples();
@@ -1219,7 +1429,7 @@ void PcSettingsPage::LayoutTabs() {
     if (count == 0) return;
     const int language = std::max(0, measure_language_);
     if (measure_view_) {
-        if (const auto m = measure_view_->MeasureText(donate_text_, " " + std::string(PcText("pc_patreon", language)), language, UiFontType::PcSystem)) {
+        if (const auto m = measure_view_->MeasureText(donate_text_, " " + std::string(PcText("pc_support_patreon", language)), language, UiFontType::PcSystem)) {
             donate_width_ = (m->x + 1.5f * m->y) / UiCanvas::kUnit;
         }
     }
@@ -1265,8 +1475,14 @@ int PcSettingsPage::TabAt(glm::vec2 units) const {
     return -1;
 }
 
+bool PcSettingsPage::DonateShown() const {
+    if (Tabbed()) return true;
+    if (!source_ || !source_->SupportPrompts() || FullScreen()) return false;
+    return source_->IsLoopBrowser() || Browser() || Gallery() != PcGallery::None;
+}
+
 bool PcSettingsPage::DonateAt(glm::vec2 units) const {
-    if (!Tabbed()) return false;
+    if (!DonateShown()) return false;
     const glm::vec2 px(640.0f + units.x * UiCanvas::kUnit, 360.0f - units.y * UiCanvas::kUnit);
     if (donate_rect_.z <= donate_rect_.x) {
         const float right = 640.0f + UiCanvas::kUnit * (kStripRight - 1.0f - kCenterX);

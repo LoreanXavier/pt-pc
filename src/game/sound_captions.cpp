@@ -130,6 +130,10 @@ void SoundCaptions::Clear() {
 }
 
 void SoundCaptions::Post(uint32_t event, const std::optional<glm::vec3>& source) {
+    if (skip_ != 0 && event == skip_) {
+        skip_ = 0;
+        return;
+    }
     if (!enabled_) {
         return;
     }

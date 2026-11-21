@@ -18,6 +18,7 @@ layout(location = 3) out vec4 out_hit_distance;
 #include "rt_full_images.glsl"
 #define PT_IMAGES_READONLY 1
 #include "pt_images.glsl"
+#include "pt_fsr_albedo.glsl"
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -44,6 +45,10 @@ void main() {
     float amount = kind >= 1.0 ? Saturate(code - 2.0 * kind) : 0.0;
     out_diffuse_albedo = vec4(albedo * (1.0 - amount), 1.0);
     out_specular_albedo = vec4(specular * (1.0 - amount) + amount, 1.0);
+    if (pass.ids.y == 0u) {
+        out_diffuse_albedo = vec4(albedo, 1.0);
+        out_specular_albedo = vec4(FsrSpecularAlbedo(v, pixel, c, n, g, mat0, mat1, amount), 1.0);
+    }
     vec3 world_n = normalize(mat3(v.inv_view) * n);
     float roughness = Saturate(max(g.x, mat1.w));
     if (pass.ids.y != 0u && kind == 1.0 && amount > 0.0) {

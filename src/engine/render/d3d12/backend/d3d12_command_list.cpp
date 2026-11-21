@@ -43,6 +43,7 @@ void CommandListImpl::Barriers(UINT count, const D3D12_RESOURCE_BARRIER* barrier
 CommandListImpl::CommandListImpl(DeviceImpl& device, ID3D12GraphicsCommandList* list) : device_(device), list_(list) {
     list_->QueryInterface(IID_PPV_ARGS(&list1_));
     list_->QueryInterface(IID_PPV_ARGS(&list9_));
+    list_->QueryInterface(IID_PPV_ARGS(&list2_));
 }
 
 void CommandListImpl::Begin() {
@@ -53,6 +54,8 @@ void CommandListImpl::Begin() {
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     graphics_ = compute_ = nullptr;
     applied_ = nullptr;
+    markers_ = nullptr;
+    open_labels_.clear();
     cull_ = CullMode::None;
     front_ = FrontFace::CounterClockwise;
     std::memset(bias_, 0, sizeof(bias_));
@@ -611,10 +614,34 @@ void CommandListImpl::WriteTimestamp(QueryPoolHandle pool, uint32_t index) {
 
 void CommandListImpl::BeginLabel(const char* name) {
     list_->BeginEvent(1, name, static_cast<UINT>(std::strlen(name) + 1));
+    if (!markers_ || !list2_) {
+        return;
+    }
+    if (markers_->count >= PassMarkers::kLabels) {
+        open_labels_.push_back(kNone);
+        return;
+    }
+    const uint32_t index = markers_->count++;
+    markers_->names[index] = name;
+    open_labels_.push_back(index);
+    const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER begun{markers_->gpu + uint64_t(index) * 8, markers_->serial};
+    const D3D12_WRITEBUFFERIMMEDIATE_MODE mode = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN;
+    list2_->WriteBufferImmediate(1, &begun, &mode);
 }
 
 void CommandListImpl::EndLabel() {
     list_->EndEvent();
+    if (open_labels_.empty()) {
+        return;
+    }
+    const uint32_t index = open_labels_.back();
+    open_labels_.pop_back();
+    if (index == kNone || !markers_ || !list2_) {
+        return;
+    }
+    const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER ended{markers_->gpu + uint64_t(index) * 8 + 4, markers_->serial};
+    const D3D12_WRITEBUFFERIMMEDIATE_MODE mode = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+    list2_->WriteBufferImmediate(1, &ended, &mode);
 }
 
 }

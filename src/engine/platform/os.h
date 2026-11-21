@@ -95,4 +95,7 @@ struct DisplayHdrInfo {
 };
 std::optional<DisplayHdrInfo> WindowDisplayHdrInfo(void* hwnd);
 
+bool WindowDisplayHdrCapable(void* hwnd);
+bool SetWindowDisplayHdr(void* hwnd, bool on);
+
 }

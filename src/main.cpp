@@ -76,6 +76,7 @@
 #include "engine/render/texture_manager.h"
 #include "engine/render/d3d12/vk_d3d12_share.h"
 #include "engine/render/upscale/frame_generation.h"
+#include "engine/render/upscale/fg_start_guard.h"
 #include "engine/render/upscale/neural_rendering.h"
 #include "engine/render/upscale/neural_native.h"
 #include "engine/render/upscale/neural_unlock.h"
@@ -217,6 +218,7 @@ bool ProbeD3D12(std::string& reason) {
 }
 #endif
 #include "engine/platform/sdl_diag.h"
+#include "engine/platform/third_party.h"
 #include "engine/platform/boot_timing.h"
 #include "engine/platform/device_start.h"
 #include "engine/platform/user_data.h"
@@ -225,6 +227,8 @@ bool ProbeD3D12(std::string& reason) {
 #include "engine/voice/microphone.h"
 #include "engine/voice/voice_recognizer.h"
 #include "game/archive.h"
+#include "game/survival/street_city.h"
+#include "game/support_link.h"
 #include "game/controller_speaker_events.h"
 #include "game/museum_transcripts.h"
 #include "game/archive_theater.h"
@@ -233,6 +237,8 @@ bool ProbeD3D12(std::string& reason) {
 #include "game/lisa_date/lisa_date.h"
 #include "game/debug_panel.h"
 #include "game/game.h"
+#include "game/archive_model_camera.h"
+#include "game/survival/survival.h"
 #include "game/outro_input.h"
 #include "game/loop_browser.h"
 #include "game/render_mouse.h"
@@ -243,6 +249,7 @@ bool ProbeD3D12(std::string& reason) {
 #include "game/ui/photo_panel.h"
 #include "game/script_api.h"
 #include "game/stage_data.h"
+#include "game/survival/survival_visions.h"
 #include "game/ui/game_ui.h"
 #include "game/ui/pc_settings.h"
 #include "game/first_run.h"
@@ -322,6 +329,7 @@ struct Options {
     int dlss5_arch = 0;
     std::filesystem::path make_museum_previews;
     std::filesystem::path museum_previews;
+    std::filesystem::path make_survival_visions;
     bool vr = false;
     bool no_vr = false;
     std::string backend;
@@ -371,6 +379,7 @@ constexpr OptionSpec kOptionSpecs[] = {
     {"--dlss5-install", 1, "<folder> install DLSS 5 into that data folder and exit (tests)"},
     {"--dlss5-arch", 1, "<0|75|86|89> the GPU code --dlss5-install takes (0: RTX 50, none)"},
     {"--make-museum-previews", 1, "<folder> shoot the Museum's thumbnails and exit (headless)"},
+    {"--make-survival-visions", 1, "<folder> shoot the survival night's notice pictures and exit (headless)"},
     {"--museum-previews", 1, "<folder> the Museum's thumbnails to show (tests)"},
     {"--seed", 1, "<n> random seed"},
     {"--f160-light", 1, "<red|green|blue|yellow|white|1-100> the f160 light roll"},
@@ -502,6 +511,8 @@ Options ParseOptions(int argc, char** argv) {
             options.make_loop_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--make-museum-previews" && has_value) {
             options.make_museum_previews = pt::os::PathFromUtf8(argv[++i]);
+        } else if (arg == "--make-survival-visions" && has_value) {
+            options.make_survival_visions = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--museum-previews" && has_value) {
             options.museum_previews = pt::os::PathFromUtf8(argv[++i]);
         } else if (arg == "--seed" && has_value) {
@@ -822,6 +833,8 @@ struct App {
     bool freecam_active = false;
     bool photo_active = false;
     int display_hdr = -1;
+    bool display_hdr_capable = false;
+    bool windows_hdr_switched = false;
     pt::display::Environment display_env;
     std::string steam_deck;
     bool display_mode_chosen = false;
@@ -1042,6 +1055,13 @@ void ApplyFullscreen(App& app) {
         SDL_SetWindowFullscreenMode(app.window, nullptr);
         SDL_SetWindowFullscreen(app.window, false);
         SDL_SetWindowSize(app.window, app.settings.display.width, app.settings.display.height);
+    } else if (mode == 1) {
+        SDL_SyncWindow(app.window);
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(app.window, &pw, &ph);
+        if (pw > 0 && ph > 0) {
+            app.renderer.Resize(static_cast<uint32_t>(pw), static_cast<uint32_t>(ph));
+        }
     }
     LogWindowState(app, "window mode requested");
 }
@@ -1295,6 +1315,30 @@ int RunVoiceListen(float seconds, const std::string& device) {
     return 0;
 }
 
+bool ViewAttachOff() {
+    static const bool off = [] {
+        const char* v = std::getenv("PT_VIEW_ATTACH");
+        return v && v[0] == '0';
+    }();
+    return off;
+}
+
+void IntoViewFrame(std::vector<pt::DrawItem>& items, const pt::Camera& view) {
+    if (ViewAttachOff()) return;
+    const glm::mat4 into = view.View();
+    for (pt::DrawItem& item : items) {
+        if (item.view_attached) item.transform = into * item.transform;
+    }
+}
+
+void OntoView(std::vector<pt::DrawItem>& items, const pt::Camera& view) {
+    if (ViewAttachOff()) return;
+    const glm::mat4 onto = glm::inverse(view.View());
+    for (pt::DrawItem& item : items) {
+        if (item.view_attached) item.transform = onto * item.transform;
+    }
+}
+
 struct TickState {
     std::vector<pt::DrawItem> items;
     std::vector<glm::mat4> skins;
@@ -1303,11 +1347,14 @@ struct TickState {
 
     void Capture(pt::game::Game& game, pt::game::VfxScene& vfx) {
         lights.handy_aim = game.HandyAim();
+        lights.handy_mask_roll = game.HandyMaskRoll();
+        lights.handy_pickup_roll = game.HandyPickupMaskRoll();
         lights.demo_lights = game.Demos().Lights();
         vfx.SnapshotWorlds();
         items.clear();
         index.clear();
         game.CollectDraws(items);
+        IntoViewFrame(items, game.ViewCamera());
         lights.handy_camera = game.GetPlayer().MakeCamera();
         lights.handy_camera.position += game.GetPlayer().DrawnOffset();
         lights.handy_lens_valid = game.HandyLens(lights.handy_lens);
@@ -1521,6 +1568,20 @@ bool NvidiaAdapterPresent() {
 #endif
 
 #ifdef _WIN32
+bool g_no_gpu_driver = false;
+#endif
+
+std::vector<std::string> g_own_proxies;
+void ScanThirdPartyTools() {
+    static std::optional<std::string> last;
+    const std::string tools = pt::third_party::LoadedTools(g_own_proxies);
+    if (last && tools == *last) return;
+    last = tools;
+    pt::LogInfo("third party: {}", tools.empty() ? std::string("none") : tools);
+    pt::SetThirdPartyNote(tools);
+}
+#ifdef _WIN32
+
 void LogGraphicsAdapters() {
     HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
     using CreateFactory1 = HRESULT(WINAPI*)(REFIID, void**);
@@ -1532,6 +1593,8 @@ void LogGraphicsAdapters() {
     }
     IDXGIFactory6* factory6 = nullptr;
     factory->QueryInterface(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(&factory6));
+    bool microsoft_only = true;
+    int listed = 0;
     for (UINT i = 0;; ++i) {
         IDXGIAdapter1* adapter = nullptr;
         const HRESULT hr = factory6 ? factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, __uuidof(IDXGIAdapter1),
@@ -1550,10 +1613,17 @@ void LogGraphicsAdapters() {
                                               LOWORD(umd.LowPart))
                                 : std::string(),
                     (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? ", software" : "");
+        microsoft_only = microsoft_only && d.VendorId == 0x1414;
+        ++listed;
         adapter->Release();
     }
     if (factory6) factory6->Release();
     factory->Release();
+    g_no_gpu_driver = listed > 0 && microsoft_only;
+    if (g_no_gpu_driver) {
+        pt::LogWarn("gpu: only Microsoft's Basic Render Driver is listed: the graphics card's own driver is not installed (or Windows "
+                    "turned it off); the game does not render in software");
+    }
 }
 #endif
 
@@ -1919,6 +1989,21 @@ void SyncNeuralToggle(App& app) {
     }
 }
 
+pt::render::HdrLook HdrLookOf(const pt::AppSettings& s) {
+    pt::render::HdrLook look;
+    look.gamma = s.display.hdr_gamma;
+    look.keep_hue = s.display.hdr_keep_hue;
+    look.colour_range = s.display.hdr_colour_range == 2 ? 1 : s.display.hdr_colour_range == 1 ? 2 : 0;
+    look.exposure = s.display.hdr_exposure * .1f;
+    look.contrast = s.display.hdr_contrast * .01f;
+    look.highlights = s.display.hdr_highlights * .01f;
+    look.shadows = s.display.hdr_shadows * .01f;
+    look.saturation = s.display.hdr_saturation * .01f;
+    look.highlight_saturation = s.display.hdr_highlight_saturation * .01f;
+    look.blowout = s.display.hdr_blowout * .01f;
+    return look;
+}
+
 void ApplyGraphicsSettings(App& app) {
     const auto& g=app.settings.graphics;
     app.scene.graphics=g;
@@ -1940,6 +2025,7 @@ void ApplyGraphicsSettings(App& app) {
         static constexpr const char* kPresetNames[]={"low","original","high","ultra","custom"};
         pt::GraphicsPreset detected=pt::DetectGraphicsPreset(app.settings,true);
         if(detected==pt::GraphicsPreset::Custom) detected=pt::DetectGraphicsPreset(app.settings,false);
+        app.scene.original_look=detected==pt::GraphicsPreset::Original;
         const int preset=std::clamp(static_cast<int>(detected),0,4);
         const std::string text=std::format("preset {}, shadow maps {}, ambient occlusion {}, reflections {}, bloom {}, depth of field {}, motion blur {}, "
             "lens distortion {}, film grain {:.2f}, anisotropy {}, texture detail {}",kPresetNames[preset],g.shadow_quality,
@@ -1956,6 +2042,7 @@ void ApplyGraphicsSettings(App& app) {
     app.scene.toggles.film_grain=g.film_grain>0;
     app.scene.toggles.distortion=g.lens_distortion;
     pt::vfx::SetFlareGhostScale(g.lens_ghosts?0.75f:0.0f);
+    pt::vfx::SetFlareStrength(g.flare_strength*.01f,g.ghost_strength*.01f);
 }
 
 int AnisotropyFromApp(const pt::AppSettings& s) {
@@ -2421,6 +2508,79 @@ void SetUpMuseumPreviewRun(Options& options) {
     if (options.log_path.empty()) options.log_path = dir / "capture.log";
 }
 
+std::filesystem::path SurvivalVisionDirectory() {
+    return UserDataDir() / std::format("survival-visions-v{}", pt::game::kSurvivalVisionVersion);
+}
+
+void SetProcessEnvironment(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+void SetUpSurvivalVisionRun(Options& options) {
+    const std::filesystem::path dir = std::filesystem::absolute(options.make_survival_visions);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream(dir / "capture.txt") << pt::game::SurvivalVisionRoute(dir);
+    std::ofstream(dir / "version.txt") << pt::game::kSurvivalVisionVersion << "\n";
+    pt::SaveAppSettings(dir / "preview.ini", pt::AppSettings{});
+    SetProcessEnvironment("PT_SURVIVAL_SCRIPT", "0.1:hold 0.15:unhurt 0.3:weapon=0");
+    SetProcessEnvironment("PT_SURVIVAL_HUD", "0");
+    SetProcessEnvironment("PT_SURVIVAL_EVENTS", "0");
+    options.headless = true;
+    options.no_save = true;
+    options.audio_offline = true;
+    options.frames = 20000;
+    options.demo_rate = 20.0f;
+    options.shot_warmup = 30;
+    options.shot_settle = true;
+    options.width = 640;
+    options.height = 880;
+    options.size_set = true;
+    options.street_offer = -1;
+    options.seed = kLoopPreviewSeed;
+    options.release_locks = false;
+    options.start_floor = "f010";
+    options.input_script = dir / "capture.txt";
+    options.settings_path = dir / "preview.ini";
+    if (options.log_path.empty()) options.log_path = dir / "capture.log";
+}
+
+class SurvivalVisionCapture {
+public:
+    void Update(const Options& options) {
+        if (process_.Started()) {
+            int code = 0;
+            if (process_.Running(&code)) return;
+            pt::LogInfo("survival visions: capture finished (exit {})", code);
+        }
+        if (runs_ >= 2 || options.headless || !options.input_script.empty()) return;
+        const auto dir = SurvivalVisionDirectory();
+        if (pt::game::SurvivalVisionsReady(dir)) {
+            runs_ = 2;
+            return;
+        }
+        const auto exe = GameExecutable();
+        std::vector<std::string> args{"--game", pt::os::PathToUtf8(options.game_dir), "--make-survival-visions", pt::os::PathToUtf8(dir),
+            "--log", pt::os::PathToUtf8(dir / "capture.log")};
+        ++runs_;
+        if (process_.Start(exe, args, pt::ExecutableDir())) pt::LogInfo("survival visions: capture started ({})", pt::os::PathToUtf8(dir));
+        else pt::LogWarn("survival visions: capture could not start ({})", pt::os::PathToUtf8(exe));
+    }
+
+private:
+    int runs_ = 0;
+    pt::os::ChildProcess process_;
+};
+
+SurvivalVisionCapture& SurvivalVisions() {
+    static SurvivalVisionCapture capture;
+    return capture;
+}
+
 std::filesystem::path PhotoPath() {
     std::filesystem::path pictures;
 #ifdef _WIN32
@@ -2718,7 +2878,41 @@ pt::game::PcSettingRow UnlockRow(int id, const UnlockRowTexts& t, const UnlockRo
     return row;
 }
 
-constexpr const char* kPatreonUrl = "https://patreon.com/loreanxavier";
+bool OpenPatreonPage(App& app, std::string_view from) {
+    using pt::game::support::kPatreonUrl;
+    bool opened = false;
+    if (std::getenv("PT_TEST_OPEN_URL_FAIL") != nullptr) {
+        opened = false;
+    } else if (!app.window) {
+        pt::LogInfo("patreon: {} (headless, not opened; from {})", kPatreonUrl, from);
+        opened = true;
+    } else {
+        if (WindowMode(app) == pt::display::kExclusive) SDL_MinimizeWindow(app.window);
+        opened = pt::game::support::OpenSupportPage([](const char* url) { return SDL_OpenURL(url); });
+        if (!opened) pt::LogWarn("patreon: the browser could not be opened: {}", SDL_GetError());
+        else pt::LogInfo("patreon: opened {} (from {})", kPatreonUrl, from);
+    }
+    if (!opened) app.pending_notices.push_back("pc_notice_patreon_failed");
+    return opened;
+}
+
+pt::game::CrosshairStyle CrosshairOf(const pt::AppSettings::Crosshair& c) {
+    pt::game::CrosshairStyle style;
+    style.shape = std::clamp(c.shape, 0, 6);
+    style.color = std::clamp(c.color, 0, 6);
+    style.length = static_cast<float>(std::clamp(c.length, 1, 20));
+    style.thickness = 0.5f * static_cast<float>(std::clamp(c.thickness, 1, 10));
+    style.gap = static_cast<float>(std::clamp(c.gap, 0, 20));
+    style.dynamic = c.dynamic;
+    style.dot = c.dot;
+    style.outline = c.outline;
+    style.opacity = 0.1f * static_cast<float>(std::clamp(c.opacity, 1, 10));
+    style.hit_marker = c.hit_marker;
+    style.behind_sights = c.behind_sights;
+    return style;
+}
+
+void ApplyCrosshair(pt::game::Game& game, const pt::AppSettings& settings) { game.SetCrosshair(CrosshairOf(settings.crosshair)); }
 
 class PcSettings final : public pt::game::PcSettingsSource {
 public:
@@ -2750,6 +2944,75 @@ public:
             }
             return {std::move(loops), pt::game::PcSettingSection{"pc_loop_preview", 1, {}}};
         }
+        if (page_ == kCrosshairPage) return CrosshairSections();
+        if (page_ == kKeyBindingsPage) return KeyBindingsSections();
+        if (page_ == kNightPage) {
+            pt::game::PcSettingSection night{"pc_survival_choose", 0, {}};
+            static constexpr std::array<std::tuple<int, const char*, const char*>, 4> kLevels{{
+                {kNightNormal, "pc_survival_normal", "pc_note_survival_pick_normal"},
+                {kNightHard, "pc_survival_hard", "pc_note_survival_pick_hard"},
+                {kNightNightmare, "pc_survival_nightmare", "pc_note_survival_pick_nightmare"},
+                {kNightInsanity, "pc_survival_insanity", "pc_note_survival_pick_insanity"},
+            }};
+            for (const auto& [id, label, note] : kLevels) {
+                auto row = Row(id, label, {""}, 0, note);
+                row.link = true;
+                night.rows.push_back(std::move(row));
+            }
+            pt::game::PcSettingSection runs{"pc_survival_runs", 0, {}};
+            const pt::game::SurvivalProfile& profile = game_.SurvivalProfileData();
+            static constexpr std::array<std::pair<int, const char*>, 4> kKept{{
+                {kNightContinueNormal, "pc_survival_continue_normal"},
+                {kNightContinueHard, "pc_survival_continue_hard"},
+                {kNightContinueNightmare, "pc_survival_continue_nightmare"},
+                {kNightContinueInsanity, "pc_survival_continue_insanity"},
+            }};
+            for (size_t d = 1; d <= 4; ++d) {
+                const pt::game::SurvivalCheckpoint& kept = profile.checkpoints[d];
+                if (kept.wave <= 0) continue;
+                const int kept_night = pt::game::SurvivalNightOf(kept.wave);
+                auto row = Row(kKept[d - 1].first, kKept[d - 1].second, {std::to_string(kept.wave)}, 0,
+                               kept_night > 1 ? std::format("pc_note_survival_continue_night{}{}", pt::game::kPcNoteArgument, kept_night)
+                                              : std::format("pc_note_survival_continue{}{}{}{}", pt::game::kPcNoteArgument, kept.wave, pt::game::kPcNoteArgument, kept.score));
+                row.link = true;
+                runs.rows.push_back(std::move(row));
+            }
+            {
+                const int today_date = pt::game::SurvivalToday();
+                const bool today = profile.daily_date == today_date;
+                const pt::game::DailyMutatorDef& mut = pt::game::DailyMutatorForDate(today_date);
+                const char arg = pt::game::kPcNoteArgument;
+                const std::string val = today && profile.daily_wave > 0 ? std::format("Wave {}", profile.daily_wave) : std::string(mut.name_key);
+                const std::string note = std::format("pc_note_survival_daily_mut{}{}{}{}{}{}{}{}", arg, mut.name_key, arg, mut.note_key, arg,
+                                                     profile.daily_wins, arg, profile.daily_streak);
+                auto row = Row(kNightDaily, "pc_survival_daily", {val}, 0, note);
+                row.link = true;
+                runs.rows.push_back(std::move(row));
+            }
+            pt::game::PcSettingSection gear{"pc_survival_gear", 0, {}};
+            {
+                auto armory = Row(kNightArmory, "pc_armory_title", {std::format("${}", profile.credits)}, 0, "pc_note_armory_open");
+                armory.link = true;
+                gear.rows.push_back(std::move(armory));
+            }
+            auto crosshair = Row(kNightCrosshair, "pc_crosshair", {""}, 0, "pc_note_survival_pick_crosshair");
+            crosshair.link = true;
+            gear.rows.push_back(std::move(crosshair));
+            return {std::move(night), std::move(runs), std::move(gear)};
+        }
+        if (page_ == kArmoryPage) {
+            return {};
+        }
+        if (page_ == kSurvivalPromoPage) {
+            pt::game::PcSettingSection promo{"pc_survival", 0, {}};
+            auto play = Row(kPromoPlay, "pc_survival_promo_yes", {""}, 0, "pc_note_loop_survival");
+            play.link = true;
+            promo.rows.push_back(std::move(play));
+            auto later = Row(kPromoLater, "pc_update_no", {""}, 0, "");
+            later.link = true;
+            promo.rows.push_back(std::move(later));
+            return {std::move(promo)};
+        }
         if (page_ == kUpdatePage) {
             pt::game::PcSettingSection question{"pc_update_title", 0, {}};
             const auto newer = app_.updates.Newer();
@@ -2766,7 +3029,8 @@ public:
         if (page_ == kStreetPage && game_.SpeedrunResultsPending()) return SpeedrunResults();
         if (page_ == kStreetPage) {
             pt::game::PcSettingSection street{"pc_street_question", 0, {}};
-            auto walk = Row(kStreetWalk, "pc_street_walk", {""}, 0, "pc_note_street_walk");
+            auto walk = game_.SurvivalWithWalk() ? Row(kStreetSurvival, "pc_street_survival", {""}, 0, "pc_note_street_survival")
+                                                 : Row(kStreetWalk, "pc_street_walk", {""}, 0, "pc_note_street_walk");
             walk.link = true;
             street.rows.push_back(std::move(walk));
             auto restart = Row(kStreetRestart, "pc_street_restart", {""}, 0, "pc_note_street_restart");
@@ -2780,6 +3044,11 @@ public:
                 auto leave = Row(kStreetLeave, "pc_street_leave", {"pc_extras_start"}, 0, "pc_note_street_leave");
                 leave.link = true;
                 extras.rows.push_back(std::move(leave));
+                if (game_.SurvivalActive()) {
+                    auto survive = Row(kSurvival, "pc_survival", {"pc_extras_stop"}, 0, "pc_note_survival");
+                    survive.link = true;
+                    extras.rows.push_back(std::move(survive));
+                }
             }
             const bool locked = app_.options.release_locks && !game_.GameFinished();
             auto browser = Row(kLoopBrowser, "pc_loop_browser", {"pc_graphics_value"}, 0,
@@ -2789,6 +3058,11 @@ public:
             auto archive = Row(kArchive, "pc_archive", {"pc_graphics_value"}, 0, locked ? "pc_note_archive_gate" : "pc_note_archive");
             archive.link = true;
             extras.rows.push_back(std::move(archive));
+            if (game_.SurvivalAvailable() && !game_.SurvivalActive()) {
+                auto night = Row(kLoopNight, "pc_survival", {"pc_graphics_value"}, 0, "pc_note_loop_survival");
+                night.link = true;
+                extras.rows.push_back(std::move(night));
+            }
             auto freecam = Row(kFreecam, "pc_freecam", {app_.freecam_active ? "pc_extras_stop" : "pc_extras_start"}, 0, "pc_note_freecam");
             freecam.link = true;
             freecam.enabled = app_.window != nullptr && !app_.xr;
@@ -2801,6 +3075,13 @@ public:
             if (game_.GamePlus()) {
                 extras.rows.push_back(Row(kGamePlus, "pc_game_plus", OffOn(), app_.settings.game.game_plus ? 1 : 0, "pc_note_game_plus"));
             }
+            const int ng_done = game_.NightUnlocked()
+                                    ? pt::game::Game::kTierSurvival
+                                    : std::clamp(static_cast<int>(game_.Finishes()) - 1, 0, pt::game::Game::kTierSurvival - 1);
+            auto ng_state = Row(kNgPlusState, "pc_ng_plus_state",
+                                {std::format("{}/{}", ng_done, pt::game::Game::kTierSurvival)}, 0, "pc_note_ng_plus_state");
+            ng_state.wrap = false;
+            extras.rows.push_back(std::move(ng_state));
             extras.rows.push_back(Row(kSpeedrun, "pc_speedrun", {"pc_off", "pc_speedrun_real_time", "pc_speedrun_game_time"},
                                       std::clamp(app_.settings.extras.speedrun, 0, 2), "pc_note_speedrun"));
             extras.rows.push_back(Row(kLiveSplit, "pc_livesplit", OffOn(), app_.settings.extras.livesplit ? 1 : 0,
@@ -2820,6 +3101,7 @@ public:
             AddProgressAndSupport(out);
             return out;
         }
+        if (page_ == kHdrPage) return HdrSections();
         if (page_ == kVrPage) {
             const pt::AppSettings::Vr& v = app_.settings.vr;
             pt::game::PcSettingSection vr{"pc_vr", 0, {}};
@@ -2838,7 +3120,18 @@ public:
             const pt::AppSettings::Accessibility& a = app_.settings.accessibility;
             pt::game::PcSettingSection access{"pc_accessibility", 0, {}};
             access.rows.push_back(Row(kSoundCaptions, "pc_sound_captions", OffOn(), a.sound_captions ? 1 : 0, "pc_note_sound_captions"));
+            access.rows.push_back(Row(kSubtitleSize, "pc_subtitle_size",
+                                      {"pc_subtitle_size_normal", "pc_subtitle_size_large", "pc_subtitle_size_xlarge"},
+                                      std::clamp(a.subtitle_size, 0, 2), "pc_note_subtitle_size"));
+            access.rows.push_back(Row(kSubtitleBg, "pc_subtitle_bg",
+                                      {"pc_off", "pc_subtitle_bg_subtle", "pc_subtitle_bg_dark"},
+                                      std::clamp(a.subtitle_bg, 0, 2), "pc_note_subtitle_bg"));
+            access.rows.push_back(Row(kReducedFlashing, "pc_reduced_flashing", OffOn(), a.reduced_flashing ? 1 : 0, "pc_note_reduced_flashing"));
+            access.rows.push_back(Row(kHouseSprint, "pc_house_sprint", OffOn(), a.house_sprint ? 1 : 0, "pc_note_house_sprint"));
+            access.rows.push_back(Row(kSprintMode, "pc_sprint_mode", {"pc_input_hold", "pc_input_toggle"}, a.sprint_toggle ? 1 : 0, "pc_note_sprint_mode"));
+            access.rows.push_back(Row(kZoomMode, "pc_zoom_mode", {"pc_input_hold", "pc_input_toggle"}, a.zoom_toggle ? 1 : 0, "pc_note_zoom_mode"));
             access.rows.push_back(Row(kFpsCounter, "pc_fps_counter", OffOn(), a.fps_counter ? 1 : 0, "pc_note_fps_counter"));
+            access.rows.push_back(Row(kSupportPrompts, "pc_support_prompts", OffOn(), app_.settings.ui.support_prompts ? 1 : 0, "pc_note_support_prompts"));
             access.rows.push_back(Row(kGyro, "pc_gyro", {"pc_off", "pc_gyro_camera", "pc_gyro_flashlight"}, std::clamp(a.gyro, 0, 2),
                                       a.gyro == 1 ? "pc_note_gyro_camera" : a.gyro == 2 ? "pc_note_gyro_flashlight" : "pc_note_gyro"));
             pt::game::PcSettingRow sensitivity = Row(kGyroSensitivity, "pc_gyro_sensitivity", {}, Nearest(kGyroSensitivitySteps, a.gyro_sensitivity),
@@ -2891,13 +3184,26 @@ public:
         display.rows.push_back(Row(kDisplayMode, "pc_display_mode", {"pc_window", "pc_borderless", "pc_fullscreen"}, mode, "pc_note_display_mode"));
         const char* resolution_note = mode == 0 ? "pc_note_resolution" : "pc_note_resolution_fullscreen";
         pt::game::PcSettingRow resolution = Row(kResolution, "pc_resolution", {}, 0, resolution_note);
-        const std::vector<glm::ivec2> sizes = WindowSizes();
-        for (size_t i = 0; i < sizes.size(); ++i) {
-            resolution.values.push_back(std::format("{} x {}", sizes[i].x, sizes[i].y));
-            if (sizes[i] == glm::ivec2(s.display.width, s.display.height)) resolution.value = static_cast<int>(i);
+        if (mode == pt::display::kBorderless) {
+            int pw = 0, ph = 0;
+            const bool is_fs = app_.window && (SDL_GetWindowFlags(app_.window) & SDL_WINDOW_FULLSCREEN) != 0;
+            if (is_fs) SDL_GetWindowSizeInPixels(app_.window, &pw, &ph);
+            const glm::ivec2 desk = DesktopSize();
+            const int dw = (is_fs && pw > 0 && ph > 0) ? pw : desk.x;
+            const int dh = (is_fs && pw > 0 && ph > 0) ? ph : desk.y;
+            resolution.values.push_back(std::format("{} x {}", dw, dh));
+            resolution.value = 0;
+            resolution.enabled = false;
+        } else {
+            const std::vector<glm::ivec2> sizes = WindowSizes();
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                resolution.values.push_back(std::format("{} x {}", sizes[i].x, sizes[i].y));
+                if (sizes[i] == glm::ivec2(s.display.width, s.display.height)) resolution.value = static_cast<int>(i);
+            }
+            resolution.enabled = true;
+            resolution.dropdown = resolution.values.size() > 1;
         }
         resolution.wrap = false;
-        resolution.enabled = mode != 1;
         display.rows.push_back(std::move(resolution));
         {
             const std::vector<double> rates = RefreshRates();
@@ -2931,28 +3237,18 @@ public:
         if (s.display.fps_limit>0 && cap.value==0) { cap.values.push_back(std::to_string(s.display.fps_limit)); cap.value=9; }
         cap.wrap=false;
         display.rows.push_back(std::move(cap));
-        const bool hdr_available = app_.display_hdr != 0;
+        const bool hdr_available = app_.display_hdr != 0 || (s.display.hdr_windows_switch && app_.display_hdr_capable);
         pt::game::PcSettingRow hdr = Row(kHdr, "pc_hdr", OffOn(), s.display.hdr && hdr_available ? 1 : 0,
                                          hdr_available ? "pc_note_hdr_restart" : "pc_note_hdr_windows_off");
         hdr.enabled = hdr_available;
         display.rows.push_back(std::move(hdr));
+        if (app_.display_hdr_capable) {
+            display.rows.push_back(Row(kHdrWindowsSwitch, "pc_hdr_windows_switch", OffOn(), s.display.hdr_windows_switch ? 1 : 0, "pc_note_hdr_windows_switch"));
+        }
         if (s.display.hdr && hdr_available) {
-            std::vector<int> steps = HdrPaperWhiteSteps(s.display.hdr_paper_white);
-            pt::game::PcSettingRow paper = Row(kHdrPaperWhite, "pc_hdr_paper_white", {}, 0, "pc_note_hdr_paper_white");
-            for (size_t i = 0; i < steps.size(); ++i) {
-                paper.values.push_back(std::format("{} nits", steps[i]));
-                if (steps[i] == s.display.hdr_paper_white) paper.value = static_cast<int>(i);
-            }
-            paper.wrap = false;
-            display.rows.push_back(std::move(paper));
-            steps = HdrPeakSteps(s.display.hdr_peak);
-            pt::game::PcSettingRow peak = Row(kHdrPeak, "pc_hdr_peak", {}, 0, "pc_note_hdr_peak");
-            for (size_t i = 0; i < steps.size(); ++i) {
-                peak.values.push_back(steps[i] == 0 ? std::string("pc_hdr_peak_auto") : std::format("{} nits", steps[i]));
-                if (steps[i] == s.display.hdr_peak) peak.value = static_cast<int>(i);
-            }
-            peak.wrap = false;
-            display.rows.push_back(std::move(peak));
+            auto hdr_page = Row(kHdrSettings, "pc_hdr_settings", {"pc_graphics_value"}, 0, "pc_note_hdr_settings");
+            hdr_page.link = true;
+            display.rows.push_back(std::move(hdr_page));
         }
         if (pt::RenderingApiSelectable()) {
             pt::RenderingApi api = pt::RenderingApi::Vulkan;
@@ -3006,8 +3302,12 @@ public:
             sharpness.wrap = false;
             upscaling.rows.push_back(std::move(sharpness));
         }
-        pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {"pc_off", "FSR 3", "DLSS", "MetalFX", "XeSS"},
-                                                      static_cast<int>(u.frame_generation), "pc_note_frame_generation");
+        const std::vector<pt::FrameGenKind> generators = FrameGenerators();
+        pt::game::PcSettingRow frame_generation = Row(kFrameGeneration, "pc_frame_generation", {}, 0, "pc_note_frame_generation");
+        for (const pt::FrameGenKind kind : generators) {
+            if (kind == u.frame_generation) frame_generation.value = static_cast<int>(frame_generation.values.size());
+            frame_generation.values.push_back(FrameGenName(kind));
+        }
         std::string fg_reason;
         pt::FrameGeneration* fg = pt::UpscaleHost::Get().FrameGen();
         std::string fsr_note;
@@ -3061,8 +3361,14 @@ public:
             xefg_note = xefg_reason.empty() ? std::string() : *xefg_key ? std::string(xefg_key) : Sentence(xefg_reason);
         }
 #endif
-        frame_generation.value_notes = {std::string(), fsr_note, dlss_note, metalfx_note, xefg_note};
-        if (!dlss_warning.empty()) frame_generation.value_warnings = {std::string(), std::string(), dlss_warning};
+        for (const pt::FrameGenKind kind : generators) {
+            frame_generation.value_notes.push_back(kind == pt::FrameGenKind::Fsr       ? fsr_note
+                                                   : kind == pt::FrameGenKind::Dlss    ? dlss_note
+                                                   : kind == pt::FrameGenKind::Metalfx ? metalfx_note
+                                                   : kind == pt::FrameGenKind::Xess    ? xefg_note
+                                                                                       : std::string());
+            frame_generation.value_warnings.push_back(kind == pt::FrameGenKind::Dlss ? dlss_warning : std::string());
+        }
         if (u.frame_generation == pt::FrameGenKind::Dlss) {
             frame_generation.note = pt::streamline::Active() ? "pc_note_frame_generation_dlss" : "pc_note_dlssg_restart";
         } else if (u.frame_generation == pt::FrameGenKind::Metalfx) {
@@ -3084,7 +3390,7 @@ public:
                                     : app_.FgPending() == 3 ? "pc_note_fg_reinstall_restart" : "pc_note_fg_unlock_restart";
         }
         pt::game::PcSettingSection generation{"pc_frame_generation", 0, {}};
-        generation.rows.push_back(std::move(frame_generation));
+        if (generators.size() > 1) generation.rows.push_back(std::move(frame_generation));
         if (u.frame_generation == pt::FrameGenKind::Dlss) {
             const unsigned max_multiplier = pt::streamline::FrameGenMaxMultiplier();
             auto multiplier = Row(kDlssgMultiplier, "pc_dlssg_multiplier", {"2x", "3x", "4x"},
@@ -3170,7 +3476,7 @@ public:
         if (page_ == kUpscalingPage) {
             std::vector<pt::game::PcSettingSection> out;
             out.push_back(std::move(upscaling));
-            out.push_back(std::move(generation));
+            if (!generation.rows.empty()) out.push_back(std::move(generation));
             out.push_back(std::move(neural_section));
             return out;
         }
@@ -3291,7 +3597,140 @@ public:
         }
         dead_zone.wrap = false;
         controls.rows.push_back(std::move(dead_zone));
+        if (game_.SurvivalAvailable()) {
+            auto crosshair = Row(kCrosshair, "pc_crosshair", {"pc_graphics_value"}, 0, "pc_note_crosshair");
+            crosshair.link = true;
+            controls.rows.push_back(std::move(crosshair));
+        }
+        {
+            auto keys_row = Row(kKeyBindings, "pc_key_bindings", {"pc_graphics_value"}, 0, "pc_note_key_bindings");
+            keys_row.link = true;
+            controls.rows.push_back(std::move(keys_row));
+        }
         return {std::move(controls)};
+    }
+
+    struct KeyBindRowSpec {
+        pt::KeyAction action;
+        const char* label;
+    };
+    static constexpr std::array<KeyBindRowSpec, 14> kKeyBindRows = {{
+        {pt::KeyAction::WalkForward, "pc_key_walk_forward"},
+        {pt::KeyAction::WalkBack, "pc_key_walk_back"},
+        {pt::KeyAction::WalkLeft, "pc_key_walk_left"},
+        {pt::KeyAction::WalkRight, "pc_key_walk_right"},
+        {pt::KeyAction::Zoom, "pc_key_zoom"},
+        {pt::KeyAction::Act, "pc_key_act"},
+        {pt::KeyAction::SurvivalFire, "pc_key_surv_fire"},
+        {pt::KeyAction::SurvivalReload, "pc_key_surv_reload"},
+        {pt::KeyAction::SurvivalSprint, "pc_key_surv_sprint"},
+        {pt::KeyAction::SurvivalSwap, "pc_key_surv_swap"},
+        {pt::KeyAction::SurvivalMelee, "pc_key_surv_melee"},
+        {pt::KeyAction::SurvivalFlare, "pc_key_surv_flare"},
+        {pt::KeyAction::SurvivalUse, "pc_key_surv_use"},
+        {pt::KeyAction::SurvivalInfo, "pc_key_surv_info"},
+    }};
+
+    std::vector<pt::game::PcSettingSection> KeyBindingsSections() {
+        if (rebind_row_ >= 0 && rebind_row_ < static_cast<int>(kKeyBindRows.size())) {
+            uint16_t sc = 0;
+            uint8_t ms = 0;
+            bool cancelled = false;
+            if (input_.PollCapturedKey(sc, ms, cancelled)) {
+                if (!cancelled && pt::SetKeyBinding(kKeyBindRows[static_cast<size_t>(rebind_row_)].action, sc, ms)) {
+                    app_.settings.keys = pt::ExportKeyBindings();
+                    Save();
+                }
+                rebind_row_ = -1;
+            }
+        }
+        pt::game::PcSettingSection section{"pc_key_bindings", 0, {}};
+        for (size_t i = 0; i < kKeyBindRows.size(); ++i) {
+            const bool listening = rebind_row_ == static_cast<int>(i);
+            std::string val;
+            if (listening) {
+                val = "pc_key_press_any";
+            } else if (const pt::KeyBinding* b = pt::FirstBinding(kKeyBindRows[i].action)) {
+                val = pt::KeyBindingName(*b);
+            }
+            auto row = Row(kKeyBindFirst + static_cast<int>(i), kKeyBindRows[i].label, {val}, 0, "pc_note_key_bind_row");
+            row.link = true;
+            section.rows.push_back(std::move(row));
+        }
+        auto reset = Row(kKeyBindReset, "pc_key_reset", {""}, 0, "pc_note_key_reset");
+        reset.action = true;
+        reset.confirm_note = "pc_dlg_key_reset";
+        section.rows.push_back(std::move(reset));
+        return {std::move(section)};
+    }
+
+    static constexpr std::array<pt::AppSettings::Crosshair, 7> kCrosshairPresets{{
+        {0, 0, 7, 3, 3, true, true, true, 8, true, false},
+        {5, 0, 4, 4, 0, false, true, true, 9, true, false},
+        {1, 1, 6, 2, 0, false, false, true, 9, true, false},
+        {2, 3, 6, 3, 3, true, true, true, 9, true, false},
+        {4, 6, 11, 3, 4, true, true, true, 8, true, false},
+        {0, 0, 4, 2, 2, true, false, true, 6, true, false},
+        {6, 0, 7, 3, 3, false, false, false, 8, false, false},
+    }};
+    static int DetectCrosshairPreset(const pt::AppSettings::Crosshair& c) {
+        for (size_t i = 0; i < kCrosshairPresets.size(); ++i) {
+            if (c == kCrosshairPresets[i]) return static_cast<int>(i);
+        }
+        return static_cast<int>(kCrosshairPresets.size());
+    }
+
+    std::vector<pt::game::PcSettingSection> CrosshairSections() {
+        const pt::AppSettings::Crosshair& c = app_.settings.crosshair;
+        pt::game::PcSettingSection look{"pc_crosshair_look", 0, {}};
+        const int preset = DetectCrosshairPreset(c);
+        std::vector<std::string> preset_names = {
+            "pc_crosshair_preset_default", "pc_crosshair_preset_dot",      "pc_crosshair_preset_classic",
+            "pc_crosshair_preset_tactical", "pc_crosshair_preset_circle",  "pc_crosshair_preset_minimal",
+            "pc_crosshair_preset_off",
+        };
+        if (preset >= static_cast<int>(kCrosshairPresets.size())) preset_names.push_back("pc_crosshair_preset_custom");
+        look.rows.push_back(Row(kCrossPreset, "pc_crosshair_preset", std::move(preset_names), preset, "pc_note_crosshair_preset"));
+        look.rows.push_back(Row(kCrossShape, "pc_crosshair_shape",
+                                {"pc_crosshair_ticks", "pc_crosshair_cross", "pc_crosshair_tee", "pc_crosshair_circle", "pc_crosshair_circle_dot",
+                                 "pc_crosshair_dot", "pc_crosshair_none"},
+                                std::clamp(c.shape, 0, 6), "pc_note_crosshair_shape"));
+        look.rows.push_back(Row(kCrossColor, "pc_crosshair_color",
+                                {"pc_color_white", "pc_color_green", "pc_color_yellow", "pc_color_cyan", "pc_color_magenta", "pc_color_red", "pc_color_orange"},
+                                std::clamp(c.color, 0, 6), "pc_note_crosshair_color"));
+        auto numbers = [](int from, int to, auto text) {
+            std::vector<std::string> values;
+            for (int i = from; i <= to; ++i) values.push_back(text(i));
+            return values;
+        };
+        auto length = Row(kCrossLength, "pc_crosshair_length", numbers(1, 20, [](int i) { return std::to_string(i); }), std::clamp(c.length, 1, 20) - 1,
+                          "pc_note_crosshair_length");
+        length.wrap = false;
+        look.rows.push_back(std::move(length));
+        auto thickness = Row(kCrossThickness, "pc_crosshair_thickness", numbers(1, 10, [](int i) { return std::format("{:.1f}", 0.5f * static_cast<float>(i)); }),
+                             std::clamp(c.thickness, 1, 10) - 1, "pc_note_crosshair_thickness");
+        thickness.wrap = false;
+        look.rows.push_back(std::move(thickness));
+        auto gap = Row(kCrossGap, "pc_crosshair_gap", numbers(0, 20, [](int i) { return std::to_string(i); }), std::clamp(c.gap, 0, 20), "pc_note_crosshair_gap");
+        gap.wrap = false;
+        gap.enabled = c.shape != 1 && c.shape != 5 && c.shape != 6;
+        look.rows.push_back(std::move(gap));
+        auto opacity = Row(kCrossOpacity, "pc_crosshair_opacity", numbers(1, 10, [](int i) { return std::format("{}%", i * 10); }),
+                           std::clamp(c.opacity, 1, 10) - 1, "pc_note_crosshair_opacity");
+        opacity.wrap = false;
+        look.rows.push_back(std::move(opacity));
+        pt::game::PcSettingSection behaviour{"pc_crosshair_behaviour", 0, {}};
+        behaviour.rows.push_back(Row(kCrossDynamic, "pc_crosshair_dynamic", OffOn(), c.dynamic ? 1 : 0, "pc_note_crosshair_dynamic"));
+        behaviour.rows.push_back(Row(kCrossDot, "pc_crosshair_dot_row", OffOn(), c.dot ? 1 : 0, "pc_note_crosshair_dot"));
+        behaviour.rows.push_back(Row(kCrossOutline, "pc_crosshair_outline", OffOn(), c.outline ? 1 : 0, "pc_note_crosshair_outline"));
+        behaviour.rows.push_back(Row(kCrossHitMarker, "pc_crosshair_hit_marker", OffOn(), c.hit_marker ? 1 : 0, "pc_note_crosshair_hit_marker"));
+        behaviour.rows.push_back(Row(kCrossSights, "pc_crosshair_sights", OffOn(), c.behind_sights ? 1 : 0, "pc_note_crosshair_sights"));
+        auto reset = Row(kCrossReset, "pc_crosshair_reset", {"pc_crosshair_reset_value"}, 0, "pc_note_crosshair_reset");
+        reset.action = true;
+        reset.confirm_note = "pc_dlg_crosshair_reset";
+        reset.confirm_default_yes = true;
+        behaviour.rows.push_back(std::move(reset));
+        return {std::move(look), std::move(behaviour)};
     }
 
     void AddProgressAndSupport(std::vector<pt::game::PcSettingSection>& out) {
@@ -3383,8 +3822,12 @@ public:
         page_ = last_tab_ = tabs[i];
         app_.microphone_test = app_.microphone_monitor = false;
     }
-    void MenuShown() override { last_tab_ = kDisplayPage; }
+    void MenuShown() override {
+        last_tab_ = kDisplayPage;
+        hdr_screen_ = HdrScreen::None;
+    }
     void Donate() override { Activate(kPatreon); }
+    bool SupportPrompts() const override { return app_.settings.ui.support_prompts; }
 
     bool FindSettingRow(std::string_view label, pt::game::PcSettingRow& found) override {
         const int previous = page_;
@@ -3435,12 +3878,15 @@ public:
                 for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
             }
         }
-        for (const int page : {kVrPage, kSoundPage, kAccessibilityPage, kDisplayPage, kUpscalingPage, kControlsPage}) {
+        for (const int page : {kVrPage, kSoundPage, kAccessibilityPage, kDisplayPage, kHdrPage, kUpscalingPage, kControlsPage}) {
             page_ = page;
             for (const auto& section : Sections()) for (const auto& row : section.rows) {
                 if (!row.note.empty()) notes.push_back(row.note);
                 for (const auto& note : row.value_notes) if (!note.empty()) notes.push_back(note);
             }
+        }
+        for (const char* note : {"pc_hdr_calibrate_peak", "pc_hdr_calibrate_paper", "pc_hdr_calibrate_shadows", "pc_hdr_calibrate_menus"}) {
+            notes.push_back(note);
         }
         if (const auto footer = FooterAction(); footer && !footer->note.empty()) notes.push_back(footer->note);
         page_ = previous;
@@ -3482,15 +3928,90 @@ public:
         return notes;
     }
 
-    void TestSetFrameGeneration(int value) { Set(kFrameGeneration, value); }
+    void TestSetFrameGeneration(int kind) {
+        const std::vector<pt::FrameGenKind> generators = FrameGenerators();
+        const auto at = std::find(generators.begin(), generators.end(), static_cast<pt::FrameGenKind>(kind));
+        if (at != generators.end()) Set(kFrameGeneration, static_cast<int>(at - generators.begin()));
+    }
     void Set(int id, int value) override {
         pt::AppSettings& s = app_.settings;
         pt::UpscaleSettings& u = app_.scene.upscale;
+        if (id == kCrossPreset) {
+            if (value >= 0 && value < static_cast<int>(kCrosshairPresets.size())) {
+                s.crosshair = kCrosshairPresets[static_cast<size_t>(value)];
+                ApplyCrosshair(game_, s);
+                Save();
+            }
+            return;
+        }
+        if (id >= kCrossShape && id <= kCrossSights) {
+            pt::AppSettings::Crosshair& c = s.crosshair;
+            switch (id) {
+            case kCrossShape: c.shape = std::clamp(value, 0, 6); break;
+            case kCrossColor: c.color = std::clamp(value, 0, 6); break;
+            case kCrossLength: c.length = std::clamp(value + 1, 1, 20); break;
+            case kCrossThickness: c.thickness = std::clamp(value + 1, 1, 10); break;
+            case kCrossGap: c.gap = std::clamp(value, 0, 20); break;
+            case kCrossOpacity: c.opacity = std::clamp(value + 1, 1, 10); break;
+            case kCrossDynamic: c.dynamic = value == 1; break;
+            case kCrossDot: c.dot = value == 1; break;
+            case kCrossOutline: c.outline = value == 1; break;
+            case kCrossHitMarker: c.hit_marker = value == 1; break;
+            case kCrossSights: c.behind_sights = value == 1; break;
+            default: break;
+            }
+            ApplyCrosshair(game_, s);
+            Save();
+            return;
+        }
         if (id >= kModFirst) {
             if (app_.mods && id - kModFirst < static_cast<int>(app_.mods->mods.size())) {
                 s.mods[app_.mods->mods[id - kModFirst].folder] = value == 1;
                 Save();
             }
+            return;
+        }
+        if (id == kArmoryWeapon) {
+            armory_weapon_ = std::clamp(value + 1, 1, 5);
+            if (armory_filter_ == 0) {
+                armory_skin_ = game_.SurvivalProfileData().EquippedSkin(armory_weapon_);
+            } else {
+                const std::vector<int> list = ArmoryFilteredSkins();
+                if (!list.empty() && std::find(list.begin(), list.end(), armory_skin_) == list.end()) {
+                    armory_skin_ = list.front();
+                }
+            }
+            armory_reload_timer_ = 0.0f;
+            return;
+        }
+        if (id == kArmoryFilter) {
+            armory_filter_ = std::clamp(value, 0, 6);
+            const std::vector<int> list = ArmoryFilteredSkins();
+            if (!list.empty() && std::find(list.begin(), list.end(), armory_skin_) == list.end()) {
+                armory_skin_ = list.front();
+            }
+            return;
+        }
+        if (id == kArmorySkin) {
+            const std::vector<int> list = ArmoryFilteredSkins();
+            if (!list.empty()) {
+                armory_skin_ = list[static_cast<size_t>(std::clamp(value, 0, static_cast<int>(list.size()) - 1))];
+            }
+            return;
+        }
+        if (id == kArmoryTorch) {
+            armory_torch_ = std::clamp(value, 0, pt::game::kSurvivalTorchCount - 1);
+            return;
+        }
+        if (id == kNightFinish || id == kNightTorch) {
+            pt::game::SurvivalProfile& profile = game_.SurvivalProfileData();
+            const std::span<const uint32_t> needs = id == kNightFinish ? std::span<const uint32_t>(pt::game::kFinishNeeds) : std::span<const uint32_t>(pt::game::kTorchNeeds);
+            int seen = 0;
+            for (size_t i = 0; i < needs.size(); ++i) {
+                if ((profile.unlocks & needs[i]) != needs[i]) continue;
+                if (seen++ == value) (id == kNightFinish ? profile.finish : profile.torch) = static_cast<int>(i);
+            }
+            game_.MarkSurvivalProfile();
             return;
         }
         switch (id) {
@@ -3557,13 +4078,57 @@ public:
         case kHdrPaperWhite: {
             const std::vector<int> steps = HdrPaperWhiteSteps(s.display.hdr_paper_white);
             if (value >= 0 && value < static_cast<int>(steps.size())) s.display.hdr_paper_white = steps[value];
-            app_.renderer.SetHdrLevels(s.display.hdr_paper_white, s.display.hdr_peak);
+            app_.renderer.SetHdrLevels(s.display.hdr_paper_white, s.display.hdr_peak, s.display.hdr_ui_white);
             break;
         }
         case kHdrPeak: {
             const std::vector<int> steps = HdrPeakSteps(s.display.hdr_peak);
             if (value >= 0 && value < static_cast<int>(steps.size())) s.display.hdr_peak = steps[value];
-            app_.renderer.SetHdrLevels(s.display.hdr_paper_white, s.display.hdr_peak);
+            app_.renderer.SetHdrLevels(s.display.hdr_paper_white, s.display.hdr_peak, s.display.hdr_ui_white);
+            break;
+        }
+        case kHdrReach:
+            s.display.hdr_reach = value == 2 ? 200 : value == 1 ? 150 : 100;
+            app_.renderer.SetHdrReach(s.display.hdr_reach);
+            break;
+        case kHdrGamma:
+            s.display.hdr_gamma = std::clamp(value, 0, 2);
+            app_.renderer.SetHdrLook(HdrLookOf(s));
+            break;
+        case kHdrHue:
+            s.display.hdr_keep_hue = value == 1;
+            app_.renderer.SetHdrLook(HdrLookOf(s));
+            break;
+        case kHdrColourRange:
+            s.display.hdr_colour_range = value == 2 ? 1 : value == 1 ? 2 : 0;
+            app_.renderer.SetHdrLook(HdrLookOf(s));
+            break;
+        case kHdrGrade:
+            if (value < 2) {
+                SetHdrGrade(s, value == 1 ? kHdrGradeRich : kHdrGradeOriginal);
+                app_.renderer.SetHdrLook(HdrLookOf(s));
+            }
+            break;
+        case kHdrGradeReset:
+            SetHdrGrade(s, kHdrGradeOriginal);
+            app_.renderer.SetHdrLook(HdrLookOf(s));
+            break;
+        case kHdrExposure: s.display.hdr_exposure = value - 30; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrContrast: s.display.hdr_contrast = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrHighlights: s.display.hdr_highlights = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrShadows: s.display.hdr_shadows = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrSaturation: s.display.hdr_saturation = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrHighlightSaturation: s.display.hdr_highlight_saturation = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrBlowout: s.display.hdr_blowout = value * 5; app_.renderer.SetHdrLook(HdrLookOf(s)); break;
+        case kHdrSeeThrough: s.display.hdr_see_through = value == 1; break;
+        case kHdrWindowsSwitch: s.display.hdr_windows_switch = value == 1; break;
+        case kPtFloorReflection: s.graphics.pt_floor_reflection = value * 5; break;
+        case kPtGlassReflection: s.graphics.pt_glass_reflection = value * 5; break;
+        case kPtReflectionSoftness: s.graphics.pt_reflection_softness = value * 5; break;
+        case kHdrUiWhite: {
+            const std::vector<int> steps = HdrUiWhiteSteps(s.display.hdr_ui_white);
+            if (value >= 0 && value < static_cast<int>(steps.size())) s.display.hdr_ui_white = steps[value];
+            app_.renderer.SetHdrLevels(s.display.hdr_paper_white, s.display.hdr_peak, s.display.hdr_ui_white);
             break;
         }
         case kSurround:
@@ -3662,8 +4227,10 @@ public:
             UpscaleToApp(u, s);
             pt::LogInfo("frame generation: DLSS multiplier selected {}x", u.dlssg_multiplier);
             break;
-        case kFrameGeneration:
-            u.frame_generation = static_cast<pt::FrameGenKind>(std::clamp(value, 0, static_cast<int>(pt::FrameGenKind::Count) - 1));
+        case kFrameGeneration: {
+            const std::vector<pt::FrameGenKind> generators = FrameGenerators();
+            if (value < 0 || value >= static_cast<int>(generators.size())) return;
+            u.frame_generation = generators[value];
             UpscaleToApp(u, s);
             if (app_.dlssg_crash_hold && u.frame_generation == pt::FrameGenKind::Dlss) {
                 s.upscaling.dlssg_interrupted = 0;
@@ -3672,6 +4239,7 @@ public:
                 game_.ShowNoticeDialog("pc_restart_needed");
             }
             break;
+        }
         case kVolume:
             s.audio.volume = static_cast<float>(std::clamp(value, 0, 20)) * 0.1f;
             break;
@@ -3691,9 +4259,34 @@ public:
         case kFpsCounter:
             s.accessibility.fps_counter = value == 1;
             break;
+        case kSupportPrompts:
+            s.ui.support_prompts = value == 1;
+            pt::LogInfo("support: prompts {}", s.ui.support_prompts ? "shown" : "hidden");
+            break;
         case kSoundCaptions:
             s.accessibility.sound_captions = value == 1;
             game_.SetSoundCaptions(s.accessibility.sound_captions);
+            break;
+        case kSubtitleSize:
+            s.accessibility.subtitle_size = std::clamp(value, 0, 2);
+            break;
+        case kSubtitleBg:
+            s.accessibility.subtitle_bg = std::clamp(value, 0, 2);
+            break;
+        case kReducedFlashing:
+            s.accessibility.reduced_flashing = value == 1;
+            break;
+        case kHouseSprint:
+            s.accessibility.house_sprint = value == 1;
+            game_.SetHouseSprint(s.accessibility.house_sprint);
+            break;
+        case kSprintMode:
+            s.accessibility.sprint_toggle = value == 1;
+            input_.SetToggleModes(s.accessibility.sprint_toggle, s.accessibility.zoom_toggle);
+            break;
+        case kZoomMode:
+            s.accessibility.zoom_toggle = value == 1;
+            input_.SetToggleModes(s.accessibility.sprint_toggle, s.accessibility.zoom_toggle);
             break;
         case kGyro:
             s.accessibility.gyro = std::clamp(value, 0, 2);
@@ -3759,11 +4352,14 @@ public:
             break;
         case kRayQuality: {constexpr int kQualities[]={0,1,3,4};s.graphics.ray_quality=kQualities[std::clamp(value,0,3)];break;}
         case kTextureDetail: s.graphics.texture_detail=std::clamp(value,0,2);break;
-        case kBloom: s.graphics.bloom=value==1;break;
-        case kLensGhosts: s.graphics.lens_ghosts=value==1;break;
+        case kBloom: s.graphics.bloom_strength=std::clamp(value,0,40)*5;s.graphics.bloom=value>0;break;
+        case kFlareStrength: s.graphics.flare_strength=std::clamp(value,0,40)*5;break;
+        case kLensGhosts: s.graphics.ghost_strength=std::clamp(value,0,40)*5;s.graphics.lens_ghosts=value>0;break;
         case kDepthOfField: s.graphics.depth_of_field=value==1;break;
-        case kMotionBlur: s.graphics.motion_blur=value==1;break;
+        case kMotionBlur: s.graphics.motion_blur=value<2;s.graphics.camera_motion_blur=value==0;break;
+        case kMotionBlurStrength: s.graphics.motion_blur_strength=(std::clamp(value,0,9)+1)*10;break;
         case kFilmGrain: s.graphics.film_grain=std::clamp(value,0,4)*.25f;break;
+        case kFilmGrainType: s.graphics.film_grain_type=std::clamp(value,0,1);break;
         case kLensDistortion: s.graphics.lens_distortion=value==1;break;
         case kClarity: s.graphics.clarity=std::clamp(value,0,10)*.1f;break;
         case kLetterbox: s.display.letterbox=std::clamp(value,0,2);break;
@@ -3819,6 +4415,11 @@ public:
     std::string_view Title() const override {
         switch(page_) {
         case kLoopPage:return "pc_loop_browser";
+        case kNightPage:return "pc_survival";
+        case kSurvivalPromoPage:return "pc_survival";
+        case kArmoryPage:return "pc_armory_title";
+        case kCrosshairPage:return "pc_crosshair";
+        case kKeyBindingsPage:return "pc_key_bindings";
         case kStreetPage:return game_.SpeedrunResultsPending() ? "pc_speedrun_results" : "pc_street_title";
         case kUpdatePage:return "pc_update_title";
         case kGraphicsPage:return "pc_graphics";
@@ -3833,6 +4434,7 @@ public:
         case kArchivePage:return "pc_archive";
         case kArchiveListPage:return "pc_archive";
         case kVrPage:return "pc_vr";
+        case kHdrPage:return "pc_hdr_title";
         case kDisplayPage:return "pc_section_display";
         case kUpscalingPage:return "pc_section_upscaling";
         case kControlsPage:return "pc_section_controls";
@@ -3841,7 +4443,7 @@ public:
     }
 
     bool IsLoopBrowser() const override { return page_ == kLoopPage; }
-    bool IsBrowser() const override { return page_ == kLoopPage; }
+    bool IsBrowser() const override { return page_ == kLoopPage || page_ == kCrosshairPage; }
     pt::game::PcGallery Gallery() const override {
         return page_ == kArchivePage ? pt::game::PcGallery::Halls : page_ == kArchiveListPage ? pt::game::PcGallery::Wall : pt::game::PcGallery::None;
     }
@@ -3882,6 +4484,10 @@ public:
 
     pt::game::PcPanel Panel(int id) const override {
         pt::game::PcPanel panel;
+        if (page_ == kCrosshairPage) {
+            panel.crosshair = CrosshairOf(app_.settings.crosshair);
+            return panel;
+        }
         if (page_ == kLoopPage) {
             panel.file = PreviewFile(id);
             return panel;
@@ -3989,10 +4595,10 @@ public:
                                           : std::string("pc_update_title");
             return update_question_text_;
         }
+        if (page_ == kSurvivalPromoPage) return "pc_survival_promo_question";
         return page_ == kStreetPage && !game_.SpeedrunResultsPending() ? "pc_street_question" : std::string_view();
     }
     mutable std::string update_question_text_;
-    bool QuestionBackShown() const override { return page_ != kUpdatePage; }
 
     bool CompactRows() const override { return page_ == kLoopPage || (page_ == kStreetPage && game_.SpeedrunResultsPending()); }
     std::string_view Credit() const override {
@@ -4035,7 +4641,7 @@ public:
         return files;
     }
     std::string PreviewFile(int id) const override {
-        const int index = id - kLoopFirst;
+        const int index = id == kLoopNight ? pt::game::kBrowseStreet : id - kLoopFirst;
         return IsLoopBrowser() && index >= 0 && index < kLoopCount && LoopUnlocked(index) ?
             pt::os::PathToUtf8((PreviewDirectory() / std::format("loop-{}.png", index))) : std::string();
     }
@@ -4061,18 +4667,186 @@ public:
         if (const pt::game::ArchiveEntry* entry = EntryOf(id)) {
             ActivateEntry(*entry);
         }
-        if (id == kLoopBrowser) { page_ = kLoopPage; GeneratePreviews(); }
+        if (id == kLoopBrowser) {
+            page_ = kLoopPage;
+            GeneratePreviews();
+            if (game_.SurvivalAvailable() && !app_.options.vr) SurvivalVisions().Update(app_.options);
+        }
         if (id == kExtras) page_ = kExtrasPage;
         if (id == kVr) page_ = kVrPage;
         if (id == kFreecam) app_.extras_request = 1;
         if (id == kPhotoMode) app_.extras_request = 2;
         if (id >= kLoopFirst && id < kLoopFirst + kLoopCount && LoopUnlocked(id - kLoopFirst)) game_.BrowseLoop(id - kLoopFirst);
+        if (id == kLoopNight && game_.SurvivalAvailable()) {
+            page_ = kNightPage;
+            if (!app_.options.vr) SurvivalVisions().Update(app_.options);
+        }
+        if (id == kPromoPlay && game_.SurvivalAvailable()) {
+            DismissSurvivalPromo();
+            night_from_promo_ = true;
+            page_ = kNightPage;
+            if (!app_.options.vr) SurvivalVisions().Update(app_.options);
+        }
+        if (id == kPromoLater) {
+            DismissSurvivalPromo();
+            page_ = last_tab_;
+            return_to_options_ = true;
+        }
+        if (id == kNightArmory && game_.SurvivalAvailable()) {
+            if (const char* env_cr = std::getenv("PT_SURVIVAL_CREDITS")) {
+                game_.SurvivalProfileData().credits = std::max(game_.SurvivalProfileData().credits, std::atoi(env_cr));
+            }
+            armory_weapon_ = std::clamp(armory_weapon_, 1, 5);
+            armory_mode_ = 0;
+            armory_skin_ = game_.SurvivalProfileData().EquippedSkin(armory_weapon_);
+            armory_anim_ = game_.SurvivalProfileData().EquippedReloadChoice(armory_weapon_);
+            armory_torch_ = game_.SurvivalProfileData().EquippedTorch();
+            armory_pitch_ = 0.0f;
+            armory_drag_cooldown_ = 0.0f;
+            armory_reload_timer_ = 0.0f;
+            page_ = kArmoryPage;
+        }
+        if (id == kArmoryAction) {
+            pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+            const pt::game::SurvivalSkinDef& sk = pt::game::SurvivalSkin(armory_skin_);
+            if (!prof.OwnsSkin(sk.id)) {
+                if (prof.credits >= sk.price) {
+                    prof.credits -= sk.price;
+                    prof.GrantSkin(sk.id);
+                    prof.weapon_skins[static_cast<size_t>(armory_weapon_)] = sk.id;
+                    game_.MarkSurvivalProfile();
+                    app_.settings.game.survival_profile = prof.Save();
+                    Save();
+                    if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+                    pt::LogInfo("armory: bought & equipped '{}' (${}, remaining ${}) on weapon {}", sk.name, sk.price, prof.credits, armory_weapon_);
+                }
+            } else {
+                prof.weapon_skins[static_cast<size_t>(armory_weapon_)] = sk.id;
+                game_.MarkSurvivalProfile();
+                app_.settings.game.survival_profile = prof.Save();
+                Save();
+                if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+                pt::LogInfo("armory: equipped '{}' on weapon {}", sk.name, armory_weapon_);
+            }
+            keep_cursor_ = true;
+        }
+        if (id == kArmoryApplyAll) {
+            pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+            if (prof.OwnsSkin(armory_skin_)) {
+                for (size_t w = 1; w <= 5; ++w) prof.weapon_skins[w] = armory_skin_;
+                game_.MarkSurvivalProfile();
+                app_.settings.game.survival_profile = prof.Save();
+                Save();
+                if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+                pt::LogInfo("armory: applied '{}' to all 5 weapons", pt::game::SurvivalSkin(armory_skin_).name);
+            }
+            keep_cursor_ = true;
+        }
+        if (id == kArmoryReload) {
+            const pt::game::ReloadStyle rs = pt::game::SurvivalSkin(armory_skin_).reload;
+            armory_reload_length_ = rs == pt::game::ReloadStyle::Telekinetic ? 1.8f : rs == pt::game::ReloadStyle::Gunslinger ? 1.6f : 1.4f;
+            armory_reload_timer_ = armory_reload_length_;
+            keep_cursor_ = true;
+        }
+        if (id == kArmoryTorchAction) {
+            pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+            const pt::game::SurvivalTorchDef& td = pt::game::SurvivalTorch(armory_torch_);
+            if (!prof.OwnsTorch(td.id)) {
+                if (prof.credits >= td.price) {
+                    prof.credits -= td.price;
+                    prof.GrantTorch(td.id);
+                    prof.torch = td.id;
+                    game_.MarkSurvivalProfile();
+                    app_.settings.game.survival_profile = prof.Save();
+                    Save();
+                    if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+                    pt::LogInfo("armory: bought & equipped torch {} (${}, remaining ${})", td.id, td.price, prof.credits);
+                }
+            } else {
+                prof.torch = td.id;
+                game_.MarkSurvivalProfile();
+                app_.settings.game.survival_profile = prof.Save();
+                Save();
+                if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+                pt::LogInfo("armory: equipped torch {}", td.id);
+            }
+            keep_cursor_ = true;
+        }
+        if (id == kCrosshair || id == kNightCrosshair) {
+            crosshair_from_ = page_;
+            page_ = kCrosshairPage;
+        }
+        if (id == kCrossReset) {
+            app_.settings.crosshair = {};
+            ApplyCrosshair(game_, app_.settings);
+            Save();
+            pt::LogInfo("crosshair: reset to the default");
+        }
+        if (id == kKeyBindings) {
+            rebind_row_ = -1;
+            input_.CancelKeyCapture();
+            page_ = kKeyBindingsPage;
+        }
+        if (id >= kKeyBindFirst && id < kKeyBindFirst + static_cast<int>(kKeyBindRows.size())) {
+            rebind_row_ = id - kKeyBindFirst;
+            input_.BeginKeyCapture();
+            keep_cursor_ = true;
+        }
+        if (id == kKeyBindReset) {
+            rebind_row_ = -1;
+            input_.CancelKeyCapture();
+            pt::ResetKeyBindings();
+            app_.settings.keys.clear();
+            Save();
+            keep_cursor_ = true;
+            pt::LogInfo("input: key bindings reset to defaults");
+        }
+        auto launch_night = [&]() {
+            night_from_promo_ = false;
+            night_from_death_ = false;
+            if (game_.StreetWalkActive()) {
+                game_.StartSurvival();
+                game_.RequestMenuClose();
+            } else {
+                game_.BrowseSurvival();
+            }
+        };
+        if ((id == kNightContinueNormal || id == kNightContinueHard || id == kNightContinueNightmare || id == kNightContinueInsanity) && game_.SurvivalAvailable()) {
+            const int level = id == kNightContinueNormal ? 1 : id == kNightContinueHard ? 2 : id == kNightContinueNightmare ? 3 : 4;
+            game_.SetSurvivalDifficulty(level);
+            game_.SetSurvivalStart(pt::game::SurvivalStart::Continue);
+            launch_night();
+        }
+        if (id == kNightDaily && game_.SurvivalAvailable()) {
+            game_.SetSurvivalStart(pt::game::SurvivalStart::Daily);
+            launch_night();
+        }
+        if ((id == kNightNormal || id == kNightHard || id == kNightNightmare || id == kNightInsanity) && game_.SurvivalAvailable()) {
+            const int level = id == kNightNormal ? 1 : id == kNightHard ? 2 : id == kNightNightmare ? 3 : 4;
+            app_.settings.game.survival_difficulty = level;
+            game_.SetSurvivalDifficulty(level);
+            Save();
+            launch_night();
+        }
         if (id == kStreetWalk) game_.AnswerStreetOffer(true);
+        if (id == kStreetSurvival && game_.SurvivalAvailable()) {
+            game_.RequestSurvival();
+            game_.AnswerStreetOffer(true);
+        }
+        if (id == kSurvival) {
+            if (game_.SurvivalActive()) {
+                game_.StopSurvival();
+            } else if (game_.SurvivalAvailable()) {
+                game_.StartSurvival();
+            }
+            game_.RequestMenuClose();
+        }
         if (id == kRunMenu) game_.AnswerSpeedrunMenu();
         if (id == kStreetRestart) game_.AnswerStreetOffer(false);
         if (id == kStreetLeave) app_.extras_request = 3;
         if (id == kLoopLock) {
             game_.SetBrowseUnlocks(0, false);
+            game_.SetNightUnlocked(false);
             app_.settings.progress = {};
             Save();
             pt::LogInfo("loop browser: unlocks cleared from the Extras page");
@@ -4173,22 +4947,21 @@ public:
         }
         if (id == kSoundSettings) page_ = kSoundPage;
         if (id == kAccessibility) page_ = kAccessibilityPage;
+        if (id == kHdrSettings) page_ = kHdrPage;
+        if (id == kHdrCalibrate || id == kHdrPreview) {
+            hdr_screen_ = id == kHdrCalibrate ? HdrScreen::Calibrate : HdrScreen::Preview;
+            hdr_step_ = 0;
+            keep_cursor_ = true;
+            pt::LogInfo("hdr: {} opened", id == kHdrCalibrate ? "calibration" : "look preview");
+        }
+        if (id == kHdrGradeReset) {
+            SetHdrGrade(app_.settings, kHdrGradeOriginal);
+            app_.renderer.SetHdrLook(HdrLookOf(app_.settings));
+            keep_cursor_ = true;
+        }
         if (id == kPatreon) {
             keep_cursor_ = true;
-            const bool test_fail = std::getenv("PT_TEST_OPEN_URL_FAIL") != nullptr;
-            bool opened = false;
-            if (test_fail) {
-                opened = false;
-            } else if (!app_.window) {
-                pt::LogInfo("patreon: {} (headless, not opened)", kPatreonUrl);
-                opened = true;
-            } else {
-                if (WindowMode(app_) == pt::display::kExclusive) SDL_MinimizeWindow(app_.window);
-                opened = SDL_OpenURL(kPatreonUrl);
-                if (!opened) pt::LogWarn("patreon: the browser could not be opened: {}", SDL_GetError());
-                else pt::LogInfo("patreon: opened {}", kPatreonUrl);
-            }
-            if (!opened) app_.pending_notices.push_back("pc_notice_patreon_failed");
+            OpenPatreonPage(app_, page_ == kLoopPage ? "loop browser" : (page_ == kArchivePage || page_ == kArchiveListPage) ? "museum" : "pc settings");
         }
     }
 
@@ -4201,9 +4974,76 @@ public:
         Save();
     }
 
+    bool OpenCrosshair() override {
+        crosshair_direct_ = true;
+        return true;
+    }
+
+    bool OpenSurvivalNight() override {
+        if (!game_.SurvivalAvailable()) return false;
+        night_direct_ = true;
+        night_direct_from_death_ = false;
+        return true;
+    }
+
+    bool OpenSurvivalNightFromDeath() override {
+        if (!game_.SurvivalAvailable()) return false;
+        night_direct_ = true;
+        night_direct_from_death_ = true;
+        return true;
+    }
+
+    bool OpenSurvivalPromo() override {
+        if (!SurvivalPromoDue()) return false;
+        promo_direct_ = true;
+        return true;
+    }
+
+    bool TakeReturnToOptions() override {
+        return std::exchange(return_to_options_, false);
+    }
+
+    bool TakeCloseToGame() override {
+        return std::exchange(close_to_game_, false);
+    }
+
+    bool SurvivalPromoDue() const override {
+        return !app_.settings.progress.survival_announced && !game_.SurvivalActive();
+    }
+
+    bool SurvivalUnlocked() const override {
+        return game_.SurvivalAvailable();
+    }
+
+    void DismissSurvivalPromo() override {
+        if (app_.settings.progress.survival_announced) return;
+        app_.settings.progress.survival_announced = true;
+        Save();
+        pt::LogInfo("survival: 1.1 menu promo dismissed and persisted");
+    }
+
     void Opened() override {
+        return_to_options_ = false;
+        close_to_game_ = false;
         page_ = game_.StreetOfferPending() ? kStreetPage : app_.update_question ? kUpdatePage : last_tab_;
+        if (std::exchange(crosshair_direct_, false) && page_ == last_tab_) {
+            crosshair_from_ = -1;
+            page_ = kCrosshairPage;
+        }
+        if (std::exchange(promo_direct_, false) && page_ == last_tab_) {
+            page_ = kSurvivalPromoPage;
+        }
+        if (std::exchange(night_direct_, false) && page_ == last_tab_) {
+            night_from_death_ = std::exchange(night_direct_from_death_, false);
+            night_from_promo_ = !night_from_death_;
+            page_ = kNightPage;
+        } else if (page_ != kNightPage) {
+            night_from_promo_ = false;
+            night_from_death_ = false;
+        }
         input_.ClearGyroCalibration();
+        rebind_row_ = -1;
+        input_.CancelKeyCapture();
         gyro_calibrate_no_pad_ = false;
         app_.microphone_test = app_.microphone_monitor = false;
         archive_full_ = false;
@@ -4212,6 +5052,9 @@ public:
     }
 
     void Closed() override {
+        RestoreArmoryLooks();
+        rebind_row_ = -1;
+        input_.CancelKeyCapture();
         app_.microphone_test = app_.microphone_monitor = false;
         archive_full_ = false;
         StopVoice();
@@ -4222,15 +5065,36 @@ public:
             if (page_ == kUpdatePage) page_ = last_tab_;
             pt::LogInfo("update: the start's question closed without updating");
         }
+        if (page_ == kSurvivalPromoPage) {
+            DismissSurvivalPromo();
+            page_ = last_tab_;
+        }
     }
 
-    int RefreshEveryFrames() const override { return page_ == kMicrophonePage || input_.GyroCalibration() == pt::GyroTracker::Calibration::Running || voice_entry_ || music_.Playing() ? 3 : 15; }
+    int RefreshEveryFrames() const override {
+        if (rebind_row_ >= 0) return 1;
+        return page_ == kMicrophonePage || input_.GyroCalibration() == pt::GyroTracker::Calibration::Running || voice_entry_ || music_.Playing() ? 3 : 15;
+    }
 
     bool Back() override {
         if (TabCount() > 0) {
             return false;
         }
         StopVoice();
+        if (page_ == kKeyBindingsPage) {
+            if (rebind_row_ >= 0) {
+                rebind_row_ = -1;
+                input_.CancelKeyCapture();
+                return true;
+            }
+            page_ = kControlsPage;
+            int index = 0;
+            for (const auto& section : Sections()) for (const auto& row : section.rows) {
+                if (row.id == kKeyBindings) pending_cursor_ = index;
+                ++index;
+            }
+            return true;
+        }
         if (page_ == kArchiveListPage && !archive_full_) StopMusic();
         if (page_ == kArchiveListPage && archive_full_) {
             archive_full_ = false;
@@ -4246,10 +5110,53 @@ public:
             pending_cursor_ = game_.StreetWalkActive() ? 2 : 1;
             return true;
         }
+        if (page_ == kCrosshairPage && crosshair_from_ < 0) {
+            page_ = last_tab_;
+            crosshair_from_ = kControlsPage;
+            return false;
+        }
+        if (page_ == kCrosshairPage) {
+            page_ = crosshair_from_;
+            const int link = page_ == kNightPage ? kNightCrosshair : kCrosshair;
+            int index = 0;
+            for (const auto& section : Sections()) for (const auto& row : section.rows) {
+                if (row.id == link) pending_cursor_ = index;
+                ++index;
+            }
+            return true;
+        }
+        if (page_ == kArmoryPage) {
+            RestoreArmoryLooks();
+            page_ = kNightPage;
+            int index = 0;
+            for (const auto& section : Sections()) for (const auto& row : section.rows) {
+                if (row.id == kNightArmory) pending_cursor_ = index;
+                ++index;
+            }
+            return true;
+        }
+        if (page_ == kSurvivalPromoPage) {
+            DismissSurvivalPromo();
+            page_ = last_tab_;
+            return false;
+        }
+        if (page_ == kNightPage && night_from_death_) {
+            night_from_death_ = false;
+            close_to_game_ = true;
+            page_ = last_tab_;
+            return false;
+        }
+        if (page_ == kNightPage && night_from_promo_) {
+            night_from_promo_ = false;
+            page_ = last_tab_;
+            return false;
+        }
         const int parent_row = page_ == kMicrophonePage ? kMicrophoneTest : page_ == kLightingPage ? kLighting : page_ == kTexturesPage ? kTextures
-                               : page_ == kEffectsPage ? kEffects : page_ == kLoopPage ? kLoopBrowser : page_ == kVrPage ? kVr : -1;
-        page_ = page_ == kMicrophonePage ? kSoundPage : page_==kLightingPage || page_==kTexturesPage || page_==kEffectsPage ? kGraphicsPage : page_ == kLoopPage || page_ == kVrPage ? kExtrasPage : last_tab_;
-        last_tab_ = page_;
+                               : page_ == kEffectsPage ? kEffects : page_ == kLoopPage ? kLoopBrowser : page_ == kVrPage ? kVr
+                               : page_ == kHdrPage ? kHdrSettings : page_ == kNightPage ? kLoopNight : -1;
+        page_ = page_ == kMicrophonePage ? kSoundPage : page_==kLightingPage || page_==kTexturesPage || page_==kEffectsPage ? kGraphicsPage
+              : page_ == kLoopPage || page_ == kVrPage || page_ == kNightPage ? kExtrasPage : last_tab_;
+        if (page_ != kLoopPage) last_tab_ = page_;
         if (parent_row >= 0) {
             int index = 0;
             for (const auto& section : Sections()) for (const auto& row : section.rows) {
@@ -4266,7 +5173,7 @@ private:
         kDisplayMode,
         kResolution,
         kRefreshRate,
-        kVsync, kFpsLimit, kHdr, kHdrPaperWhite, kHdrPeak, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile, kPromptStyle,
+        kVsync, kFpsLimit, kHdr, kHdrPaperWhite, kHdrPeak, kHdrUiWhite, kHdrReach, kSurround, kControllerSpeaker, kControllerSpeakerVolume, kRumbleProfile, kPromptStyle,
         kUpscaler,
         kQuality,
         kSharpness,
@@ -4297,21 +5204,29 @@ private:
         kRtReflections,
         kGraphicsPreset,kRayTracing,kLighting,kTextures,kEffects,
         kShadowQuality,kRasterAo,kRasterReflections,kRayQuality,kTextureDetail,
-        kBloom,kLensGhosts,kDepthOfField,kMotionBlur,kFilmGrain,kClarity,kLensDistortion,kLetterbox,
+        kBloom,kFlareStrength,kLensGhosts,kDepthOfField,kMotionBlur,kMotionBlurStrength,kFilmGrain,kFilmGrainType,kClarity,kLensDistortion,kLetterbox,
         kMods,
-        kLoopBrowser, kExtras, kFreecam, kPhotoMode, kStreetWalk, kStreetRestart, kStreetLeave, kLoopLock, kThirdPerson, kGamePlus, kSpeedrun, kLiveSplit, kRunMenu, kRunReal, kRunGame, kRunBest,
+        kLoopBrowser, kExtras, kFreecam, kPhotoMode, kStreetWalk, kStreetRestart, kStreetLeave, kStreetSurvival, kSurvival, kLoopNight,
+        kNightNormal, kNightHard, kNightNightmare, kNightInsanity, kNightDaily, kNightContinueNormal, kNightContinueHard, kNightContinueNightmare, kNightContinueInsanity, kNightFinish, kNightTorch, kNightArmory, kPromoPlay, kPromoLater, kArmoryBalance, kArmoryWeapon, kArmoryFilter, kArmorySkin, kArmoryAction, kArmoryApplyAll, kArmoryReload, kArmoryTorch, kArmoryTorchAction, kLoopLock, kThirdPerson, kGamePlus, kNgPlusState, kSpeedrun, kLiveSplit, kRunMenu, kRunReal, kRunGame, kRunBest,
         kArchive, kArchiveLock,
         kVr, kVrMode, kVrFlashlight, kVrTurn, kVrHeight, kVrWorldScale,
-        kAccessibility, kSoundCaptions, kFpsCounter, kGyro, kGyroSensitivity, kGyroCalibrate, kFieldOfView,
+        kAccessibility, kSoundCaptions, kSubtitleSize, kSubtitleBg, kReducedFlashing, kHouseSprint, kSprintMode, kZoomMode, kFpsCounter, kSupportPrompts, kGyro, kGyroSensitivity, kGyroCalibrate, kFieldOfView,
         kRenderingApi,
         kNeuralRendering, kNeuralStyle, kNeuralModel, kNeuralQuality, kNeuralIntensity, kNeuralUnlock, kNeuralUninstall, kNeuralReinstall,
         kFgUnlock, kFgReinstall, kFgUninstall,
         kPatreon,
+        kHdrSettings, kHdrCalibrate, kHdrGamma, kHdrPreview, kHdrHue, kHdrColourRange,
+        kHdrGrade, kHdrExposure, kHdrContrast, kHdrHighlights, kHdrShadows, kHdrSaturation, kHdrHighlightSaturation, kHdrBlowout, kHdrGradeReset,
+        kHdrSeeThrough, kHdrWindowsSwitch, kPtFloorReflection, kPtGlassReflection, kPtReflectionSoftness,
+        kCrosshair, kNightCrosshair, kCrossPreset, kCrossShape, kCrossColor, kCrossLength, kCrossThickness, kCrossGap, kCrossDynamic, kCrossDot,
+        kCrossOutline, kCrossOpacity, kCrossHitMarker, kCrossSights, kCrossReset,
+        kKeyBindings, kKeyBindReset,
         kLoopFirst = 1000,
         kRunSplitFirst = 3000,
         kModFirst = 2000,
         kArchiveSectionFirst = 3000,
         kArchiveEntryFirst = 4000,
+        kKeyBindFirst = 5000,
     };
     static constexpr int kArchivePage = 10;
     static constexpr int kArchiveListPage = 11;
@@ -4628,11 +5543,74 @@ private:
     int preview_runs_ = 0;
     pt::os::ChildProcess preview_process_;
     static constexpr int kLoopPage = 6;
+    static constexpr int kNightPage = 20;
+    static constexpr int kArmoryPage = 23;
+    static constexpr int kSurvivalPromoPage = 24;
+    int armory_weapon_ = 1;
+    int armory_mode_ = 0;
+    int armory_filter_ = 0;
+    int armory_skin_ = 0;
+    int armory_anim_ = 0;
+    int armory_torch_ = 0;
+    float armory_angle_ = 0.55f;
+    float armory_pitch_ = 0.0f;
+    float armory_drag_cooldown_ = 0.0f;
+    float armory_reload_timer_ = 0.0f;
+    float armory_reload_length_ = 1.6f;
+    float armory_fx_time_ = 0.0f;
+    int last_armory_weapon_ = -1;
+    int last_armory_skin_ = -1;
+    int last_armory_torch_ = -1;
+    bool armory_preview_dirty_ = false;
+    bool promo_direct_ = false;
+    bool night_direct_from_death_ = false;
+    bool night_from_death_ = false;
+    bool close_to_game_ = false;
+    bool return_to_options_ = false;
+    std::vector<int> ArmoryFilteredSkins() const {
+        const pt::game::SurvivalProfile& profile = game_.SurvivalProfileData();
+        std::vector<int> out;
+        for (int i = 0; i < pt::game::kSurvivalSkinCount; ++i) {
+            const pt::game::SurvivalSkinDef& sk = pt::game::SurvivalSkin(i);
+            if (armory_filter_ == 0) out.push_back(i);
+            else if (armory_filter_ >= 1 && armory_filter_ <= 5 && static_cast<int>(sk.rarity) == armory_filter_ - 1) out.push_back(i);
+            else if (armory_filter_ == 6 && profile.OwnsSkin(i)) out.push_back(i);
+        }
+        return out;
+    }
+    void RestoreArmoryLooks() {
+        last_armory_weapon_ = last_armory_skin_ = last_armory_torch_ = -1;
+        if (!armory_preview_dirty_) return;
+        armory_preview_dirty_ = false;
+        if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) {
+            const pt::game::SurvivalModels* sm = s->ArmoryModelsIfLoaded();
+            if (sm) {
+                const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+                for (size_t w = 1; w < sm->guns.size(); ++w) {
+                    if (sm->guns[w].body) {
+                        pt::game::ApplyWeaponSkin(app_.textures, sm->guns[w], game_.SurvivalActive() ? prof.EquippedSkin(static_cast<int>(w)) : 0);
+                    }
+                }
+                if (sm->chest_light) {
+                    pt::game::ApplyTorchSkin(app_.textures, *sm, game_.SurvivalActive() ? prof.EquippedTorch() : 0, 60.0f);
+                }
+            }
+            s->RefreshLooks();
+        }
+    }
+    static constexpr int kCrosshairPage = 21;
+    int crosshair_from_ = 17;
+    bool crosshair_direct_ = false;
+    bool night_direct_ = false;
+    bool night_from_promo_ = false;
+    static constexpr int kKeyBindingsPage = 22;
+    int rebind_row_ = -1;
     static constexpr int kModsPage = 7;
     static constexpr int kExtrasPage = 8;
     static constexpr int kStreetPage = 9;
     static constexpr int kUpdatePage = 18;
     static constexpr int kVrPage = 12;
+    static constexpr int kHdrPage = 19;
     static constexpr int kMaxModRows = 20;
     static constexpr int kMainPage = 0;
     static constexpr int kGraphicsPage = 1;
@@ -4642,7 +5620,7 @@ private:
     static constexpr int kDisplayPage = 15;
     static constexpr int kUpscalingPage = 16;
     static constexpr int kControlsPage = 17;
-    static constexpr int kSettingPages[] = {kDisplayPage, kUpscalingPage, kGraphicsPage, 3, 4, 5, kSoundPage, kControlsPage,
+    static constexpr int kSettingPages[] = {kDisplayPage, kHdrPage, kUpscalingPage, kGraphicsPage, 3, 4, 5, kSoundPage, kControlsPage,
                                             kAccessibilityPage, kExtrasPage, kVrPage, kModsPage};
     static constexpr float kGyroSensitivitySteps[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f};
     static constexpr int kFovSteps[] = {-10, 0, 10, 20, 30};
@@ -4679,8 +5657,757 @@ private:
 
     static std::vector<std::string> OffOn() { return {"pc_off", "pc_on"}; }
 
+    std::vector<pt::game::PcSettingSection> HdrSections() const {
+        pt::game::PcSettingSection levels{"pc_hdr_levels", 0, {}};
+        auto calibrate = Row(kHdrCalibrate, "pc_hdr_calibrate", {"pc_graphics_value"}, 0, "pc_note_hdr_calibrate");
+        calibrate.link = true;
+        levels.rows.push_back(std::move(calibrate));
+        for (const int id : kHdrCalibrateSteps) levels.rows.push_back(HdrRow(id));
+        pt::game::PcSettingSection picture{"pc_hdr_picture", 0, {}};
+        auto preview = Row(kHdrPreview, "pc_hdr_preview", {"pc_graphics_value"}, 0, "pc_note_hdr_preview");
+        preview.link = true;
+        picture.rows.push_back(std::move(preview));
+        for (const int id : kHdrPictureRows) picture.rows.push_back(HdrRow(id));
+        picture.rows.push_back(HdrRow(kHdrSeeThrough));
+        pt::game::PcSettingSection grading{"pc_hdr_grading", 0, {}};
+        for (const int id : kHdrGradeRows) grading.rows.push_back(HdrRow(id));
+        auto reset = Row(kHdrGradeReset, "pc_hdr_grade_reset", {"pc_graphics_value"}, 0, "pc_note_hdr_grade_reset");
+        reset.link = true;
+        grading.rows.push_back(std::move(reset));
+        return {std::move(levels), std::move(picture), std::move(grading)};
+    }
+
+    struct HdrGradeValues {
+        int exposure, contrast, highlights, shadows, saturation, highlight_saturation, blowout;
+        bool operator==(const HdrGradeValues&) const = default;
+    };
+    static constexpr HdrGradeValues kHdrGradeOriginal{0, 100, 100, 100, 100, 100, 0};
+    static constexpr HdrGradeValues kHdrGradeRich{0, 100, 145, 100, 150, 100, 0};
+    static HdrGradeValues HdrGradeOf(const pt::AppSettings& s) {
+        const auto& d = s.display;
+        return {d.hdr_exposure, d.hdr_contrast, d.hdr_highlights, d.hdr_shadows, d.hdr_saturation, d.hdr_highlight_saturation, d.hdr_blowout};
+    }
+    static void SetHdrGrade(pt::AppSettings& s, const HdrGradeValues& v) {
+        auto& d = s.display;
+        d.hdr_exposure = v.exposure;
+        d.hdr_contrast = v.contrast;
+        d.hdr_highlights = v.highlights;
+        d.hdr_shadows = v.shadows;
+        d.hdr_saturation = v.saturation;
+        d.hdr_highlight_saturation = v.highlight_saturation;
+        d.hdr_blowout = v.blowout;
+    }
+
+    pt::game::PcSettingRow HdrRow(int id) const {
+        const auto& d = app_.settings.display;
+        const auto stepped = [](int row_id, const char* label, const char* note, const std::vector<int>& steps, int current, auto text) {
+            pt::game::PcSettingRow row = Row(row_id, label, {}, 0, note);
+            for (size_t i = 0; i < steps.size(); ++i) {
+                row.values.push_back(text(steps[i]));
+                if (steps[i] == current) row.value = static_cast<int>(i);
+            }
+            row.wrap = false;
+            return row;
+        };
+        const auto nits = [](int v) { return std::format("{} nits", v); };
+        const auto percent = [](int v) { return std::format("{}%", v); };
+        switch (id) {
+        case kHdrPeak:
+            return stepped(id, "pc_hdr_peak", "pc_note_hdr_peak", HdrPeakSteps(d.hdr_peak), d.hdr_peak,
+                           [&](int v) { return v == 0 ? std::string("pc_hdr_peak_auto") : nits(v); });
+        case kHdrPaperWhite:
+            return stepped(id, "pc_hdr_paper_white", "pc_note_hdr_paper_white", HdrPaperWhiteSteps(d.hdr_paper_white), d.hdr_paper_white, nits);
+        case kHdrUiWhite:
+            return stepped(id, "pc_hdr_ui_white", "pc_note_hdr_ui_white", HdrUiWhiteSteps(d.hdr_ui_white), d.hdr_ui_white,
+                           [&](int v) { return v == 0 ? std::string("pc_hdr_ui_white_same") : nits(v); });
+        case kHdrGamma: {
+            auto row = Row(id, "pc_hdr_gamma", {"pc_hdr_gamma_22", "pc_hdr_gamma_srgb", "pc_hdr_gamma_24"}, std::clamp(d.hdr_gamma, 0, 2),
+                           "pc_note_hdr_gamma");
+            row.wrap = false;
+            return row;
+        }
+        case kHdrReach: {
+            auto row = Row(id, "pc_hdr_reach", {"pc_hdr_reach_natural", "pc_hdr_reach_bright", "pc_hdr_reach_intense"},
+                           d.hdr_reach >= 175 ? 2 : d.hdr_reach >= 125 ? 1 : 0, "pc_note_hdr_reach");
+            row.wrap = false;
+            return row;
+        }
+        case kHdrHue: {
+            auto row = Row(id, "pc_hdr_hue", {"pc_hdr_hue_game", "pc_hdr_hue_keep"}, d.hdr_keep_hue ? 1 : 0, "pc_note_hdr_hue");
+            row.wrap = false;
+            return row;
+        }
+        case kHdrColourRange: {
+            auto row = Row(id, "pc_hdr_colour_range", {"pc_hdr_colour_range_game", "pc_hdr_colour_range_wide", "pc_hdr_colour_range_extended"},
+                           d.hdr_colour_range == 2 ? 1 : d.hdr_colour_range == 1 ? 2 : 0,
+                           d.hdr_colour_range == 2 ? "pc_note_hdr_colour_range_wide" : d.hdr_colour_range == 1 ? "pc_note_hdr_colour_range" : "pc_note_hdr_colour_range_game");
+            row.wrap = false;
+            return row;
+        }
+        case kHdrGrade: {
+            const HdrGradeValues now = HdrGradeOf(app_.settings);
+            auto row = Row(id, "pc_hdr_grade", {"pc_hdr_grade_original", "pc_hdr_grade_rich"}, now == kHdrGradeRich ? 1 : 0, "pc_note_hdr_grade");
+            if (now != kHdrGradeOriginal && now != kHdrGradeRich) {
+                row.values.push_back("pc_quality_custom");
+                row.value = 2;
+            }
+            row.wrap = false;
+            return row;
+        }
+        case kHdrExposure: {
+            std::vector<int> steps;
+            for (int v = -30; v <= 30; ++v) steps.push_back(v);
+            return stepped(id, "pc_hdr_exposure", "pc_note_hdr_exposure", steps, d.hdr_exposure, [](int v) { return std::format("{:+.1f} EV", v * .1f); });
+        }
+        case kHdrContrast: return stepped(id, "pc_hdr_contrast", "pc_note_hdr_contrast", HdrPercentSteps(200), d.hdr_contrast, percent);
+        case kHdrHighlights: return stepped(id, "pc_hdr_highlights", "pc_note_hdr_highlights", HdrPercentSteps(200), d.hdr_highlights, percent);
+        case kHdrShadows: return stepped(id, "pc_hdr_shadows", "pc_note_hdr_shadows", HdrPercentSteps(200), d.hdr_shadows, percent);
+        case kHdrSaturation: return stepped(id, "pc_hdr_saturation", "pc_note_hdr_saturation", HdrPercentSteps(200), d.hdr_saturation, percent);
+        case kHdrHighlightSaturation:
+            return stepped(id, "pc_hdr_highlight_saturation", "pc_note_hdr_highlight_saturation", HdrPercentSteps(200), d.hdr_highlight_saturation, percent);
+        case kHdrBlowout: return stepped(id, "pc_hdr_blowout", "pc_note_hdr_blowout", HdrPercentSteps(100), d.hdr_blowout, percent);
+        case kHdrSeeThrough: return Row(id, "pc_hdr_see_through", OffOn(), d.hdr_see_through ? 1 : 0, "pc_note_hdr_see_through");
+        default:
+            return Row(id, "", {""}, 0, "");
+        }
+    }
+
+    enum class HdrScreen { None, Calibrate, Preview };
+    static constexpr int kHdrCalibrateSteps[] = {kHdrPeak, kHdrPaperWhite, kHdrGamma, kHdrUiWhite};
+    static constexpr int kHdrCalibratePatterns[] = {1, 2, 4, 3};
+    static constexpr const char* kHdrCalibrateNotes[] = {"pc_hdr_calibrate_peak", "pc_hdr_calibrate_paper", "pc_hdr_calibrate_shadows",
+                                                         "pc_hdr_calibrate_menus"};
+    static constexpr int kHdrPictureRows[] = {kHdrReach, kHdrHue, kHdrColourRange};
+    static constexpr int kHdrGradeRows[] = {kHdrGrade, kHdrExposure, kHdrHighlights, kHdrShadows, kHdrContrast, kHdrSaturation, kHdrHighlightSaturation, kHdrBlowout};
+    static constexpr int kHdrPreviewRows[] = {kHdrReach, kHdrHue, kHdrColourRange, kHdrGrade, kHdrExposure, kHdrHighlights, kHdrShadows, kHdrContrast,
+                                              kHdrSaturation, kHdrHighlightSaturation, kHdrBlowout};
+    static std::vector<int> HdrPercentSteps(int last) {
+        std::vector<int> steps;
+        for (int v = 0; v <= last; v += 5) steps.push_back(v);
+        return steps;
+    }
+    HdrScreen hdr_screen_ = HdrScreen::None;
+    int hdr_step_ = 0;
+
+    bool ScreenShown() const override {
+        return page_ == kHdrPage && hdr_screen_ != HdrScreen::None && app_.settings.display.hdr && app_.display_hdr != 0;
+    }
+
+    bool SeeThrough() const override {
+        if (page_ == kArmoryPage) return true;
+        const bool picture_page = page_ == kHdrPage || page_ == kGraphicsPage || page_ == kLightingPage || page_ == kTexturesPage || page_ == kEffectsPage;
+        return picture_page && app_.settings.display.hdr && app_.display_hdr != 0 && app_.settings.display.hdr_see_through;
+    }
+
+public:
+    bool ArmoryPreviewActive() const { return page_ == kArmoryPage; }
+    bool IsArmory() const override { return page_ == kArmoryPage; }
+
+    bool IsNightHub() const override { return page_ == kNightPage; }
+
+    pt::game::NightHubSnapshot NightHubData() const override {
+        pt::game::NightHubSnapshot out;
+        const pt::game::SurvivalProfile& profile = game_.SurvivalProfileData();
+        out.credits = profile.credits;
+        out.best_wave = app_.settings.game.survival_best_wave;
+        out.daily_streak = profile.daily_streak;
+
+        int owned_skins = 0;
+        for (int i = 0; i < pt::game::kSurvivalSkinCount; ++i) {
+            if (profile.OwnsSkin(i)) ++owned_skins;
+        }
+
+        pt::game::NightHubSection diffs;
+        diffs.title_key = "pc_survival_choose";
+        struct DiffEntry {
+            int id;
+            const char* label;
+            const char* note;
+            const char* mult;
+            size_t slot;
+        };
+        static constexpr std::array<DiffEntry, 4> kDiffs{{
+            {kNightNormal, "pc_survival_normal", "pc_note_survival_pick_normal", "x1.0", 1},
+            {kNightHard, "pc_survival_hard", "pc_note_survival_pick_hard", "x1.4", 2},
+            {kNightNightmare, "pc_survival_nightmare", "pc_note_survival_pick_nightmare", "x2.0", 3},
+            {kNightInsanity, "pc_survival_insanity", "pc_note_survival_pick_insanity", "x3.0", 4},
+        }};
+        for (const auto& d : kDiffs) {
+            pt::game::NightHubItem it;
+            it.id = d.id;
+            it.label_key = d.label;
+            it.tag = d.mult;
+            it.note = d.note;
+            it.stats.push_back({"pc_armory_credits", d.mult, false});
+            const int rec_score = profile.best_score[d.slot];
+            if (rec_score > 0) {
+                it.stats.push_back({"pc_survival_difficulty", std::format("{}", rec_score), false});
+            }
+            diffs.items.push_back(std::move(it));
+        }
+        out.sections.push_back(std::move(diffs));
+
+        pt::game::NightHubSection runs;
+        runs.title_key = "pc_survival_runs";
+        static constexpr std::array<std::pair<int, const char*>, 4> kKept{{
+            {kNightContinueNormal, "pc_survival_continue_normal"},
+            {kNightContinueHard, "pc_survival_continue_hard"},
+            {kNightContinueNightmare, "pc_survival_continue_nightmare"},
+            {kNightContinueInsanity, "pc_survival_continue_insanity"},
+        }};
+        for (size_t d = 1; d <= 4; ++d) {
+            const pt::game::SurvivalCheckpoint& kept = profile.checkpoints[d];
+            if (kept.wave <= 0) continue;
+            const int kept_night = pt::game::SurvivalNightOf(kept.wave);
+            pt::game::NightHubItem it;
+            it.id = kKept[d - 1].first;
+            it.label_key = kKept[d - 1].second;
+            it.tag = std::format("#{}", kept.wave);
+            it.note = kept_night > 1
+                          ? std::format("pc_note_survival_continue_night{}{}", pt::game::kPcNoteArgument, kept_night)
+                          : std::format("pc_note_survival_continue{}{}{}{}", pt::game::kPcNoteArgument, kept.wave, pt::game::kPcNoteArgument, kept.score);
+            runs.items.push_back(std::move(it));
+        }
+        {
+            const int today_date = pt::game::SurvivalToday();
+            const bool today = profile.daily_date == today_date;
+            const pt::game::DailyMutatorDef& mut = pt::game::DailyMutatorForDate(today_date);
+            const char arg = pt::game::kPcNoteArgument;
+            pt::game::NightHubItem it;
+            it.id = kNightDaily;
+            it.label_key = "pc_survival_daily";
+            if (today && profile.daily_wave > 0) {
+                it.tag = std::format("#{}", profile.daily_wave);
+                it.tag_is_key = false;
+            } else {
+                it.tag = mut.name_key;
+                it.tag_is_key = true;
+            }
+            it.note = mut.note_key;
+            it.detail_sub = std::format("pc_note_survival_daily_mut{}{}{}{}{}{}{}{}", arg, mut.name_key, arg, mut.note_key, arg,
+                                        profile.daily_wins, arg, profile.daily_streak);
+            it.stats.push_back({"pc_survival_daily", mut.name_key, true});
+            it.stats.push_back({"pc_armory_credits", std::format("x{:.1f}", mut.credits_mult), false});
+            runs.items.push_back(std::move(it));
+        }
+        out.sections.push_back(std::move(runs));
+
+        pt::game::NightHubSection gear;
+        gear.title_key = "pc_survival_gear";
+        {
+            pt::game::NightHubItem armory;
+            armory.id = kNightArmory;
+            armory.label_key = "pc_armory_title";
+            armory.tag = std::format("${}", profile.credits);
+            armory.note = "pc_note_armory_open";
+            armory.stats.push_back({"pc_armory_credits", std::format("${}", profile.credits), false});
+            armory.stats.push_back({"pc_armory_tab_skins", std::format("{} / {}", owned_skins, pt::game::kSurvivalSkinCount), false});
+            armory.stats.push_back({"pc_armory_torch", pt::game::SurvivalTorch(profile.EquippedTorch()).name_key, true});
+            gear.items.push_back(std::move(armory));
+        }
+        {
+            pt::game::NightHubItem cross;
+            cross.id = kNightCrosshair;
+            cross.label_key = "pc_crosshair";
+            cross.note = "pc_note_survival_pick_crosshair";
+            gear.items.push_back(std::move(cross));
+        }
+        out.sections.push_back(std::move(gear));
+        return out;
+    }
+
+    pt::game::ReloadStyle ArmoryActiveReloadStyle() const {
+        const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+        const int w = std::clamp(armory_weapon_, 1, 5);
+        if (armory_mode_ == 1) {
+            if (armory_anim_ >= 1 && armory_anim_ <= 4) {
+                return static_cast<pt::game::ReloadStyle>(armory_anim_ - 1);
+            }
+            return pt::game::SurvivalSkin(prof.EquippedSkin(w)).reload;
+        }
+        return pt::game::SurvivalSkin(armory_skin_).reload;
+    }
+
+    pt::game::ArmorySnapshot ArmoryData() const override {
+        const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+        pt::game::ArmorySnapshot snap;
+        snap.weapon = std::clamp(armory_weapon_, 1, 6);
+        snap.mode = snap.weapon == 6 ? 0 : std::clamp(armory_mode_, 0, 1);
+        snap.filter = std::clamp(armory_filter_, 0, 6);
+        snap.selected_skin = std::clamp(armory_skin_, 0, pt::game::kSurvivalSkinCount - 1);
+        snap.selected_anim = std::clamp(armory_anim_, 0, 4);
+        snap.selected_torch = std::clamp(armory_torch_, 0, pt::game::kSurvivalTorchCount - 1);
+        snap.credits = prof.credits;
+        snap.best_wave = app_.settings.game.survival_best_wave;
+        snap.daily_wins = prof.daily_wins;
+        const int w = std::clamp(armory_weapon_, 1, 5);
+        snap.equipped_skin = prof.EquippedSkin(w);
+        snap.equipped_anim = prof.EquippedReloadChoice(w);
+        snap.equipped_torch = prof.EquippedTorch();
+        snap.playing_reload = armory_reload_timer_ > 0.0f;
+        snap.playing_style = static_cast<int>(ArmoryActiveReloadStyle());
+        snap.owned_skins = prof.owned_skins | 1ull;
+        uint32_t reloads_mask = 1u;
+        for (int s = 0; s < 4; ++s) {
+            if (prof.OwnsReload(s)) reloads_mask |= (1u << static_cast<unsigned>(s));
+        }
+        snap.owned_reloads = reloads_mask;
+        snap.owned_torches = prof.owned_torches | 1u;
+        snap.filtered_skins = ArmoryFilteredSkins();
+        return snap;
+    }
+
+    void ArmorySelectWeapon(int weapon) override {
+        armory_weapon_ = std::clamp(weapon, 1, 6);
+        if (armory_weapon_ <= 5) {
+            const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+            armory_skin_ = prof.EquippedSkin(armory_weapon_);
+            armory_anim_ = prof.EquippedReloadChoice(armory_weapon_);
+            const std::vector<int> list = ArmoryFilteredSkins();
+            if (!list.empty() && std::find(list.begin(), list.end(), armory_skin_) == list.end()) {
+                armory_skin_ = list.front();
+            }
+            if (armory_mode_ == 1) ArmoryPreviewReload();
+            else armory_reload_timer_ = 0.0f;
+        } else {
+            armory_torch_ = game_.SurvivalProfileData().EquippedTorch();
+            armory_reload_timer_ = 0.0f;
+        }
+    }
+
+    void ArmorySelectMode(int mode) override {
+        armory_mode_ = std::clamp(mode, 0, 1);
+        if (armory_weapon_ <= 5) {
+            const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+            armory_anim_ = prof.EquippedReloadChoice(armory_weapon_);
+            if (armory_mode_ == 1) {
+                ArmoryPreviewReload();
+            } else {
+                armory_reload_timer_ = 0.0f;
+            }
+        }
+    }
+
+    void ArmorySelectFilter(int filter) override {
+        armory_filter_ = std::clamp(filter, 0, 6);
+        const std::vector<int> list = ArmoryFilteredSkins();
+        if (!list.empty() && std::find(list.begin(), list.end(), armory_skin_) == list.end()) {
+            armory_skin_ = list.front();
+        }
+    }
+
+    void ArmoryFocusItem(int item) override {
+        if (armory_weapon_ == 6) {
+            armory_torch_ = std::clamp(item, 0, pt::game::kSurvivalTorchCount - 1);
+            return;
+        }
+        if (armory_mode_ == 1) {
+            armory_anim_ = std::clamp(item, 0, 4);
+            ArmoryPreviewReload();
+            return;
+        }
+        armory_skin_ = std::clamp(item, 0, pt::game::kSurvivalSkinCount - 1);
+    }
+
+    void ArmoryAction(bool apply_all) override {
+        pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+        auto persist = [&]() {
+            game_.MarkSurvivalProfile();
+            app_.settings.game.survival_profile = prof.Save();
+            Save();
+            if (pt::game::SurvivalNight* s = game_.EnsureSurvival()) s->RefreshLooks();
+        };
+        if (armory_weapon_ == 6) {
+            const pt::game::SurvivalTorchDef& td = pt::game::SurvivalTorch(armory_torch_);
+            if (!prof.OwnsTorch(td.id)) {
+                if (prof.credits < td.price) return;
+                prof.credits -= td.price;
+                prof.GrantTorch(td.id);
+                pt::LogInfo("armory: bought torch {} (${}, remaining ${})", td.id, td.price, prof.credits);
+            }
+            prof.torch = td.id;
+            persist();
+            return;
+        }
+        const int w = std::clamp(armory_weapon_, 1, 5);
+        if (armory_mode_ == 1) {
+            const int choice = std::clamp(armory_anim_, 0, 4);
+            if (choice > 0) {
+                const int style = choice - 1;
+                if (!prof.OwnsReload(style)) {
+                    const int price = pt::game::SurvivalProfile::ReloadPrice(style);
+                    if (prof.credits < price) return;
+                    prof.credits -= price;
+                    prof.GrantReload(style);
+                    pt::LogInfo("armory: bought reload style {} (${}, remaining ${})", style, price, prof.credits);
+                }
+            }
+            if (apply_all) {
+                for (size_t i = 1; i <= 5; ++i) prof.weapon_reloads[i] = choice;
+                pt::LogInfo("armory: applied reload choice {} to all 5 weapons", choice);
+            } else {
+                prof.weapon_reloads[static_cast<size_t>(w)] = choice;
+                pt::LogInfo("armory: equipped reload choice {} on weapon {}", choice, w);
+            }
+            persist();
+            ArmoryPreviewReload();
+            return;
+        }
+        const pt::game::SurvivalSkinDef& sk = pt::game::SurvivalSkin(armory_skin_);
+        if (apply_all) {
+            if (!prof.OwnsSkin(sk.id)) return;
+            for (size_t i = 1; i <= 5; ++i) prof.weapon_skins[i] = sk.id;
+            persist();
+            pt::LogInfo("armory: applied '{}' to all 5 weapons", sk.name);
+            return;
+        }
+        if (!prof.OwnsSkin(sk.id)) {
+            if (sk.price <= 0 || prof.credits < sk.price) return;
+            prof.credits -= sk.price;
+            prof.GrantSkin(sk.id);
+            pt::LogInfo("armory: bought '{}' (${}, remaining ${})", sk.name, sk.price, prof.credits);
+        }
+        prof.weapon_skins[static_cast<size_t>(w)] = sk.id;
+        persist();
+        pt::LogInfo("armory: equipped '{}' on weapon {}", sk.name, w);
+    }
+
+    void ArmoryPreviewReload() override {
+        if (armory_weapon_ == 6) return;
+        const pt::game::ReloadStyle rs = ArmoryActiveReloadStyle();
+        armory_reload_length_ = rs == pt::game::ReloadStyle::Telekinetic ? 2.1f : rs == pt::game::ReloadStyle::Gunslinger ? 1.8f : 1.5f;
+        armory_reload_timer_ = armory_reload_length_;
+    }
+
+    void ArmoryOrbit(float dyaw, float dpitch) override {
+        armory_angle_ += dyaw;
+        armory_pitch_ = std::clamp(armory_pitch_ + dpitch, -0.85f, 0.85f);
+        armory_drag_cooldown_ = 2.5f;
+    }
+
+    void BuildArmoryStudio(float dt, pt::Camera& out_cam, std::vector<pt::DrawItem>& out_draws, pt::SceneLighting& out_lighting) {
+        out_draws.clear();
+        const float step_dt = std::clamp(dt, 0.0f, 0.05f);
+        armory_fx_time_ += step_dt;
+        if (armory_drag_cooldown_ > 0.0f) {
+            armory_drag_cooldown_ = std::max(0.0f, armory_drag_cooldown_ - step_dt);
+        } else {
+            armory_angle_ += step_dt * 0.45f;
+        }
+        if (armory_reload_timer_ > 0.0f) {
+            armory_reload_timer_ = std::max(0.0f, armory_reload_timer_ - step_dt);
+        }
+        pt::game::SurvivalNight* survival = game_.EnsureSurvival();
+        const pt::game::SurvivalModels* sm = survival ? survival->EnsureArmoryModels(armory_weapon_) : nullptr;
+        if (!sm) return;
+
+        out_cam = pt::Camera{};
+        out_cam.position = glm::vec3(0.0f, 0.0f, 0.0f);
+        out_cam.yaw = 0.0f;
+        out_cam.pitch = 0.0f;
+        out_cam.roll = 0.0f;
+        out_cam.fov_y = glm::radians(38.0f);
+        out_cam.near_plane = 0.02f;
+        out_cam.far_plane = 20.0f;
+
+        auto emit = [&](const pt::GpuMesh* mesh, const glm::mat4& xform) {
+            if (!mesh) return;
+            pt::DrawItem item;
+            item.mesh = mesh;
+            item.transform = xform;
+            out_draws.push_back(item);
+        };
+
+        auto setup_studio_lights = [&](const glm::vec3& center, float radius) {
+            out_lighting = pt::SceneLighting{};
+            out_lighting.valid = true;
+            const float reach = std::max(radius, 0.05f) * 3.8f;
+            const glm::vec3 to_cam = -out_cam.Forward();
+            struct Lamp {
+                glm::vec3 dir;
+                glm::vec3 color;
+                float strength;
+                float spec;
+            };
+            const std::array<Lamp, 4> lamps{{
+                {to_cam * 0.42f - out_cam.Right() * 0.96f + out_cam.Up() * 1.15f, {1.00f, 0.98f, 0.95f}, 0.78f, 0.14f},
+                {to_cam * 0.50f + out_cam.Right() * 1.05f + out_cam.Up() * 0.25f, {0.84f, 0.90f, 1.00f}, 0.44f, 0.10f},
+                {-to_cam + out_cam.Up() * 0.85f + out_cam.Right() * 0.28f,        {0.94f, 0.96f, 1.00f}, 0.58f, 0.32f},
+                {to_cam * 0.40f - out_cam.Up() * 0.95f,                           {0.86f, 0.88f, 0.94f}, 0.28f, 0.08f},
+            }};
+            for (size_t i = 0; i < lamps.size(); ++i) {
+                pt::SceneLight light;
+                light.id = 0x41524D4F52590000ull + i;
+                light.name = "ArmoryStudio";
+                light.position = center + glm::normalize(lamps[i].dir) * reach;
+                light.intensity = lamps[i].color * (lamps[i].strength * reach * reach);
+                light.inner_range = reach * 0.14f;
+                light.outer_range = reach * 5.0f;
+                light.source_radius = reach * 0.10f;
+                light.specular_scale = lamps[i].spec;
+                out_lighting.lights.push_back(light);
+            }
+            pt::SceneProbe amb;
+            const float box = reach * 4.0f;
+            amb.box_world = glm::scale(glm::translate(glm::mat4(1.0f), center), glm::vec3(box));
+            amb.world_to_box = glm::inverse(amb.box_world);
+            amb.weight = 1.0f;
+            amb.sh[0] = glm::vec3(0.21f, 0.22f, 0.25f);
+            amb.name = "ArmoryAmbient";
+            out_lighting.probes.push_back(amb);
+
+            out_lighting.exposure.pinned = true;
+            out_lighting.exposure.pinned_ev = pt::game::kArchiveModelEv;
+            out_lighting.exposure.compensation = 0.0f;
+            for (float& c : out_lighting.exposure.add_comp) c = 0.0f;
+            out_lighting.exposure.bloom_weight = 0.16f;
+            out_lighting.exposure.bloom_extraction = 2.0f;
+            out_lighting.screen.color_scale = glm::vec3(1.0f);
+            out_lighting.screen.film_grain = false;
+            out_lighting.screen.screen_distortion = false;
+            out_lighting.screen.depth_of_field = false;
+            out_lighting.screen.motion_blur = false;
+            out_lighting.screen.local_reflections = false;
+        };
+
+        if (armory_weapon_ == 6) {
+            if (!sm->chest_light) return;
+            if (last_armory_torch_ != armory_torch_) {
+                pt::game::ApplyTorchSkin(app_.textures, *sm, armory_torch_, 3.4f);
+                last_armory_torch_ = armory_torch_;
+                armory_preview_dirty_ = true;
+            }
+            const pt::game::SurvivalTorchDef& td = pt::game::SurvivalTorch(armory_torch_);
+            const glm::vec3 bmin = sm->chest_light->bounds_min;
+            const glm::vec3 bmax = sm->chest_light->bounds_max;
+            const glm::vec3 mid = 0.5f * (bmin + bmax);
+            const float radius = std::max(0.045f, 0.5f * glm::length(bmax - bmin));
+            const float dist = radius * 4.35f;
+            const glm::vec3 stage_center = out_cam.position + out_cam.Forward() * dist + out_cam.Right() * (dist * 0.22f) - out_cam.Up() * (radius * 0.04f);
+            const float yaw = 2.55f + armory_angle_;
+            const float pitch = -0.10f + armory_pitch_;
+            const glm::mat4 world = glm::translate(glm::mat4(1.0f), stage_center)
+                                  * glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0, 1, 0))
+                                  * glm::rotate(glm::mat4(1.0f), pitch, glm::vec3(1, 0, 0))
+                                  * glm::translate(glm::mat4(1.0f), -mid);
+            emit(sm->chest_light, world);
+            if (sm->lens_glow) {
+                emit(sm->lens_glow.get(), world * glm::translate(glm::mat4(1.0f), sm->chest_lens + glm::vec3(0.0f, 0.0f, 0.0006f)));
+            }
+            setup_studio_lights(stage_center, radius);
+            pt::SceneLight beam;
+            beam.id = 0x41524D4F52590010ull;
+            beam.name = "ArmoryTorchBeam";
+            const glm::vec3 lens_world = glm::vec3(world * glm::vec4(sm->chest_lens, 1.0f));
+            const glm::vec3 lens_fwd = glm::normalize(glm::mat3(world) * glm::vec3(0.0f, 0.0f, 1.0f));
+            beam.position = lens_world + lens_fwd * (radius * 0.55f);
+            beam.intensity = td.tint * (4.2f * radius * radius);
+            beam.inner_range = radius * 0.08f;
+            beam.outer_range = radius * 14.0f;
+            beam.source_radius = radius * 0.30f;
+            beam.specular_scale = 1.4f;
+            out_lighting.lights.push_back(beam);
+            return;
+        }
+
+        const int w = std::clamp(armory_weapon_, 1, 5);
+        if (!sm->guns[static_cast<size_t>(w)].body) return;
+        const pt::game::SurvivalGunModel& gun = sm->guns[static_cast<size_t>(w)];
+        const pt::game::SurvivalProfile& prof = game_.SurvivalProfileData();
+        int shown_skin = armory_skin_;
+        if (armory_mode_ == 1) {
+            shown_skin = prof.EquippedSkin(w);
+        } else {
+            const std::vector<int> list = ArmoryFilteredSkins();
+            if (!list.empty() && std::find(list.begin(), list.end(), armory_skin_) == list.end()) {
+                armory_skin_ = list.front();
+            }
+            shown_skin = armory_skin_;
+        }
+        const pt::game::SurvivalSkinDef& sk = pt::game::SurvivalSkin(shown_skin);
+        if (sk.rarity == pt::game::SkinRarity::Mythic) {
+            pt::game::ApplyWeaponSkinAnimated(app_.textures, gun, shown_skin, armory_fx_time_);
+            last_armory_weapon_ = w;
+            last_armory_skin_ = shown_skin;
+            armory_preview_dirty_ = true;
+        } else if (last_armory_weapon_ != w || last_armory_skin_ != shown_skin) {
+            pt::game::ApplyWeaponSkin(app_.textures, gun, shown_skin);
+            last_armory_weapon_ = w;
+            last_armory_skin_ = shown_skin;
+            armory_preview_dirty_ = true;
+        }
+
+        glm::vec3 bmin = gun.body->bounds_min;
+        glm::vec3 bmax = gun.body->bounds_max;
+        if (gun.moving) {
+            bmin = glm::min(bmin, gun.moving->bounds_min);
+            bmax = glm::max(bmax, gun.moving->bounds_max);
+        }
+        const glm::vec3 mid = 0.5f * (bmin + bmax);
+        const float radius = std::max(0.10f, 0.5f * glm::length(bmax - bmin));
+
+        const float dist = radius * 2.85f;
+        const glm::vec3 stage_center = out_cam.position + out_cam.Forward() * dist + out_cam.Right() * (dist * 0.22f) - out_cam.Up() * (radius * 0.02f);
+
+        constexpr float kPi = 3.14159265358979323846f;
+        auto smooth = [](float x) {
+            x = std::clamp(x, 0.0f, 1.0f);
+            return x * x * (3.0f - 2.0f * x);
+        };
+        const pt::game::ReloadStyle rs = ArmoryActiveReloadStyle();
+        glm::vec3 extra_pos(0.0f);
+        glm::mat4 extra_rot(1.0f);
+        float mag_drop = 0.0f;
+        float slide_back = 0.0f;
+        float cyl_open = 0.0f;
+        float barrel_break = 0.0f;
+        float tele_glow = 0.0f;
+        if (armory_reload_timer_ > 0.0f && armory_reload_length_ > 0.05f) {
+            const float p = std::clamp(1.0f - armory_reload_timer_ / armory_reload_length_, 0.0f, 1.0f);
+            mag_drop = p < 0.50f ? smooth(p / 0.25f) : smooth((0.82f - p) / 0.30f);
+            cyl_open = smooth(p / 0.18f) * smooth((0.86f - p) / 0.16f);
+            barrel_break = cyl_open;
+            if (p > 0.72f && p < 0.94f) slide_back = std::sin(((p - 0.72f) / 0.22f) * kPi);
+            if (rs == pt::game::ReloadStyle::Tactical) {
+                const float env = smooth(p / 0.15f) * smooth((1.0f - p) / 0.18f);
+                const float snap = p > 0.76f && p < 0.96f ? std::sin(((p - 0.76f) / 0.20f) * kPi) : 0.0f;
+                extra_rot = glm::rotate(glm::mat4(1.0f), 0.55f * env, glm::vec3(0, 0, 1))
+                          * glm::rotate(glm::mat4(1.0f), -0.22f * snap, glm::vec3(1, 0, 0));
+            } else if (rs == pt::game::ReloadStyle::Gunslinger) {
+                const float su = smooth(std::clamp((p - 0.54f) / 0.42f, 0.0f, 1.0f));
+                const float lift = std::sin(su * kPi);
+                extra_pos.y += radius * 0.24f * lift;
+                extra_rot = glm::rotate(glm::mat4(1.0f), su * 2.0f * kPi, glm::vec3(1, 0, 0))
+                          * glm::rotate(glm::mat4(1.0f), 0.24f * lift, glm::vec3(0, 0, 1));
+            } else if (rs == pt::game::ReloadStyle::Telekinetic) {
+                const float hover = smooth(p / 0.16f) * smooth((1.0f - p) / 0.16f);
+                tele_glow = hover;
+                extra_pos.y += radius * (0.22f + 0.06f * std::sin(p * 4.0f * kPi)) * hover;
+                extra_rot = glm::rotate(glm::mat4(1.0f), 0.65f * std::sin(p * kPi) * hover, glm::vec3(0, 1, 0))
+                          * glm::rotate(glm::mat4(1.0f), 0.34f * std::sin(p * 2.0f * kPi) * hover, glm::vec3(0, 0, 1))
+                          * glm::rotate(glm::mat4(1.0f), -0.18f * std::cos(p * 2.0f * kPi) * hover, glm::vec3(1, 0, 0));
+            }
+        }
+        const float yaw = kPi * 0.5f + armory_angle_;
+        const float pitch = -0.10f + armory_pitch_ + (armory_drag_cooldown_ <= 0.0f ? 0.04f * std::sin(armory_angle_ * 0.7f) : 0.0f);
+        const glm::mat4 world = glm::translate(glm::mat4(1.0f), stage_center + extra_pos)
+                              * glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0, 1, 0))
+                              * glm::rotate(glm::mat4(1.0f), pitch, glm::vec3(1, 0, 0))
+                              * extra_rot
+                              * glm::translate(glm::mat4(1.0f), -mid);
+
+        emit(gun.body, world);
+        if (gun.moving) {
+            glm::mat4 m_local(1.0f);
+            if (w == 1) {
+                m_local = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -gun.slide_travel * slide_back));
+            } else if (w == 2) {
+                m_local = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -gun.pump_travel * slide_back));
+            } else if (w == 3) {
+                m_local = glm::translate(glm::mat4(1.0f), gun.cylinder_swing * cyl_open);
+            } else if (w == 4) {
+                m_local = glm::translate(glm::mat4(1.0f), gun.lever_pivot)
+                        * glm::rotate(glm::mat4(1.0f), 0.75f * slide_back, glm::vec3(1, 0, 0))
+                        * glm::translate(glm::mat4(1.0f), -gun.lever_pivot);
+            } else if (w == 5) {
+                m_local = glm::translate(glm::mat4(1.0f), gun.hinge)
+                        * glm::rotate(glm::mat4(1.0f), 0.55f * barrel_break, glm::vec3(1, 0, 0))
+                        * glm::translate(glm::mat4(1.0f), -gun.hinge);
+            }
+            emit(gun.moving, world * m_local);
+        }
+        if (gun.hammer) emit(gun.hammer, world);
+        if (gun.magazine) {
+            const glm::mat4 mag_local = glm::translate(glm::mat4(1.0f), gun.magazine_drop * (0.14f * mag_drop));
+            emit(gun.magazine, world * mag_local);
+        }
+
+        if (sk.rarity == pt::game::SkinRarity::Mythic) {
+            pt::game::EmitMythicWeaponVfx(app_.textures, *sm, gun, world, shown_skin, armory_fx_time_, 0, false, false, 4.2f, out_draws);
+        }
+
+        setup_studio_lights(stage_center, radius);
+        if (sk.rarity == pt::game::SkinRarity::Mythic || tele_glow > 0.01f) {
+            pt::SceneLight aura;
+            aura.id = 0x41524D4F52590009ull;
+            aura.name = "ArmoryAura";
+            aura.position = stage_center - out_cam.Up() * (radius * 0.45f) - out_cam.Forward() * (radius * 0.75f);
+            const float pulse = 0.75f + 0.25f * std::sin(armory_fx_time_ * (sk.id == 54 ? 17.0f : 3.6f));
+            const float gain = ((sk.rarity == pt::game::SkinRarity::Mythic ? 1.15f * pulse : 0.0f) + 2.2f * tele_glow) * radius * radius;
+            const glm::vec3 aura_col = tele_glow > 0.01f && sk.rarity != pt::game::SkinRarity::Mythic
+                                           ? glm::vec3(0.96f, 0.22f, 0.32f)
+                                           : pt::game::MythicLiveColor(shown_skin, armory_fx_time_);
+            aura.intensity = aura_col * gain;
+            aura.inner_range = radius * 0.1f;
+            aura.outer_range = radius * 7.0f;
+            aura.source_radius = radius * 0.25f;
+            aura.specular_scale = 1.25f;
+            out_lighting.lights.push_back(aura);
+        }
+    }
+
+private:
+
+    pt::game::PcScreen Screen() const override {
+        pt::game::PcScreen screen;
+        if (!ScreenShown()) return screen;
+        const bool calibrate = hdr_screen_ == HdrScreen::Calibrate;
+        const int count = calibrate ? static_cast<int>(std::size(kHdrCalibrateSteps)) : static_cast<int>(std::size(kHdrPreviewRows));
+        const int step = std::clamp(hdr_step_, 0, count - 1);
+        const pt::game::PcSettingRow row = HdrRow(calibrate ? kHdrCalibrateSteps[step] : kHdrPreviewRows[step]);
+        const char arg = pt::game::kPcNoteArgument;
+        screen.header = std::format("{}{}{}{}{}", calibrate ? "pc_hdr_calibrate_step" : "pc_hdr_preview_step", arg, step + 1, arg, count);
+        screen.label = row.label;
+        screen.value = row.value >= 0 && row.value < static_cast<int>(row.values.size()) ? row.values[row.value] : std::string();
+        screen.note = calibrate ? kHdrCalibrateNotes[step] : row.note;
+        screen.hint = !calibrate ? "pc_hdr_preview_hint" : step + 1 == count ? "pc_hdr_calibrate_hint_last" : "pc_hdr_calibrate_hint";
+        screen.scene = !calibrate;
+        screen.pattern = calibrate ? kHdrCalibratePatterns[step] : 0;
+        screen.can_left = HdrStepTo(row, -1) >= 0;
+        screen.can_right = HdrStepTo(row, 1) >= 0;
+        return screen;
+    }
+
+    static int HdrStepTo(const pt::game::PcSettingRow& row, int delta) {
+        int v = row.value + delta;
+        while (v >= 0 && v < static_cast<int>(row.values.size()) && row.ValueDisabled(v)) v += delta;
+        return v >= 0 && v < static_cast<int>(row.values.size()) ? v : -1;
+    }
+
+    void ScreenInput(int dx, int dy, bool accept, bool back) override {
+        if (!ScreenShown()) return;
+        const bool calibrate = hdr_screen_ == HdrScreen::Calibrate;
+        const int count = calibrate ? static_cast<int>(std::size(kHdrCalibrateSteps)) : static_cast<int>(std::size(kHdrPreviewRows));
+        hdr_step_ = std::clamp(hdr_step_, 0, count - 1);
+        if (dx != 0) {
+            const pt::game::PcSettingRow row = HdrRow(calibrate ? kHdrCalibrateSteps[hdr_step_] : kHdrPreviewRows[hdr_step_]);
+            if (const int v = HdrStepTo(row, dx); v >= 0) Set(row.id, v);
+            return;
+        }
+        bool leave = false;
+        if (calibrate) {
+            if (accept) leave = ++hdr_step_ >= count;
+            else if (back) leave = --hdr_step_ < 0;
+        } else if (dy != 0) {
+            hdr_step_ = (hdr_step_ + dy + count) % count;
+        } else {
+            leave = accept || back;
+        }
+        if (leave) {
+            pt::LogInfo("hdr: {} closed", calibrate ? "calibration" : "look preview");
+            hdr_screen_ = HdrScreen::None;
+            hdr_step_ = 0;
+        }
+    }
+
     static std::vector<int> HdrPaperWhiteSteps(int current) {
         std::vector<int> steps;
+        for (int nits = 80; nits <= 500; nits += 10) steps.push_back(nits);
+        if (std::find(steps.begin(), steps.end(), current) == steps.end()) steps.push_back(current);
+        return steps;
+    }
+    static std::vector<int> HdrUiWhiteSteps(int current) {
+        std::vector<int> steps = {0};
         for (int nits = 80; nits <= 500; nits += 10) steps.push_back(nits);
         if (std::find(steps.begin(), steps.end(), current) == steps.end()) steps.push_back(current);
         return steps;
@@ -4786,6 +6513,18 @@ private:
         ao.wrap=false;ao.enabled=!path;lighting.rows.push_back(std::move(ao));
         auto reflections=Row(kRasterReflections,"pc_reflections",std::move(traced),rt_reflections?2:g.reflections?1:0,note(rt_reflections,"pc_note_reflections"));
         reflections.wrap=false;reflections.enabled=!path;lighting.rows.push_back(std::move(reflections));
+        if(path) {
+            const auto percent_row=[&](int id,const char* label,int percent,int last,const char* row_note){
+                std::vector<std::string> values;
+                for(int v=0;v<=last;v+=5) values.push_back(std::format("{}%",v));
+                auto row=Row(id,label,std::move(values),std::clamp(percent,0,last)/5,row_note);
+                row.wrap=false;
+                return row;
+            };
+            lighting.rows.push_back(percent_row(kPtFloorReflection,"pc_pt_floor",g.pt_floor_reflection,200,"pc_note_pt_floor"));
+            lighting.rows.push_back(percent_row(kPtGlassReflection,"pc_pt_glass",g.pt_glass_reflection,200,"pc_note_pt_glass"));
+            lighting.rows.push_back(percent_row(kPtReflectionSoftness,"pc_pt_softness",g.pt_reflection_softness,100,"pc_note_pt_softness"));
+        }
         std::vector<std::string> ray_values{"pc_ray_balanced","pc_preset_high","pc_preset_ultra"};
         if(supported) ray_values.push_back("pc_ray_path_traced");
         const int ray_index=g.ray_quality>=4?3:g.ray_quality>=2?2:std::max(g.ray_quality,0);
@@ -4836,15 +6575,38 @@ private:
         const auto& g=app_.settings.graphics;
         pt::game::PcSettingSection effects{"pc_graphics_effects",0,{}};
         effects.rows.push_back(Row(kDepthOfField,"pc_dof",OffOn(),g.depth_of_field?1:0,"pc_note_dof"));
-        effects.rows.push_back(Row(kMotionBlur,"pc_motion_blur",OffOn(),g.motion_blur?1:0,"pc_note_motion_blur"));
-        effects.rows.push_back(Row(kBloom,"pc_bloom",OffOn(),g.bloom?1:0,"pc_note_bloom"));
-        effects.rows.push_back(Row(kLensGhosts,"pc_lens_ghosts",OffOn(),g.lens_ghosts?1:0,"pc_note_lens_ghosts"));
+        effects.rows.push_back(Row(kMotionBlur,"pc_motion_blur",{"pc_motion_blur_all","pc_motion_blur_object","pc_off"},
+                                   !g.motion_blur?2:g.camera_motion_blur?0:1,"pc_note_motion_blur_modes"));
+        {
+            std::vector<std::string> mb_vals;
+            for (int pct = 10; pct <= 100; pct += 10) mb_vals.push_back(std::format("{}%", pct));
+            auto row = Row(kMotionBlurStrength, "pc_motion_blur_strength", std::move(mb_vals),
+                           std::clamp((g.motion_blur_strength - 10) / 10, 0, 9), "pc_note_motion_blur_strength");
+            row.wrap = false;
+            row.enabled = g.motion_blur;
+            effects.rows.push_back(std::move(row));
+        }
+        const auto strength=[&](int id,const char* label,int percent,bool on,const char* note){
+            auto row=Row(id,label,Percents(),on?percent/5:0,note);
+            row.wrap=false;
+            return row;
+        };
+        effects.rows.push_back(strength(kBloom,"pc_bloom",g.bloom_strength,g.bloom,"pc_note_bloom_strength"));
+        effects.rows.push_back(strength(kFlareStrength,"pc_lens_flare",g.flare_strength,true,"pc_note_lens_flare"));
+        effects.rows.push_back(strength(kLensGhosts,"pc_lens_ghosts",g.ghost_strength,g.lens_ghosts,"pc_note_ghost_strength"));
         pt::game::PcSettingSection clarity{"pc_graphics_image",1,{}};
         clarity.rows.push_back(Row(kFilmGrain,"pc_film_grain",{"pc_off","25%","50%","75%","100%"},static_cast<int>(g.film_grain*4+.5f),"pc_note_film_grain"));
+        clarity.rows.push_back(Row(kFilmGrainType,"pc_film_grain_type",{"pc_film_grain_original","pc_film_grain_fine"},std::clamp(g.film_grain_type,0,1),"pc_note_film_grain_type"));
         clarity.rows.push_back(Row(kLensDistortion,"pc_lens_distortion",OffOn(),g.lens_distortion?1:0,"pc_note_lens_distortion"));
         clarity.rows.push_back(Row(kClarity,"pc_clarity",Numbers(0,10),static_cast<int>(g.clarity*10+.5f),"pc_note_clarity"));
         clarity.rows.push_back(Row(kLetterbox,"pc_photo_letterbox",{"pc_off","2.39:1","1.85:1"},std::clamp(app_.settings.display.letterbox,0,2),"pc_note_letterbox"));
         return {std::move(effects),std::move(clarity)};
+    }
+
+    static std::vector<std::string> Percents() {
+        std::vector<std::string> values{"pc_off"};
+        for(int i=5;i<=200;i+=5) values.push_back(std::format("{}%",i));
+        return values;
     }
 
     static std::vector<std::string> Numbers(int first, int last) {
@@ -4885,11 +6647,30 @@ private:
         }
     }
 
+    static std::vector<pt::FrameGenKind> FrameGenerators() {
+        std::vector<pt::FrameGenKind> kinds;
+        for (const pt::FrameGenKind kind : {pt::FrameGenKind::Off, pt::FrameGenKind::Fsr, pt::FrameGenKind::Dlss, pt::FrameGenKind::Metalfx,
+                                            pt::FrameGenKind::Xess}) {
+            if (pt::FrameGenOnPlatform(kind)) kinds.push_back(kind);
+        }
+        return kinds;
+    }
+    static std::string FrameGenName(pt::FrameGenKind kind) {
+        switch (kind) {
+        case pt::FrameGenKind::Fsr: return "FSR 3";
+        case pt::FrameGenKind::Dlss: return "DLSS";
+        case pt::FrameGenKind::Metalfx: return "MetalFX";
+        case pt::FrameGenKind::Xess: return "XeSS";
+        default: return "pc_off";
+        }
+    }
+
     std::vector<pt::UpscalerKind> Upscalers(std::vector<std::string>* notes) const {
         std::vector<pt::UpscalerKind> kinds{pt::UpscalerKind::Off};
         if (notes) notes->assign(1, std::string());
         for (const pt::UpscalerKind kind : {pt::UpscalerKind::Fsr, pt::UpscalerKind::Fsr4, pt::UpscalerKind::Dlss, pt::UpscalerKind::Xess,
                                             pt::UpscalerKind::MetalFx}) {
+            if (!pt::UpscalerOnPlatform(kind)) continue;
             std::string reason;
             const bool available = app_.scene.UpscalerAvailable(kind, reason);
             kinds.push_back(kind);
@@ -5317,6 +7098,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             pt::LogInfo("loop browser: save has the finished flag, all entries unlocked");
         }
         game.SetBrowseUnlocks(progress.loops_reached, progress.game_finished);
+        game.SetNightUnlocked(progress.night_unlocked);
         unlocks_seen = game.BrowseUnlockGeneration();
         std::set<std::string> archive_keys;
         for (size_t at = 0; at < progress.archive.size();) {
@@ -5334,8 +7116,13 @@ int RunGame(App& app, pt::Vfs& vfs) {
     game.GetPlayer().camera_roll = app.settings.camera.roll;
     game.SetThirdPerson(app.settings.camera.third_person || options.third_person);
     game.SetGamePlusSetting(app.settings.game.game_plus, true);
+    game.SetSurvivalBest(app.settings.game.survival_best_wave);
+    game.SetSurvivalProfile(app.settings.game.survival_profile);
+    game.SetSurvivalDifficulty(app.settings.game.survival_difficulty);
+    ApplyCrosshair(game, app.settings);
     game.SetSoundCaptions(app.settings.accessibility.sound_captions);
     game.SetFovOffset(app.settings.accessibility.fov_offset);
+    game.SetHouseSprint(app.settings.accessibility.house_sprint);
     pt::game::GameSound sound(game);
     std::vector<float> captured;
     pt::audio::AudioOutput::SetPreferSpatial(app.settings.audio.spatial);
@@ -5359,6 +7146,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     pt::game::PhotoPanelView photo_view;
     pt::LogInfo("startup: game UI");
     const bool ui_ready = ui.Init(app.renderer, app.textures, vfs);
+    ui.SetSurvivalVisionDirectory(pt::os::PathToUtf8(SurvivalVisionDirectory()));
     static constexpr const char* kDiscordClientId = "1559538474065993750";
     const char* discord_id_env = std::getenv("PT_DISCORD_CLIENT_ID");
     const std::string discord_id = discord_id_env && *discord_id_env ? discord_id_env : kDiscordClientId;
@@ -5381,6 +7169,19 @@ int RunGame(App& app, pt::Vfs& vfs) {
     }
     if (ui_ready) {
         ui.SetViewExtent({app.options.width, app.options.height});
+        ui.SetSupportPrompts(app.settings.ui.support_prompts);
+        {
+            const std::string current(pt::update::CurrentVersion());
+            const std::string last = app.settings.ui.last_version;
+            if (g_update_mark_started || (!last.empty() && last != current)) {
+                pt::LogInfo("support: first start of {} after {}: the update's thank-you notice", current, last.empty() ? "an update" : last);
+                ui.ShowNotice(std::string(pt::game::GameUi::kUpdatedNotice));
+            }
+            if (last != current) {
+                app.settings.ui.last_version = current;
+                if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            }
+        }
         game.SetOptionsUiAvailable(app.window != nullptr || options.first_boot_options);
         app.renderer.overlay = [&ui, &hide_game_ui, &photo_view, &app, &game](pt::gpu::CommandList& cmd, pt::gpu::ImageViewHandle view,
                                                                              pt::gpu::Extent2D extent,
@@ -5390,6 +7191,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 return;
             }
             ui.SetLetterbox(pt::game::LetterboxAspect(app.settings.display.letterbox));
+            ui.SetAccessibility(app.settings.accessibility.subtitle_size, app.settings.accessibility.subtitle_bg,
+                                app.settings.accessibility.reduced_flashing);
             if (!hide_game_ui) {
                 if (game.StreetWalkActive() && ui.MenuOpen()) app.renderer.grain[0] = 0.0f;
                 ui.Record(cmd, view, extent,
@@ -5418,12 +7221,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
     input.settings.gyro_sensitivity = app.settings.accessibility.gyro_sensitivity;
     input.settings.gyro_tightening = app.settings.accessibility.gyro_tightening;
     input.settings.gyro_bias = app.settings.accessibility.gyro_bias;
+    input.SetToggleModes(app.settings.accessibility.sprint_toggle, app.settings.accessibility.zoom_toggle);
+    pt::ApplyKeyBindings(app.settings.keys);
     PcSettings pc_settings(app, game, input);
     if (ui_ready) {
         ui.SetPcSettings(&pc_settings);
         app.transcripts = &ui.Subtitles();
     }
     const bool pads = app.window || options.virtual_pads;
+    if (app.window) input.ListenCaptureKeyEverywhere();
     pt::devices::TakeGamepadsReady();
     if (pads && pt::devices::GamepadsReady()) {
         input.Init();
@@ -5494,6 +7300,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         app.scene.vfx_forward = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordForward(c); };
         app.scene.vfx_liquid_depth = [&vfx_pass](const pt::SceneVfxContext& c) { vfx_pass.RecordLiquidDepth(c); };
         app.scene.vfx_filter = [&vfx_pass](const pt::SceneFilterContext& c) { vfx_pass.RecordFilter(c); };
+        app.scene.vfx_list = [&vfx_pass]() { return &vfx_pass.List(); };
     }
     pt::vk::PipelineWarmup pipeline_warmup;
     vfx_pass.AddPipelineWarmup(pipeline_warmup, pt::SceneRenderer::kHdrTargetFormat, pt::SceneRenderer::kDepthTargetFormat,
@@ -5827,6 +7634,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
     const auto& kLisaCryEvents = pt::game::kControllerSpeakerEvents;
     const auto& kPlayerStepEvents = pt::game::kControllerHapticOnlyEvents;
     std::atomic<int> display_hdr{-1};
+    std::atomic<bool> display_capable{false};
+    std::chrono::steady_clock::time_point display_hdr_recheck{};
+    int display_hdr_rechecks = 0;
+    bool windows_hdr_failed = false;
     struct JoinedThread {
         std::thread thread;
         ~JoinedThread() {
@@ -5834,14 +7645,48 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
     } display_hdr_read;
     void* display_hwnd = app.window ? SDL_GetPointerProperty(SDL_GetWindowProperties(app.window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) : nullptr;
+    const char* const hdr_switch_dry = std::getenv("PT_HDR_SWITCH_DRY");
+    const bool hdr_switch_dry_off = hdr_switch_dry && std::string_view(hdr_switch_dry) == "off";
     auto read_display_hdr = [&]() {
         if (!display_hwnd) return;
         if (display_hdr_read.thread.joinable()) display_hdr_read.thread.join();
-        display_hdr_read.thread = std::thread([hwnd = display_hwnd, &display_hdr]() {
+        display_hdr_read.thread = std::thread([hwnd = display_hwnd, &display_hdr, &display_capable, hdr_switch_dry_off]() {
+            if (hdr_switch_dry_off) {
+                display_hdr.store(0);
+                display_capable.store(true);
+                return;
+            }
             const std::optional<bool> hdr_on = pt::os::WindowDisplayHdr(hwnd);
             display_hdr.store(hdr_on ? (*hdr_on ? 1 : 0) : -1);
+            display_capable.store(pt::os::WindowDisplayHdrCapable(hwnd));
         });
     };
+    struct RestoreWindowsHdr {
+        App& app;
+        void* hwnd;
+        bool dry;
+        ~RestoreWindowsHdr() {
+            if (!hwnd || !app.windows_hdr_switched) return;
+            app.windows_hdr_switched = false;
+            const bool done = dry || pt::os::SetWindowDisplayHdr(hwnd, false);
+            if (app.settings.display.hdr_windows_held) {
+                app.settings.display.hdr_windows_held = false;
+                if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            }
+            pt::LogInfo("display: the game closes, Windows HDR turned back off for this display: {}", done ? "done" : "failed");
+        }
+    } restore_windows_hdr{app, display_hwnd, hdr_switch_dry != nullptr};
+    if (display_hwnd && app.settings.display.hdr_windows_held) {
+        if (app.settings.display.hdr && app.settings.display.hdr_windows_switch) {
+            app.windows_hdr_switched = true;
+            pt::LogInfo("display: previous session left Windows HDR held; restoring ownership for clean exit");
+        } else {
+            const bool done = hdr_switch_dry || pt::os::SetWindowDisplayHdr(display_hwnd, false);
+            app.settings.display.hdr_windows_held = false;
+            if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            pt::LogInfo("display: recovered Windows HDR left on by an earlier crash: {}", done ? "done" : "failed");
+        }
+    }
     read_display_hdr();
     bool display_focus = app.window && (SDL_GetWindowFlags(app.window) & SDL_WINDOW_INPUT_FOCUS) != 0;
     SDL_DisplayID display_id = app.window ? SDL_GetDisplayForWindow(app.window) : 0;
@@ -5866,6 +7711,36 @@ int RunGame(App& app, pt::Vfs& vfs) {
             hdr_toggle_frames.erase(hdr_toggle_frames.begin());
             app.settings.display.hdr = !app.settings.display.hdr;
             app.renderer.SetHdr(app.settings.display.hdr);
+        }
+        app.display_hdr_capable = display_capable.load();
+        if (!(app.settings.display.hdr && app.settings.display.hdr_windows_switch)) windows_hdr_failed = false;
+        if (display_hwnd && app.display_hdr == 0 && app.display_hdr_capable && app.settings.display.hdr && app.settings.display.hdr_windows_switch &&
+            !app.windows_hdr_switched && !windows_hdr_failed) {
+            const bool done = hdr_switch_dry || pt::os::SetWindowDisplayHdr(display_hwnd, true);
+            app.windows_hdr_switched = done;
+            windows_hdr_failed = !done;
+            if (done && !app.settings.display.hdr_windows_held) {
+                app.settings.display.hdr_windows_held = true;
+                if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            }
+            pt::LogInfo("display: turning Windows HDR on for this display: {}", done ? "done" : "failed");
+            display_hdr_rechecks = 6;
+            display_hdr_recheck = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        } else if (display_hwnd && app.windows_hdr_switched && !(app.settings.display.hdr && app.settings.display.hdr_windows_switch)) {
+            app.windows_hdr_switched = false;
+            if (!hdr_switch_dry) pt::os::SetWindowDisplayHdr(display_hwnd, false);
+            if (app.settings.display.hdr_windows_held) {
+                app.settings.display.hdr_windows_held = false;
+                if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+            }
+            pt::LogInfo("display: Windows HDR turned back off for this display");
+            display_hdr_rechecks = 6;
+            display_hdr_recheck = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        if (display_hdr_rechecks > 0 && std::chrono::steady_clock::now() >= display_hdr_recheck) {
+            --display_hdr_rechecks;
+            display_hdr_recheck = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            read_display_hdr();
         }
         if (const int now = display_hdr.load(); now >= 0 && now != display_hdr_seen) {
             app.display_hdr = now;
@@ -6000,7 +7875,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                              app.settings.audio.controller_speaker_volume > 0.0f;
         const pt::ControllerFeedbackFeatures feedback =
             pt::FeaturesForRumbleProfile(app.settings.input.rumble_profile, app.settings.input.rumble);
-        const bool speaker_requested = (app.window || options.virtual_pads) && (speaker_audio_requested || feedback.dualsense_haptics);
+        static const bool speaker_stand_in = std::getenv("PT_CONTROLLER_SPEAKER_DEVICE") != nullptr;
+        const bool speaker_requested = (options.virtual_pads ? speaker_stand_in : app.window != nullptr) && (speaker_audio_requested || feedback.dualsense_haptics);
         if (speaker_requested != speaker_route_requested) {
             controller_speaker.Close();
             speaker_gamepad_id = 0;
@@ -6105,7 +7981,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const bool photo_pointer = ((photo_mode && photo_overlay) || (theater && (theater->theater->ModelView() || theater->theater->FreeView()))) &&
                                        !(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
             const bool want_capture = !show_debug && !show_settings && !(ui_ready && ui.MenuOpen() && !theater) && !photo_pointer && !vr && !lisa_date &&
-                                      WindowActive(app.window);
+                                      !(ui_ready && ui.SurvivalChoosing()) && WindowActive(app.window);
             if (want_capture != mouse_capture_requested) {
                 mouse_capture_requested = want_capture;
                 if (want_capture) {
@@ -6134,8 +8010,9 @@ int RunGame(App& app, pt::Vfs& vfs) {
         }
         const bool keyboard_free = app.window && !show_settings && !(show_debug && ImGui::GetIO().WantCaptureKeyboard);
         const bool menu_open = (ui_ready && ui.MenuOpen() && !theater) || lisa_date != nullptr;
-        const pt::MouseUse mouse_use = mouse_captured || (!app.window && !menu_open) ? pt::MouseUse::Look
-                                       : menu_open && !show_settings                   ? pt::MouseUse::Menu
+        const bool pointer_up = menu_open || (ui_ready && ui.SurvivalChoosing());
+        const pt::MouseUse mouse_use = mouse_captured || (!app.window && !pointer_up) ? pt::MouseUse::Look
+                                       : pointer_up && !show_settings                  ? pt::MouseUse::Menu
                                                                                        : pt::MouseUse::None;
         pt::InputState polled = pads ? input.Poll(keyboard_free, mouse_use, !show_settings) : pt::InputState{};
         pc_settings.CollectGyroCalibration();
@@ -6204,6 +8081,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         pending_input.vr_look_angles = polled.vr_look_angles;
         prompt_textures.Update(polled.prompts);
         pending_input.click = pending_input.click || polled.click;
+        pending_input.click_held = polled.click_held;
         pending_input.right_click = pending_input.right_click || polled.right_click;
         pending_input.wheel += polled.wheel;
         pending_input.house_pressed = pending_input.house_pressed || polled.house_pressed;
@@ -6283,8 +8161,33 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 stop_photo();
             }
         }
+        static int f9_burst_left = 0;
+        static int f9_burst_index = 0;
+        static std::filesystem::path f9_folder;
         if (polled.capture_pose_pressed) {
             game.LogCapturePose(game.ViewCamera());
+            if (app.window && f9_burst_left == 0) {
+                const std::time_t now = std::time(nullptr);
+                std::tm local{};
+#ifdef _WIN32
+                localtime_s(&local, &now);
+#else
+                localtime_r(&now, &local);
+#endif
+                char stamp[32];
+                std::strftime(stamp, sizeof(stamp), "f9-%Y%m%d-%H%M%S", &local);
+                f9_folder = UserDataDir() / "reports" / stamp;
+                std::error_code ec;
+                std::filesystem::create_directories(f9_folder, ec);
+                if (!app.settings_path.empty()) std::filesystem::copy_file(app.settings_path, f9_folder / "pt.ini", std::filesystem::copy_options::overwrite_existing, ec);
+                f9_burst_left = 24;
+                f9_burst_index = 0;
+                pt::LogInfo("capture report: {} (pt.ini and the next 24 frames)", pt::os::PathToUtf8(f9_folder));
+            }
+        }
+        if (f9_burst_left > 0) {
+            game.RequestScreenshot(pt::os::PathToUtf8(f9_folder / std::format("f{:02}.png", f9_burst_index++)));
+            --f9_burst_left;
         }
         if (app.window) {
             const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -6306,7 +8209,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const bool f6 = keys[SDL_SCANCODE_F6] && !f6_was_down && usable;
             const bool f7 = keys[SDL_SCANCODE_F7] && !f7_was_down && usable;
             const bool h = keys[SDL_SCANCODE_H] && !h_was_down && usable;
-            const bool p = keys[SDL_SCANCODE_P] && !p_was_down && usable;
+            const bool p = keys[SDL_SCANCODE_P] && !p_was_down && usable && !(ui_ready && ui.SupportNoticeShown());
             f6_was_down = keys[SDL_SCANCODE_F6];
             f7_was_down = keys[SDL_SCANCODE_F7];
             h_was_down = keys[SDL_SCANCODE_H];
@@ -6404,6 +8307,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             pt::InputState state = pending_input;
             script.Apply(frame, game, state);
+            game.SurvivalAgentInput(state);
             if (!theater) game.UpdateEndingSkip(ending_skip_press, ending_skip_held, step, freecam || photo_mode);
             ending_skip_press = false;
             if (!theater) state = pt::game::GateEndingOutroInput(game.Controller().Step(), state);
@@ -6445,6 +8349,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             const auto tick_t2 = std::chrono::steady_clock::now();
             ui.Update(theater ? theater->theater->Sandbox() : game, state, step);
+            if (!theater && game.SurvivalActive() && !app.options.vr) SurvivalVisions().Update(app.options);
             const auto tick_t3 = std::chrono::steady_clock::now();
             frame_phases.current[FramePhases::kTicks] += std::chrono::duration<float, std::milli>(tick_t3 - tick_t0).count();
             static const bool io_log = std::getenv("PT_IO_LOG") != nullptr;
@@ -6478,15 +8383,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 ticks_trace.push_back({ms(tick_t1 - tick_t0).count(), ms(tick_t2 - tick_t1).count(), ms(tick_t3 - tick_t2).count(),
                                        ms(tick_t4 - tick_t3).count()});
             }
-            pending_input.mouse_look = glm::vec2(0.0f);
-            pending_input.gyro_turn = glm::vec2(0.0f);
-            pending_input.pressed = 0;
-            pending_input.raw_pressed = 0;
-            pending_input.pause = pending_input.confirm = pending_input.cancel = pending_input.any_button = false;
-            pending_input.click = pending_input.right_click = pending_input.house_pressed = false;
-            pending_input.wheel = 0.0f;
-            pending_input.menu_keys_pressed = 0;
-            pending_input.music_pressed = 0;
+            pt::SpendTickInput(pending_input);
             accumulator -= step;
             ++ticks;
         }
@@ -6699,6 +8596,11 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 progress.archive_backfill = 1;
                 changed = true;
             }
+            if (!progress.night_unlocked && game.Finishes() > static_cast<uint32_t>(pt::game::Game::kTierSurvival)) {
+                game.UnlockNight("the save completed Game+ tier 4");
+                progress.night_unlocked = true;
+                changed = true;
+            }
             if (changed) {
                 std::string keys;
                 for (const std::string& key : game.ArchiveSeen()) keys += (keys.empty() ? "" : ",") + key;
@@ -6713,10 +8615,22 @@ int RunGame(App& app, pt::Vfs& vfs) {
             archive_seen = game.ArchiveGeneration();
             app.settings.progress.loops_reached = game.BrowseReached();
             app.settings.progress.game_finished = game.GameFinished();
+            if (game.NightUnlockKept() && !app.settings.progress.night_unlocked && !app.settings_path.empty()) {
+                pt::LogInfo("loop browser: the survival night's unlock written to pt.ini ([progress] night_unlocked = 1)");
+            }
+            app.settings.progress.night_unlocked = game.NightUnlockKept();
             std::string keys;
             for (const std::string& key : game.ArchiveSeen()) keys += (keys.empty() ? "" : ",") + key;
             app.settings.progress.archive = keys;
             if (!app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+        }
+        if (const auto profile = game.TakeSurvivalProfile(); profile && *profile != app.settings.game.survival_profile) {
+            app.settings.game.survival_profile = *profile;
+            if (game.SavesEnabled() && !app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
+        }
+        if (const int record = game.TakeSurvivalRecord(); record > app.settings.game.survival_best_wave) {
+            app.settings.game.survival_best_wave = record;
+            if (game.SavesEnabled() && !app.settings_path.empty()) pt::SaveAppSettings(app.settings_path, app.settings);
         }
         if (lisa_date && game.TakeLeaveLisaDateRequest()) lisa_date->Leave();
         {
@@ -6928,7 +8842,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         app.renderer.output_brightness = game.Options().BrightnessValue();
         if (ui_ready) {
             const auto s = ui.SubliminalString();
-            app.scene.SetSubliminalString({s.texture, s.position, s.value});
+            app.scene.SetSubliminalString({s.texture, s.position, s.value, s.ink});
         }
         app.renderer.plain_output = ui.BootSplashShown() || ui.ShaderScreenShown();
         draw_items.clear();
@@ -6954,6 +8868,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
         } else {
             game.SetTracedBody(app.scene.raytracing.path_traced);
             game.CollectDraws(draw_items);
+            IntoViewFrame(draw_items, game.ViewCamera());
         }
         float blend = 1.0f;
         if (paced && !theater && !date_scene) {
@@ -6973,8 +8888,25 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const pt::Camera unturned = camera;
             camera = pt::game::RenderMouseLook(camera, game.ViewCamera(), pending_input.mouse_look,
                                               game.Options().invert_x, game.Options().invert_y);
+            if (const glm::mat4 turn = game.ThirdPersonBodyTurn(unturned, camera); turn != glm::mat4(1.0f) && !ViewAttachOff()) {
+                for (pt::DrawItem& item : draw_items) {
+                    if (item.turns_with_view) item.transform = turn * item.transform;
+                }
+            }
             camera = game.ThirdPersonTurn(unturned, camera);
             camera = game.PeepholeTurn(camera);
+        }
+        OntoView(draw_items, camera);
+        if (static const bool attach_trace = std::getenv("PT_VIEW_ATTACH_TRACE") != nullptr; attach_trace) {
+            const bool any_attached = std::any_of(draw_items.begin(), draw_items.end(), [](const pt::DrawItem& i) { return i.view_attached; });
+            for (const pt::DrawItem& item : draw_items) {
+                if (any_attached ? !item.view_attached : !item.turns_with_view) continue;
+                const glm::vec3 f = glm::normalize(glm::vec3(item.transform[2]));
+                const float right = glm::degrees(std::asin(std::clamp(glm::dot(f, camera.Right()), -1.0f, 1.0f)));
+                const float up = glm::degrees(std::asin(std::clamp(glm::dot(f, camera.Up()), -1.0f, 1.0f)));
+                pt::LogInfo("attach trace: frame {} blend {:.3f} camera yaw {:.4f} gun off right {:.3f} up {:.3f}", frame, blend, camera.yaw, right, up);
+                break;
+            }
         }
         if (freecam) {
             camera = freecam_camera;
@@ -7075,6 +9007,15 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
         };
         app.renderer.photo_filter = photo_mode ? static_cast<int>(photo_panel.Settings().filter) : 0;
+        {
+            int pattern = 0;
+            if (const pt::game::GameUi* ui = pt::game::GameUi::Active();
+                ui && ui->Menu().CurrentState() == pt::game::OptionsMenu::State::Active && ui->Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc &&
+                ui->Menu().PcPage().ScreenShown()) {
+                pattern = ui->Menu().PcPage().Screen().pattern;
+            }
+            app.renderer.SetHdrPattern(pattern);
+        }
         const bool photo_capture = photo_mode && !shots.empty() && !vr;
         const bool photo_four_k = photo_capture && photo_panel.Settings().resolution == pt::game::PhotoResolution::FourK;
         const VkExtent2D preview_extent = base_render_extent.width ? base_render_extent : pt::gpu::vk::Native(app.renderer.RenderExtent());
@@ -7193,6 +9134,14 @@ int RunGame(App& app, pt::Vfs& vfs) {
                 vr->EndEmpty();
             }
         }
+        {
+            static std::string adapted_floor;
+            const std::string& floor_name = game.Floor().CurrentFloorName();
+            if (floor_name != adapted_floor && game.Controller().Step() == 15) {
+                if (!adapted_floor.empty()) app.scene.SettleExposureClock();
+                adapted_floor = floor_name;
+            }
+        }
         if (render && !app.window && !shots.empty() && !vr) {
             if (options.shot_settle && last_render_frame + 1 != frame) {
                 app.scene.ResetExposure();
@@ -7210,8 +9159,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     view_vfx.Prepare(view, camera, warm_aspect, lighting, vfx_pass, blend);
                 }
                 if (theater) theater->theater->ApplyModelLighting(lighting);
-                app.scene.SetMotionReference(camera, 1.0f / options.tick_rate, i > 0 || last_render_frame + 1 == frame);
-                app.scene.Render(camera, draw_items, lighting, dt);
+                const bool armory_studio = ui_ready && ui.MenuOpen() && ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc && pc_settings.ArmoryPreviewActive();
+                if (armory_studio) {
+                    static pt::vfx::RenderList no_effects;
+                    vfx_pass.Submit(no_effects);
+                    pt::Camera studio_cam;
+                    std::vector<pt::DrawItem> studio_draws;
+                    pt::SceneLighting studio_lighting;
+                    pc_settings.BuildArmoryStudio(0.0f, studio_cam, studio_draws, studio_lighting);
+                    app.scene.SetMotionReference(studio_cam, 1.0f / options.tick_rate, i > 0 || last_render_frame + 1 == frame);
+                    app.scene.Render(studio_cam, studio_draws, studio_lighting, dt);
+                } else {
+                    app.scene.SetMotionReference(camera, 1.0f / options.tick_rate, i > 0 || last_render_frame + 1 == frame);
+                    app.scene.Render(camera, draw_items, lighting, dt);
+                }
                 take_reflection_readback(view);
                 app.renderer.EndFrame(false);
                 last_render_frame = frame - 1;
@@ -7284,15 +9245,40 @@ int RunGame(App& app, pt::Vfs& vfs) {
             }
             if (!paced) {
                 const float demo_scale = view.Demos().CameraParams() ? std::max(view.Demos().time_scale, 1.0e-3f) : 1.0f;
-                const pt::Camera& reference = warmed ? camera : options.render_all ? tick_camera_from : scripted_camera ? camera : motion_camera_from;
+                const bool snapped = scripted_camera && (glm::dot(motion_camera_from.Forward(), tick_camera_from.Forward()) < 0.98481f ||
+                                                         glm::distance(motion_camera_from.position, tick_camera_from.position) > 0.25f);
+                const pt::Camera& reference =
+                    warmed ? camera : options.render_all ? (snapped ? camera : tick_camera_from) : scripted_camera ? camera : motion_camera_from;
                 app.scene.SetMotionReference(reference, demo_scale / options.tick_rate, last_render_frame + 1 == frame);
+            }
+            if (const char* path = std::getenv("PT_WALK_MAP"); path && !shots.empty()) {
+                static bool walked = false;
+                if (!walked) {
+                    walked = true;
+                    pt::game::DumpStreetWalk(game, path);
+                }
+            }
+            if (const char* path = std::getenv("PT_DRAW_DUMP"); path && !shots.empty()) {
+                app.scene.DumpDraws(draw_items, std::string(path) + std::to_string(frame) + ".bin");
             }
             static const bool dump_targets = std::getenv("PT_TARGET_DUMP") != nullptr;
             if (dump_targets && !shots.empty()) {
                 app.scene.RequestTargetDump();
             }
             const auto part_t4 = std::chrono::steady_clock::now();
-            app.scene.Render(camera, draw_items, lighting, dt);
+            const bool armory_studio = ui_ready && ui.MenuOpen() && ui.Menu().CurrentPage() == pt::game::OptionsMenu::Page::Pc && pc_settings.ArmoryPreviewActive();
+            if (armory_studio) {
+                static pt::vfx::RenderList no_effects;
+                vfx_pass.Submit(no_effects);
+                pt::Camera studio_cam;
+                std::vector<pt::DrawItem> studio_draws;
+                pt::SceneLighting studio_lighting;
+                pc_settings.BuildArmoryStudio(static_cast<float>(dt), studio_cam, studio_draws, studio_lighting);
+                app.scene.SetMotionReference(studio_cam, 1.0f / options.tick_rate, last_render_frame + 1 == frame);
+                app.scene.Render(studio_cam, studio_draws, studio_lighting, dt);
+            } else {
+                app.scene.Render(camera, draw_items, lighting, dt);
+            }
             take_reflection_readback(view);
             last_render_frame = frame;
             const auto part_t5 = std::chrono::steady_clock::now();
@@ -7340,7 +9326,10 @@ int RunGame(App& app, pt::Vfs& vfs) {
                     continue;
                 }
                 const glm::vec4 crop = photo_capture && !photo_four_k ? glm::vec4(photo_crop.x,photo_crop.y,photo_crop.width,photo_crop.height) : glm::vec4(0,0,1,1);
-                if (!app.renderer.SaveScreenshot(pt::os::PathFromUtf8(shot),crop) && photo_capture) {
+                const std::string f9_prefix = f9_folder.empty() ? std::string() : pt::os::PathToUtf8(f9_folder);
+                const bool f9_frame = !f9_prefix.empty() && shot.starts_with(f9_prefix);
+                const bool hdr_copy = !f9_frame || shot.ends_with("f00.png");
+                if (!app.renderer.SaveScreenshot(pt::os::PathFromUtf8(shot),crop,f9_frame,hdr_copy) && photo_capture) {
                     photo_status = std::string(pt::game::PcText("pc_photo_save_failed", std::clamp(game.Options().subtitle_language, 0, pt::game::UiAssets::kLanguageCount - 1)));
                     photo_status_time=4.0f;
                 }
@@ -7388,6 +9377,12 @@ int RunGame(App& app, pt::Vfs& vfs) {
                                 l.position.y, l.position.z, l.direction.x, l.direction.y, l.direction.z, l.intensity.x, l.intensity.y,
                                 l.intensity.z, l.inner_range, l.outer_range, l.dimmer, l.cos_outer, l.cast_shadow ? 1 : 0, l.shadow_strength,
                                 l.diffuse_scale, l.specular_scale, l.has_area ? 1 : 0, l.hidden_views, l.source_radius);
+                    if (l.has_area) {
+                        const glm::mat4& m = l.area_to_box;
+                        pt::LogInfo("shot light {} area mode {} rows ({:.5f} {:.5f} {:.5f} {:.5f}) ({:.5f} {:.5f} {:.5f} {:.5f}) ({:.5f} {:.5f} {:.5f} {:.5f})", i,
+                                    static_cast<int>(l.area_clip_mode), m[0][0], m[1][0], m[2][0], m[3][0], m[0][1], m[1][1], m[2][1], m[3][1],
+                                    m[0][2], m[1][2], m[2][2], m[3][2]);
+                    }
                 }
             }
         }
@@ -7446,6 +9441,8 @@ int RunGame(App& app, pt::Vfs& vfs) {
             const int presented_fps = !generating ? fps_shown : app.scene.upscale.frame_generation == pt::FrameGenKind::Dlss
                 ? static_cast<int>(std::lround(fps_shown * dlss_ratio)) : fps_shown * 2;
             ui.SetFpsCounter(app.settings.accessibility.fps_counter, fps_shown, presented_fps);
+            ui.SetSupportPrompts(app.settings.ui.support_prompts);
+            if (std::string from; ui.TakeSupportRequest(&from)) OpenPatreonPage(app, from);
         }
         static const bool status_log = app.window || std::getenv("PT_STATUS_LOG") != nullptr;
         if (status_log) {
@@ -7503,6 +9500,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
                             app.settings.upscaling.quality, app.settings.upscaling.frame_generation,
                             app.settings.display.vsync ? "on" : "off", app.settings.display.fps_limit, game.Floor().CurrentFloorName(),
                             ui_ready && ui.MenuOpen() ? ", menu open" : "", frozen_note, cpu_status.empty() ? "" : "; ", cpu_status);
+                ScanThirdPartyTools();
                 status_start = status_now;
                 status_frames = 0;
                 status_gpu = 0.0;
@@ -7637,6 +9635,7 @@ int RunGame(App& app, pt::Vfs& vfs) {
     app.scene.vfx_forward = nullptr;
     app.scene.vfx_liquid_depth = nullptr;
     app.scene.vfx_filter = nullptr;
+    app.scene.vfx_list = nullptr;
     pipeline_warmup.Join();
     vfx_pass.Shutdown();
     app.renderer.overlay = nullptr;
@@ -7679,6 +9678,9 @@ int main(int argc, char** argv) {
     }
     if (!app.options.make_museum_previews.empty()) {
         SetUpMuseumPreviewRun(app.options);
+    }
+    if (!app.options.make_survival_visions.empty()) {
+        SetUpSurvivalVisionRun(app.options);
     }
     const Options& options = app.options;
     const bool headless_user_data = options.headless && !pt::os::GetEnv("PT_HEADLESS_USER_DATA").empty();
@@ -7748,6 +9750,11 @@ int main(int argc, char** argv) {
         if (!unrecorded.empty()) {
             pt::LogWarn("frame generation: {}", unrecorded);
             pt::SetCrashNote(unrecorded);
+        }
+        if (const std::optional<pt::fg_unlock::Install> unlock = pt::fg_unlock::ReadInstall(game_root)) {
+            g_own_proxies = unlock->files;
+            g_own_proxies.push_back(unlock->proxy);
+            for (std::string& f : g_own_proxies) f = pt::os::PathToUtf8(std::filesystem::path(f).filename());
         }
         if (const std::string retired = pt::fg_unlock::RetireShippedProxy(game_root, archive); !retired.empty())
             pt::LogWarn("frame generation: {}", retired);
@@ -8061,7 +10068,8 @@ int main(int argc, char** argv) {
     pt::boot::Phase("video");
     pt::devices::Start({.gamepad = !options.headless || options.virtual_pads,
                         .audio = !options.headless,
-                        .background = !options.headless && !options.virtual_pads});
+                        .background = !options.headless && !options.virtual_pads,
+                        .virtual_only = options.virtual_pads});
     if (!options.headless) {
         pt::LogSdlVideoInUse();
         pt::OfferCrashUpload(g_output_dir.empty() ? std::filesystem::path(".") : g_output_dir, std::string(pt::update::CurrentVersion()), true);
@@ -8071,6 +10079,18 @@ int main(int argc, char** argv) {
                                                                     : UserDataDir() / "pt.ini";
     const bool settings_loaded = !app.settings_path.empty() && pt::LoadAppSettings(app.settings_path, app.settings);
     if (pt::nr_native::Enabled()) pt::ConfigureNativeNeuralRuntime(app.settings.upscaling.neural_runtime);
+    if (settings_loaded && app.settings.upscaling.frame_generation != "off") {
+        std::ifstream previous_log(log_path.parent_path() / "pt-previous.log");
+        const pt::FgStartLoss fg_loss = pt::FindFrameGenStartLoss(previous_log);
+        if (fg_loss.found) {
+            pt::LogWarn("frame generation: the last run lost the graphics device {:.1f} s after {} made its swapchain (pt-previous.log): frame "
+                        "generation is off now (pt.ini frame_generation = off); the player may turn it on again",
+                        fg_loss.seconds, fg_loss.owner);
+            app.settings.upscaling.frame_generation = "off";
+            pt::SaveAppSettings(app.settings_path, app.settings);
+            app.pending_notices.push_back("pc_notice_fg_start_lost");
+        }
+    }
 #ifdef PT_D3D12_GAME
     pt::SetD3D12RunsGame(true);
     pt::SetD3D12Probe(&ProbeD3D12);
@@ -8287,6 +10307,9 @@ int main(int argc, char** argv) {
     settings.hdr = app.settings.display.hdr;
     settings.hdr_paper_white = app.settings.display.hdr_paper_white;
     settings.hdr_peak = app.settings.display.hdr_peak;
+    settings.hdr_ui_white = app.settings.display.hdr_ui_white;
+    settings.hdr_reach = app.settings.display.hdr_reach;
+    settings.hdr_look = HdrLookOf(app.settings);
     if (!options.headless) {
         settings.pipeline_cache_dir = UserDataDir() / "pipeline-cache";
     } else if (!options.settings_path.empty()) {
@@ -8388,6 +10411,13 @@ int main(int argc, char** argv) {
                                          nullptr);
             }
         } else {
+#ifdef _WIN32
+            if (g_no_gpu_driver) {
+                startup_failure("No graphics driver is installed: Windows draws the screen with its Microsoft Basic Render Driver, which "
+                                "cannot run the game.",
+                                driver_advice);
+            } else
+#endif
             startup_failure(d3d12 ? (back_to_vulkan ? "The graphics device could not be set up (DirectX 12). The next start uses Vulkan."
                                                     : "The graphics device could not be set up (DirectX 12).")
                                   : "The graphics device could not be set up (Vulkan).",
@@ -8395,9 +10425,10 @@ int main(int argc, char** argv) {
         }
     }
     pt::boot::Phase("graphics device");
+    ScanThirdPartyTools();
 #ifdef _WIN32
     if (renderer_ready && !d3d12 && !options.headless && app.renderer.Context().intel_first_frame_driver) {
-        const std::string driver = pt::vk::IntelWindowsDriverName(app.renderer.Context().properties.driverVersion);
+        const std::string driver = app.renderer.Context().intel_driver_name;
         const std::filesystem::path marker =
             app.settings_path.empty() ? std::filesystem::path() : app.settings_path.parent_path() / "intel-driver-notice.txt";
         std::string shown;
@@ -8647,6 +10678,7 @@ int main(int argc, char** argv) {
         const bool viewer = !options.stage.empty() || !options.texture_test.empty();
         pt::LogInfo("startup: {}", viewer ? "viewer" : "game");
         result = viewer ? RunViewer(app, vfs) : RunGame(app, vfs);
+        if (!app.options.make_survival_visions.empty()) pt::game::MakeSurvivalVisionCards(std::filesystem::absolute(app.options.make_survival_visions));
         app.renderer.Gpu().WaitIdle();
         if (app.xr) {
             app.xr->Shutdown();

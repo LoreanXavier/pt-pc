@@ -22,8 +22,11 @@ struct Envelope {
 class SubliminalEffect {
 public:
     static constexpr int kImageCount = 10;
+    static constexpr int kPortImage = kImageCount;
 
-    void Trigger(int index, bool flag, bool no_string, glm::vec2 position);
+    void Trigger(int index, bool flag, bool no_string, glm::vec2 position, float hold = 3.0f);
+    void Hold(float hold);
+    void Flash();
     void Update(float dt);
     bool Active() const { return noise_a_.Running() || noise_b_.Running() || string_.Running() || noise_a_.value > 0.0f || string_.value > 0.0f; }
 

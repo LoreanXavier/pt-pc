@@ -402,6 +402,9 @@ def main():
         print(f"DirectX 12: {len(dxil)} DXIL shaders, {', '.join(D3D12_RUNTIME_FILES)}")
     copy_voice(build / "voice", root / "voice")
     shutil.copytree(build / "fonts", root / "fonts")
+    # the survival night's guns (assets/survival, the port's own models): their glTF files and guns.json
+    if (build / "survival").is_dir():
+        shutil.copytree(build / "survival", root / "survival")
     # the port's data pack (src/engine/fs/data_pack.h, built by the build from assets/); its loose source folder never ships,
     # and a copy older builds left in the build folder stays out
     if not (build / DATA_PACK).is_file():

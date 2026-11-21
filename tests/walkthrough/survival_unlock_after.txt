@@ -1,0 +1,5 @@
+# the run of tier 4 went out of its last loop's door: the night's entry unlocked there and is kept (pt.ini), the street and the
+# night follow without credits
+swait 900
+sexpect night 1
+slog

@@ -633,7 +633,7 @@ void GamePlusArm::Apply(std::vector<DrawItem>& out) {
     }
     const size_t count = out.size();
     for (size_t n = 0; n < count; ++n) {
-        if (out[n].mesh != lisa_mesh_ || out[n].skin.size() < lisa_bind_.size()) continue;
+        if (out[n].mesh != lisa_mesh_ || out[n].skin.size() < lisa_bind_.size() || out[n].original_look) continue;
         const std::span<const glm::mat4> skin = out[n].skin;
         auto lisa_world = [&](int i) { return skin[static_cast<size_t>(i)] * glm::translate(glm::mat4(1.0f), lisa_bind_[static_cast<size_t>(i)]); };
         std::vector<glm::mat4> world(side_bind_.size(), glm::mat4(1.0f));

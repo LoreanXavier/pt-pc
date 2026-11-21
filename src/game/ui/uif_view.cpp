@@ -96,10 +96,25 @@ void DrawText(ui::UiBatch& batch, const UiCanvas& canvas, const UiFont& font, co
                     p1[axis] = hi;
                 }
             }
-            const ui::UiVertex a{p0, uv0, color};
-            const ui::UiVertex b{{p1.x, p0.y}, {uv1.x, uv0.y}, color};
-            const ui::UiVertex c{p1, uv1, color};
-            const ui::UiVertex d{{p0.x, p1.y}, {uv0.x, uv1.y}, color};
+            glm::vec4 vertex_color = color;
+            if (shade == ui::UiShade::Border) {
+                vertex_color = glm::vec4(uv0, uv1);
+                for (int axis = 0; axis < 2; ++axis) {
+                    const float span = p1[axis] - p0[axis];
+                    if (span <= 0.0f) continue;
+                    const float per_pixel = (uv1[axis] - uv0[axis]) / span;
+                    const float texels_per_pixel = per_pixel * (axis == 0 ? aw : ah);
+                    const float pad = std::min(std::ceil(1.2f * params.extra.z) + 1.0f, texels_per_pixel > 0.0f ? 3.5f / texels_per_pixel : 0.0f);
+                    p0[axis] -= pad;
+                    p1[axis] += pad;
+                    uv0[axis] -= pad * per_pixel;
+                    uv1[axis] += pad * per_pixel;
+                }
+            }
+            const ui::UiVertex a{p0, uv0, vertex_color};
+            const ui::UiVertex b{{p1.x, p0.y}, {uv1.x, uv0.y}, vertex_color};
+            const ui::UiVertex c{p1, uv1, vertex_color};
+            const ui::UiVertex d{{p0.x, p1.y}, {uv0.x, uv1.y}, vertex_color};
             vertices.insert(vertices.end(), {a, b, c, a, c, d});
         }
     }

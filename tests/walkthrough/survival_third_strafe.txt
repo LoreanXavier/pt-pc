@@ -1,0 +1,136 @@
+# third person: A and D over and over, on their own, with W, with W and Shift, at three speeds, with the keys overlapping (owner, 8 November: sharp, catching
+# turns left and right, plainest running). PT_BODY_MOTION=1 and tools/survival_guns/motion_check.py measure it
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+steleport -1.15 27
+swait 70
+skey D 1
+swait 30
+skey D 0
+skey A 1
+swait 30
+skey A 0
+skey D 1
+swait 15
+skey D 0
+skey A 1
+swait 15
+skey A 0
+skey D 1
+swait 15
+skey D 0
+skey A 1
+swait 15
+skey A 0
+skey D 1
+swait 8
+skey D 0
+skey A 1
+swait 8
+skey A 0
+skey D 1
+swait 8
+skey D 0
+skey A 1
+swait 8
+skey A 0
+swait 60
+steleport -1.15 27
+swait 10
+skey W 1
+swait 40
+skey D 1
+swait 25
+skey D 0
+skey A 1
+swait 25
+skey A 0
+skey D 1
+swait 12
+skey D 0
+skey A 1
+swait 12
+skey A 0
+skey D 1
+swait 12
+skey D 0
+skey A 1
+swait 12
+skey A 0
+skey D 1
+swait 7
+skey D 0
+skey A 1
+swait 7
+skey A 0
+skey D 1
+swait 7
+skey D 0
+skey A 1
+swait 7
+skey A 0
+swait 20
+skey W 0
+swait 60
+steleport -1.15 27
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 80
+skey D 1
+swait 25
+skey D 0
+skey A 1
+swait 25
+skey A 0
+skey D 1
+swait 12
+skey D 0
+skey A 1
+swait 12
+skey A 0
+skey D 1
+swait 12
+skey D 0
+skey A 1
+swait 12
+skey A 0
+skey D 1
+swait 7
+skey D 0
+skey A 1
+swait 7
+skey A 0
+skey D 1
+swait 7
+skey D 0
+skey A 1
+swait 7
+skey A 0
+skey D 1
+swait 10
+skey A 1
+swait 4
+skey D 0
+swait 10
+skey D 1
+swait 4
+skey A 0
+swait 10
+skey D 0
+swait 30
+skey W 0
+skey Left_Shift 0
+swait 60
+slog
+squit

@@ -1,0 +1,28 @@
+# the radio's offer taken with a real mouse button, held as a click is held (owner, 8 November: the click fired a round). The press takes the card under
+# the pointer, the mouse goes back to the look with the button still down, and that is not a press of the trigger
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+swait 20
+sact weapon=1
+swait 60
+sact offer
+swait 60
+sui menupoint 32.6 -2.8
+swait 4
+smbutton left 1
+swait 12
+smbutton left 0
+swait 30
+slog
+smbutton left 1
+swait 4
+smbutton left 0
+swait 30
+slog

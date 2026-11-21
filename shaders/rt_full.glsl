@@ -146,7 +146,7 @@ vec3 RtFullLightDiffuse(Light l, vec3 p, vec3 n, out float shadow_cone) {
             return vec3(0.0);
         }
         vec2 muv = vec2(0.5 * mc.x / mc.w + 0.5, 1.0 - (0.5 * mc.y / mc.w + 0.5));
-        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), muv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, muv, 0.0).rgb;
+        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), LightMaskUv(uint(l.scales.w), muv), LightMaskLod(uint(l.scales.w))).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, LightMaskUv(uint(l.scales.w), muv), LightMaskLod(uint(l.scales.w))).rgb;
     }
     return radiance * l.scales.y * ndl * mask;
 }
@@ -208,6 +208,7 @@ struct RtSurfaceHit {
     vec3 normal;
     vec2 uv;
     uint material;
+    vec3 tint;
 };
 
 RtSurfaceHit RtFullSurface(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 ray) {
@@ -229,6 +230,7 @@ RtSurfaceHit RtFullSurface(uint record, uint primitive, vec2 bary, mat4x3 to_wor
     n = dot(n, n) > 1.0e-12 ? normalize(n) : -ray;
     h.normal = dot(n, ray) > 0.0 ? -n : n;
     h.material = r.material;
+    h.tint = RtRecordTint(r.flags);
     return h;
 }
 

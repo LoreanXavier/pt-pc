@@ -10,6 +10,9 @@ BEGIN
  BEGIN
   BLOCK "040904B0"
   BEGIN
+   VALUE "CompanyName", "LoreanXavier\0"
+   VALUE "LegalCopyright", "Copyright (C) 2026 LoreanXavier\0"
+   VALUE "OriginalFilename", "P.T.PC.Port.Setup.exe\0"
    VALUE "FileDescription", "@PT_SETUP_DESCRIPTION@\0"
    VALUE "ProductName", "@PT_SETUP_PRODUCT@\0"
    VALUE "FileVersion", "@PT_SETUP_VERSION@\0"

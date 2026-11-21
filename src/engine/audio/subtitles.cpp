@@ -3,6 +3,8 @@
 
 #include <cctype>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 
@@ -82,6 +84,21 @@ bool SubtitleTable::Load(Vfs& vfs, std::string_view language, std::span<const st
     }
     if (!Parse(*subp, sab_tables, error)) {
         return false;
+    }
+    if (const char* dump = std::getenv("PT_SUBTITLE_DUMP")) {
+        if (FILE* f = std::fopen(dump, "wb")) {
+            for (const SubtitleEntry& entry : entries_) {
+                std::fprintf(f, "%08x", entry.key);
+                for (const auto& line : entry.lines) {
+                    std::string text = line.text;
+                    std::replace(text.begin(), text.end(), '\n', '|');
+                    std::fprintf(f, "\t%s", text.c_str());
+                }
+                std::fprintf(f, "\n");
+            }
+            std::fclose(f);
+            LogInfo("subtitles: {} entries of {} written to {}", entries_.size(), source, dump);
+        }
     }
     const int translation_language = lang == "Tur" ? 7 : lang == "Zhs" ? 8 : lang == "Ara" ? 9 : lang == "Rus" ? 10 : lang == "Ukr" ? 11 : lang == "Ces" ? 12 : lang == "Pol" ? 13 : 0;
     if (translation_language) {

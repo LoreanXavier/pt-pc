@@ -57,6 +57,7 @@ public:
     IDXGIAdapter1* Adapter() const { return adapter_.Get(); }
     bool DredEnabled() const { return dred_; }
     void LogDred();
+    void LogPresentEnvironment(HWND window);
     const std::string& AdapterName() const { return adapter_name_; }
     uint32_t DrainDebugMessages();
     uint32_t TotalDebugErrors() const { return total_errors_; }
@@ -69,6 +70,7 @@ private:
     LUID luid_{};
     ComPtr<IDXGIFactory4> factory_;
     ComPtr<IDXGIAdapter1> adapter_;
+    HWND logged_environment_window_ = nullptr;
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<ID3D12Fence> idle_fence_;
@@ -79,6 +81,7 @@ private:
     HANDLE event_ = nullptr;
     bool tearing_ = false;
     bool dred_ = false;
+    bool dred_breadcrumbs_ = false;
     std::string adapter_name_;
 };
 

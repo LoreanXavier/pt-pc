@@ -8,27 +8,45 @@ float PqEncode(float nits) {
     return pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
 }
 
-vec3 CompositeDisplayColor(vec3 color, float gain, float brightness, float output_mode, vec2 hdr) {
-    if (output_mode > 0.5) {
-        color = pow(max(color, vec3(0.0)), vec3(1.0 / brightness));
-    } else {
-        color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / brightness));
+#include "hdr_shoulder.glsl"
+
+const mat3 kBt709ToBt2020 = mat3(0.627404, 0.069097, 0.0163916,
+                                 0.329283, 0.919540, 0.0880132,
+                                 0.0433136, 0.0113612, 0.895595);
+const mat3 kBt2020ToBt709 = mat3(1.660491, -0.124550, -0.018151,
+                                 -0.587641, 1.132900, -0.100579,
+                                 -0.072850, -0.008349, 1.118730);
+
+float GammaDecode(float e, float gamma) {
+    if (e >= 1.0 || gamma < 0.5) {
+        return pow(e, 2.2);
     }
-    if (output_mode > 0.5) {
-        color = pow(clamp(color, vec3(0.0), vec3(1.0)), vec3(2.2)) * pow(clamp(gain, 1.0, 8.0), 2.2);
-        float strongest = max(color.r, max(color.g, color.b)) * hdr.x;
-        if (strongest > hdr.y) {
-            color *= hdr.y / strongest;
-        }
-        if (output_mode < 1.5) {
-            return color * (hdr.x / 80.0);
-        }
-        vec3 bt2020 = mat3(0.627404, 0.069097, 0.0163916,
-                           0.329283, 0.919540, 0.0880132,
-                           0.0433136, 0.0113612, 0.895595) * (color * hdr.x);
-        return vec3(PqEncode(bt2020.r), PqEncode(bt2020.g), PqEncode(bt2020.b));
+    if (gamma < 1.5) {
+        return e <= 0.04045 ? e / 12.92 : pow((e + 0.055) / 1.055, 2.4);
     }
-    return color;
+    return pow(e, 2.4);
+}
+
+vec3 CompositeDisplayColor(vec3 color, float brightness, float output_mode, vec2 hdr, float gamma) {
+    if (output_mode < 0.5) {
+        return pow(clamp(color, 0.0, 1.0), vec3(1.0 / brightness));
+    }
+    vec3 e = sign(color) * pow(abs(color), vec3(1.0 / brightness));
+    vec3 light = sign(e) * vec3(GammaDecode(abs(e.r), gamma), GammaDecode(abs(e.g), gamma), GammaDecode(abs(e.b), gamma));
+    vec3 wide = HdrPeakRollRgb(kBt709ToBt2020 * light, hdr.y / max(hdr.x, 1.0));
+    if (output_mode < 1.5) {
+        return (kBt2020ToBt709 * wide) * (hdr.x / 80.0);
+    }
+    wide *= hdr.x;
+    return vec3(PqEncode(wide.r), PqEncode(wide.g), PqEncode(wide.b));
+}
+
+vec3 OutputNits(vec3 nits, float output_mode) {
+    if (output_mode < 1.5) {
+        return nits * (1.0 / 80.0);
+    }
+    vec3 bt2020 = kBt709ToBt2020 * nits;
+    return vec3(PqEncode(bt2020.r), PqEncode(bt2020.g), PqEncode(bt2020.b));
 }
 
 vec4 CompositeUiLayer(vec3 shown, vec3 base, float tolerance) {

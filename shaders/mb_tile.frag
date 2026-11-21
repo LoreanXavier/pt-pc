@@ -16,7 +16,7 @@ vec2 best = vec2(0.0);
 float best_len = 0.0;
 
 void Take(vec2 uv) {
-    vec2 v = 2.0 * Img(pass.ids.x, SMP_POINT_CLAMP, uv).zw - 1.0;
+    vec2 v = MbLoad(Img(pass.ids.x, SMP_POINT_CLAMP, uv).zw);
     float len = dot(v, v);
     if (len > best_len) {
         best_len = len;
@@ -39,5 +39,5 @@ void main() {
             }
         }
     }
-    out_color = vec4(0.0, 0.0, 0.5 * best + 0.5);
+    out_color = vec4(0.0, 0.0, MbStore(best));
 }

@@ -111,6 +111,7 @@ public:
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties properties{};
     bool intel_first_frame_driver = false;
+    std::string intel_driver_name;
     VkDevice device = VK_NULL_HANDLE;
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     std::filesystem::path pipeline_cache_dir;

@@ -3,10 +3,12 @@
 #include "game/archive.h"
 #include "game/loop_browser.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 
 #include <fstream>
 #include <sstream>
@@ -21,17 +23,26 @@
 #include "engine/fs/mods.h"
 #include "game/player_animation.h"
 #include "game/render_scene.h"
+#include "game/run_stride.h"
 #include "game/ui/port_credits.h"
 
 namespace pt::game {
 namespace {
+bool HandyBonesTrace() {
+    static const bool on = std::getenv("PT_HANDY_BONES") != nullptr;
+    return on;
+}
+bool ReflectLog() {
+    static const bool on = std::getenv("PT_REFLECT_LOG") != nullptr;
+    return on;
+}
 
 constexpr double kGameFrame = 1.0 / 30.0;
 constexpr float kBrowseFadeSeconds = 0.5f;
 constexpr double kStreetSceneryFrame = 2900.0;
 const glm::vec3 kStreetSpawn(-1.15f, 0.05f, 27.0f);
 constexpr glm::vec2 kStreetMin(-19.5f, -12.5f);
-constexpr glm::vec2 kStreetMax(13.5f, 190.0f);
+constexpr glm::vec2 kStreetMax(14.6f, 190.0f);
 constexpr const char* kStreetAmbience = "Play_sfx_rainfall_01";
 
 constexpr glm::vec3 kHandyModelOffset{-0.105f, 0.020f, -0.045f};
@@ -199,6 +210,30 @@ void Game::Update(float dt, const InputState& pad_input) {
             controller_.ChangeGameStep("ResetGame");
         }
     }
+    if (night_exit_wait_ >= 0.0f) {
+        night_exit_wait_ -= dt;
+        if (night_exit_wait_ < 0.0f) {
+            night_exit_wait_ = -1.0f;
+            if (const int step = controller_.Step(); step < 21 || step > 31) {
+                demos_.Skip();
+                controller_.ChangeGameStep("GotoEnding");
+            }
+        }
+    }
+    if (night_door_wait_ >= 0.0f) {
+        night_door_wait_ -= dt;
+        if (night_door_wait_ < 0.0f) {
+            night_door_wait_ = -1.0f;
+            browse_night_door_ = false;
+            demos_.Skip();
+            street_pending_ = true;
+            browse_waiting_entry_ = false;
+            browse_arrived_ = true;
+            floor_.SetFloorLevel("ending");
+            controller_.ChangeGameStep("GotoEnding");
+            LogInfo("loop browser: out of the start room onto the street");
+        }
+    }
     if(progress_reset_pending_) {
         progress_reset_pending_=false;
         LogInfo("save: confirmed reset restarts the current game session");
@@ -293,6 +328,11 @@ void Game::Update(float dt, const InputState& pad_input) {
             });
             if (!exit_door_control) player_.DemoHeldFrame(input);
         }
+        if (survival_ && survival_->Active()) {
+            player_.locks.Add('A', "Survival", kPadZoom);
+        } else {
+            player_.locks.Remove('A', "Survival");
+        }
         if (!demo_control) {
             player_.Update(dt, input, collision_, context);
             zoom_fell_ = zoom_fell_ || player_.ZoomFalling();
@@ -300,6 +340,46 @@ void Game::Update(float dt, const InputState& pad_input) {
         if (zoom_fell_ && game_frame_tick_) {
             zoom_fell_ = false;
             nazo_.AbortPeephole();
+        }
+        if (survival_ && survival_->Active()) {
+            survival_->Update(dt, input, ViewCamera(true));
+            run_eye_.Advance(player_.MakeCamera().position.y, dt);
+            player_.sprint_lean = third_person_ ? survival_->Lean() : 0.0f;
+            const bool body_seen = third_person_ || FreeView();
+            const glm::mat4 pose = player_.PoseTransform();
+            const float pose_yaw = std::atan2(pose[2].x, pose[2].z);
+            const float view_yaw_off = std::remainder(player_.CameraFoxYaw() - pose_yaw, 6.2831853f);
+            const float view_pitch = player_.MakeCamera().pitch;
+            player_.SetRun(body_seen ? survival_->BodyRunWeight() : 0.0f, survival_->BodyRunArms());
+            player_.SetStrideBlend(third_person_);
+            player_.SetAim(body_seen ? survival_->ThirdPersonAim() : 0.0f, view_pitch, body_seen ? view_yaw_off : 0.0f);
+            player_.SetHeadLook(body_seen ? view_yaw_off : 0.0f, body_seen ? view_pitch : 0.0f);
+            player_.SetSteady(body_seen ? survival_->ThirdPersonSteady() : 0.0f, body_seen ? survival_->ThirdPersonCarry() : glm::vec2(0.0f));
+            player_.SetReachRate(body_seen && survival_->ThirdPersonShove() > 0.0f ? 34.0f : 12.0f);
+            player_.SetLunge(third_person_ ? survival_->ThirdPersonLunge() : 0.0f);
+            {
+                float long_gun = 0.0f, recoil = 0.0f;
+                std::optional<glm::vec3> left_elbow, right_elbow;
+                float right_share = 1.0f;
+                survival_->ThirdPersonStance(long_gun, recoil, left_elbow, right_elbow, right_share);
+                player_.SetAimStance(long_gun, recoil);
+                if (body_seen) player_.SetElbowHints(left_elbow, right_elbow, right_share);
+                player_.SetMeleeBody(body_seen ? survival_->MeleeBody() : glm::vec3(0.0f));
+            }
+            glm::mat4 hand(1.0f);
+            if (body_seen && survival_->ThirdPersonGrip(player_.PoseTransform(), ViewCamera(true), hand)) {
+                player_.right_hand_target = hand;
+                player_.right_grip = 1.0f;
+            } else {
+                player_.right_hand_target.reset();
+                player_.right_grip = 0.0f;
+            }
+            glm::mat4 chest_light(1.0f);
+            const bool chest_held = body_seen && survival_->ChestLight(chest_light) && survival_->SupportFingers();
+            player_.left_grip = chest_held ? 1.0f : 0.0f;
+            player_.SetFingerShapes(chest_held ? survival_->SupportFingers() : std::nullopt, survival_->GripFingers());
+        } else if (street_walk_ || house_sprint_ || street_speed_ > 1.001f) {
+            UpdateStreetSprint(dt, input);
         }
         while (previous_foot_steps_ < player_.foot_steps) {
             ++previous_foot_steps_;
@@ -407,10 +487,18 @@ void Game::CollectDraws(std::vector<DrawItem>& out) {
         stages_.CollectDraws(draws_);
         draw_generation_ = stages_.Generation();
     }
-    out.insert(out.end(), draws_.begin(), draws_.end());
+    if (street_walk_ && house_) {
+        std::copy_if(draws_.begin(), draws_.end(), std::back_inserter(out), [&](const DrawItem& d) { return !house_->Hides(d); });
+    } else {
+        out.insert(out.end(), draws_.begin(), draws_.end());
+    }
     objects_.CollectDraws(out);
     demos_.CollectDraws(out);
     AddMirrorBody(out);
+    if (street_walk_ && house_) house_->AddDraws(out);
+    if (survival_ && survival_->Active()) {
+        survival_->AddDraws(out, ViewCamera(true));
+    }
     if (!mockup_draws_.empty()) {
         static const std::vector<glm::mat4> kBindPose(256, glm::mat4(1.0f));
         for (const auto& [mesh, world] : mockup_draws_) {
@@ -432,8 +520,11 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
         const char* off = std::getenv("PT_MIRROR_BODY");
         return off && *off == '0';
     }();
+    if (!third_person_ && !FreeView()) reach_snap_ = true;
+    if (paused_ && survival_ && survival_->Active() && FreeView()) survival_->AimChestLamp(0.0f);
     const bool third_person_transition = third_person_ && !FreeView() && third_person_weight_ > 0.0f && player_.handy_light.enable;
     if (floor_.CurrentFloorName() == "ending" && !street_walk_) return;
+    if (survival_ && survival_->Waking()) return;
     if (body_off || !player_.spawned || (!BodyShown() && !third_person_transition && ((!traced_body_ && (!effects_.mirror_capture || mirror_viewport_bits_ == 0)) ||
         demos_.ControlsPlayer() || nazo_.IsPeepholeTheaterActive()))) {
         static const bool trace = std::getenv("PT_MIRROR_TRACE") != nullptr;
@@ -508,13 +599,184 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                 grip_hand[3] += glm::vec4(away / d * (kHeadClear - d), 0.0f);
             }
         }
+        if (glm::vec3 support, bore; survival_ && survival_->Active() && survival_->ThirdPersonSupport(ViewCamera(true), support, bore)) {
+            const glm::vec3 hollow_point(grip_hand * glm::vec4(kFist, 1.0f));
+            const glm::quat along(glm::normalize(dir), bore);
+            grip_hand = glm::translate(glm::mat4(1.0f), support) * glm::mat4_cast(along) * glm::translate(glm::mat4(1.0f), -hollow_point) * grip_hand;
+        }
         target_model = glm::inverse(body) * grip_hand;
         gripped = true;
         return true;
     };
-    const bool grip = (DetachedView() || third_person_transition) && player_.handy_light.enable && glm::length(light_aim_) > 0.0f;
-    if (!entry || !entry->mesh || !player_.BodySkin(help.get(), player_skin_, player_.handy_light.enable, sim.get(), grip ? &reach : nullptr)) {
+    if (survival_ && survival_->Active() && FreeView() && !third_person_) {
+        glm::mat4 hand(1.0f);
+        if (survival_->ThirdPersonGrip(player_.PoseTransform(), ViewCamera(true), hand)) {
+            player_.right_hand_target = hand;
+            player_.right_grip = 1.0f;
+        }
+        glm::mat4 lamp(1.0f);
+        const bool chest_held = survival_->ChestLight(lamp) && survival_->SupportFingers();
+        player_.left_grip = chest_held ? 1.0f : 0.0f;
+        player_.SetFingerShapes(chest_held ? survival_->SupportFingers() : std::nullopt, survival_->GripFingers());
+        player_.SetRun(survival_->BodyRunWeight(), survival_->BodyRunArms());
+        const glm::mat4 pose = player_.PoseTransform();
+        const float pose_yaw = std::atan2(pose[2].x, pose[2].z);
+        const float view_yaw_off = std::remainder(player_.CameraFoxYaw() - pose_yaw, 6.2831853f);
+        const float view_pitch = player_.MakeCamera().pitch;
+        player_.SetAim(survival_->ThirdPersonAim(), view_pitch, view_yaw_off);
+        player_.SetHeadLook(view_yaw_off, view_pitch);
+        player_.SetSteady(survival_->ThirdPersonSteady(), survival_->ThirdPersonCarry());
+        float long_gun = 0.0f, recoil = 0.0f;
+        std::optional<glm::vec3> left_elbow, right_elbow;
+        float right_share = 1.0f;
+        survival_->ThirdPersonStance(long_gun, recoil, left_elbow, right_elbow, right_share);
+        player_.SetAimStance(long_gun, recoil);
+        player_.SetElbowHints(left_elbow, right_elbow, right_share);
+        player_.SetMeleeBody(survival_->MeleeBody());
+    }
+    glm::mat4 chest_light(1.0f);
+    const bool chest = survival_ && survival_->Active() && survival_->ChestLight(chest_light);
+    const PlayerBody::HandReach support = [&](const glm::mat4&, glm::mat4& target_model) {
+        glm::mat4 hand(1.0f);
+        if (!survival_->ThirdPersonLeftHand(ViewCamera(true), hand)) return false;
+        target_model = glm::inverse(player_.PoseTransform()) * hand;
+        return true;
+    };
+    const bool grip = !chest && (DetachedView() || third_person_transition) && player_.handy_light.enable && glm::length(light_aim_) > 0.0f;
+    const bool eased_reach = chest && (third_person_ || FreeView());
+    if (eased_reach && reach_snap_) player_.SnapReach();
+    if (eased_reach) reach_snap_ = false;
+    player_.SetReachEase(eased_reach);
+    if (chest && (third_person_ || FreeView())) {
+        player_.SetStraightWrists(1.5f, survival_->ThirdPersonElbowSwing());
+        const auto stock = survival_->ThirdPersonStock(player_.PoseTransform(), ViewCamera(true));
+        player_.SetStockLine(stock ? std::optional(std::pair(stock->first, stock->second)) : std::nullopt, survival_->ThirdPersonStockDeep(), stock ? stock->comb : glm::vec3(0.0f), stock ? std::optional(std::pair(stock->fore_first, stock->fore_second)) : std::nullopt);
+    } else {
+        player_.SetStraightWrists(0.0f, 0.0f);
+        player_.SetStockLine(std::nullopt);
+    }
+    if (!entry || !entry->mesh ||
+        !player_.BodySkin(help.get(), player_skin_, player_.handy_light.enable && !chest, sim.get(), grip ? &reach : chest ? &support : nullptr)) {
         return;
+    }
+    if (static const char* const dump = std::getenv("PT_BODY_DUMP"); dump && survival_ && survival_->Active()) {
+        static float dumped_at = -1.0f;
+        static std::FILE* skins = nullptr;
+        if (!skins) {
+            skins = std::fopen(std::format("{}/skin.bin", dump).c_str(), "wb");
+            models_.GetRebuilt(file, "body dump", [&](MeshData& data) {
+                std::vector<bool> done(data.vertices.size(), false);
+                for (const SubMesh& m : data.submeshes) {
+                    for (uint32_t i = 0; i < m.index_count; ++i) {
+                        const size_t at = static_cast<size_t>(data.indices[m.first_index + i]) + static_cast<size_t>(m.vertex_offset);
+                        if (done[at] || m.material >= entry->materials.size()) continue;
+                        done[at] = true;
+                        survival_->FitBodyVertex(data.vertices[at], entry->materials[m.material]);
+                    }
+                }
+                if (std::FILE* f = std::fopen(std::format("{}/vertices.bin", dump).c_str(), "wb")) {
+                    std::fwrite(data.vertices.data(), sizeof(Vertex), data.vertices.size(), f);
+                    std::fclose(f);
+                }
+                if (std::FILE* f = std::fopen(std::format("{}/indices.bin", dump).c_str(), "wb")) {
+                    std::fwrite(data.indices.data(), sizeof(uint32_t), data.indices.size(), f);
+                    std::fclose(f);
+                }
+                if (std::FILE* f = std::fopen(std::format("{}/submeshes.txt", dump).c_str(), "w")) {
+                    for (const SubMesh& m : data.submeshes) {
+                        std::fprintf(f, "%u %u %d %u %u %u %s\n", m.first_index, m.index_count, m.vertex_offset, m.material, static_cast<unsigned>(m.group),
+                                     static_cast<unsigned>(m.layer), m.material < entry->materials.size() ? entry->materials[m.material].name.c_str() : "?");
+                    }
+                    std::fclose(f);
+                }
+            });
+            if (std::FILE* f = std::fopen(std::format("{}/bones.txt", dump).c_str(), "w")) {
+                for (size_t b = 0; b < entry->bone_names.size(); ++b) {
+                    const glm::vec3 at = b < entry->bone_bind_world.size() ? entry->bone_bind_world[b] : glm::vec3(0.0f);
+                    std::fprintf(f, "%zu %s %d %.4f %.4f %.4f\n", b, entry->bone_names[b].c_str(), b < entry->bone_parents.size() ? entry->bone_parents[b] : -1, at.x, at.y, at.z);
+                }
+                std::fclose(f);
+            }
+        }
+        const float t = survival_->Hud().run_seconds;
+        if (skins && t != dumped_at) {
+            dumped_at = t;
+            const uint32_t n = static_cast<uint32_t>(player_skin_.size());
+            std::fwrite(&t, sizeof(t), 1, skins);
+            std::fwrite(&n, sizeof(n), 1, skins);
+            std::fwrite(player_skin_.data(), sizeof(glm::mat4), n, skins);
+            std::fflush(skins);
+            static std::FILE* guns = std::fopen(std::format("{}/gun.bin", dump).c_str(), "wb");
+            if (guns) {
+                const glm::mat4 gun = glm::inverse(player_.PoseTransform()) * survival_->WeaponTransformFor(ViewCamera(true));
+                glm::vec3 lo(0.0f), hi(0.0f);
+                survival_->HeldGunBounds(lo, hi);
+                std::fwrite(&t, sizeof(t), 1, guns);
+                std::fwrite(&gun, sizeof(gun), 1, guns);
+                std::fwrite(&lo, sizeof(lo), 1, guns);
+                std::fwrite(&hi, sizeof(hi), 1, guns);
+                std::fflush(guns);
+            }
+        }
+    }
+    if (static const bool motion = std::getenv("PT_BODY_MOTION") != nullptr; motion && ((survival_ && survival_->Active()) || third_person_)) {
+        const auto fields = [](const glm::mat4& m) {
+            const glm::quat q = glm::normalize(glm::quat_cast(glm::mat3(m)));
+            return std::format("{:.5f},{:.5f},{:.5f},{:.5f},{:.5f},{:.5f},{:.5f}", m[3].x, m[3].y, m[3].z, q.w, q.x, q.y, q.z);
+        };
+        const glm::mat4 pose = player_.PoseTransform();
+        const bool night = survival_ && survival_->Active();
+        std::string text = std::format("body motion: {:.5f} {} body {}", night ? survival_->Hud().run_seconds : static_cast<float>(time_), player_.DescribeDrawPose().substr(0, 24), fields(pose));
+        for (const char* name : {"SKL_000_WAIST", "SKL_002_CHEST", "SKL_004_HEAD", "SKL_012_LFARM", "SKL_013_LHAND", "SKL_022_RFARM", "SKL_023_RHAND", "SKL_031_LLEG",
+                                 "SKL_032_LFOOT", "SKL_041_RLEG", "SKL_042_RFOOT", "SKL_631_JAKET_SIM", "SKL_603_JAKET_SIM"}) {
+            if (glm::mat4 bone(1.0f); player_.BoneModel(name, bone)) text += std::format(" {} {}", name + 8, fields(bone));
+        }
+        if (night) text += std::format(" GUN {}", fields(glm::inverse(pose) * survival_->WeaponTransformFor(ViewCamera(true))));
+        text += std::format(" FEET {},{}", player_.DrawnFootState(0), player_.DrawnFootState(1));
+        text += std::format(" LAG {:.4f}", player_.HipsLag());
+        text += std::format(" HOLD {},{} RIG {}", player_.DrawnHold(0), player_.DrawnHold(1), player_.DrawnHaveFeet() ? 1 : 0);
+        LogInfo("{}", text);
+    }
+    if (static const bool reach_log = std::getenv("PT_SURVIVAL_REACH_LOG") != nullptr; reach_log && chest && frame_ % 30 == 0) {
+        glm::mat4 hand_model(1.0f), target(1.0f);
+        if (player_.BoneModel("SKL_013_LHAND", hand_model) && survival_->ThirdPersonLeftHand(ViewCamera(true), target)) {
+            glm::mat4 shoulder(1.0f);
+            player_.BoneModel("SKL_011_LUARM", shoulder);
+            const glm::vec3 at(player_.PoseTransform() * hand_model[3]);
+            const glm::vec3 from(player_.PoseTransform() * shoulder[3]);
+            LogInfo("survival reach: left hand off {:.3f} m, target {:.3f} m from the shoulder", glm::distance(at, glm::vec3(target[3])),
+                    glm::distance(from, glm::vec3(target[3])));
+            std::string text;
+            for (const char* name : {"SKL_103_LF12", "SKL_106_LF23", "SKL_109_LF33", "SKL_113_LF43", "SKL_116_LF53"}) {
+                if (glm::mat4 bone(1.0f); player_.BoneModel(name, bone)) {
+                    const glm::vec3 p(glm::inverse(hand_model) * bone[3]);
+                    text += std::format(" {} ({:.4f} {:.4f} {:.4f})", name + 8, p.x, p.y, p.z);
+                }
+            }
+            LogInfo("survival reach: left fingers{}", text);
+            if (glm::mat4 right_model(1.0f), grip(1.0f); player_.BoneModel("SKL_023_RHAND", right_model) &&
+                                                         survival_->ThirdPersonGrip(player_.PoseTransform(), ViewCamera(true), grip)) {
+                std::string right_text;
+                for (const char* name : {"SKL_203_RF12", "SKL_206_RF23", "SKL_209_RF33", "SKL_213_RF43", "SKL_216_RF53"}) {
+                    if (glm::mat4 bone(1.0f); player_.BoneModel(name, bone)) {
+                        const glm::vec3 p(glm::inverse(right_model) * bone[3]);
+                        right_text += std::format(" {} ({:.4f} {:.4f} {:.4f})", name + 8, p.x, p.y, p.z);
+                    }
+                }
+                LogInfo("survival reach: right hand off {:.3f} m, fingers{}", glm::distance(glm::vec3(right_model[3]), glm::vec3(grip[3])), right_text);
+            }
+            const glm::mat4 gun = survival_->WeaponTransformFor(ViewCamera(true));
+            if (glm::mat4 head(1.0f); player_.BoneModel("SKL_004_HEAD", head)) {
+                const glm::mat4 to_gun = glm::inverse(gun) * player_.PoseTransform() * head;
+                std::string points;
+                for (const glm::vec3 local : {glm::vec3(0.0f), glm::vec3(-0.032f, 0.06f, 0.06f), glm::vec3(0.0f, 0.02f, 0.1f), glm::vec3(0.0f, -0.04f, 0.08f),
+                                              glm::vec3(-0.06f, 0.0f, 0.05f), glm::vec3(0.06f, 0.0f, 0.05f)}) {
+                    const glm::vec3 p(to_gun * glm::vec4(local, 1.0f));
+                    points += std::format(" ({:.3f} {:.3f} {:.3f})", p.x, p.y, p.z);
+                }
+                LogInfo("survival reach: head in the gun (origin, eye, +z 10 cm, chin, -x, +x){}", points);
+            }
+        }
     }
     if (gripped) {
         glm::mat4 hand_model;
@@ -538,7 +800,7 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                 LogInfo("grip: prop mid ({:.3f} {:.3f} {:.3f}) axis ({:.3f} {:.3f} {:.3f}){}", c.x, c.y, c.z, axis.x, axis.y, axis.z, text);
             }
         }
-        handy_lens_ = glm::vec3(grip_prop * glm::vec4(0.0f, 0.0f, 0.12f, 1.0f));
+        handy_lens_ = glm::vec3(grip_prop * glm::vec4(0.0f, 0.0f, 0.130f, 1.0f));
         handy_lens_valid_ = true;
     }
     static const bool feet_trace = std::getenv("PT_THIRD_TRACE") != nullptr;
@@ -554,20 +816,37 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     }
     DrawItem item;
     item.mesh = entry->mesh.get();
+    if (survival_ && survival_->Active()) {
+        if (const GpuMesh* fitted = survival_->FittedBody()) item.mesh = fitted;
+    }
     item.transform = player_.PoseTransform();
     item.skin = player_skin_;
     item.hidden_meshes = HiddenMeshes(*item.mesh, demos_.PlayerDefaultHidden());
     item.hidden_views = BodyShown() ? 0u : 1u;
+    if (!chest && (DetachedView() || third_person_transition) && player_.handy_light.enable) {
+        item.handy_shadowless = true;
+        item.light_fitting = kHandyLightFitting;
+    }
+    item.turns_with_view = survival_ && survival_->Active();
     out.push_back(item);
+    if (survival_ && survival_->Active()) {
+        if (const GpuMesh* shirt = survival_->FittedShirt()) {
+            DrawItem shirt_item = item;
+            shirt_item.mesh = shirt;
+            shirt_item.hidden_meshes = HiddenMeshes(*shirt, demos_.PlayerDefaultHidden());
+            shirt_item.tint = glm::vec4(0.62f, 0.62f, 0.63f, 1.0f);
+            out.push_back(shirt_item);
+        }
+    }
     static constexpr const char* kHandyModel = "/Assets/sh/environ/object/shsb/light/shsb_lght005/scenes/shsb_lght005.fmdl";
     static const bool handy_model_hidden = std::getenv("PT_HANDY_MODEL_HIDE") != nullptr;
-    if (!handy_model_hidden && player_.handy_light.enable && glm::length(handy_direction_) > 0.5f) {
+    if (!handy_model_hidden && !chest && player_.handy_light.enable && glm::length(handy_direction_) > 0.5f) {
         if (!handy_model_readable_ && frame_ >= handy_model_probe_frame_) {
             handy_model_readable_ = vfs_.ReadFile(kHandyModel).has_value();
             handy_model_probe_frame_ = frame_ + 30;
         }
         if (const ModelEntry* light = handy_model_readable_ ? models_.Get(kHandyModel) : nullptr; light && light->mesh) {
-            if (std::getenv("PT_HANDY_BONES") != nullptr) {
+            if (HandyBonesTrace()) {
                 LogInfo("handy bones: flash point at world ({:.3f} {:.3f} {:.3f}) beam ({:.3f} {:.3f} {:.3f})", handy_origin_.x, handy_origin_.y, handy_origin_.z, handy_direction_.x, handy_direction_.y, handy_direction_.z);
             }
             static const glm::vec3 turn = [] {
@@ -592,6 +871,8 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
             prop.mesh = light->mesh.get();
             prop.transform = frame;
             prop.hidden_views = item.hidden_views;
+            prop.handy_shadowless = true;
+            prop.light_fitting = kHandyLightFitting;
             out.push_back(prop);
             static const bool lens_hidden = std::getenv("PT_HANDY_LENS_HIDE") != nullptr;
             if (!lens_hidden) {
@@ -638,6 +919,25 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                     lens_mat.albedo_factor = glm::vec4(1.0f, 0.96f, 0.88f, 1.0f);
                     lens_mat.params = glm::vec4(0.0f, 4.0f, 0.0f, 0.0f);
                     handy_lens_material_ = static_cast<int32_t>(models_.Textures().AddMaterial(lens_mat));
+                    handy_lens_gpu_ = lens_mat;
+                }
+                if (handy_lens_material_ >= 0) {
+                    static const float lens_gain = [] { const char* g = std::getenv("PT_HANDY_LENS_GAIN"); return g ? static_cast<float>(std::atof(g)) : 1.0f; }();
+                    const glm::vec3 radiance = handy_lens_radiance_ * lens_gain;
+                    const float strongest = std::max({radiance.r, radiance.g, radiance.b});
+                    if (strongest > 0.0f) {
+                        MaterialGpu lens_mat = handy_lens_gpu_;
+                        lens_mat.albedo_factor = glm::vec4(radiance / strongest, 1.0f);
+                        lens_mat.params.y = strongest;
+                        if (std::abs(lens_mat.params.y - handy_lens_gpu_.params.y) > 1.0e-3f * strongest ||
+                            glm::any(glm::greaterThan(glm::abs(glm::vec3(lens_mat.albedo_factor) - glm::vec3(handy_lens_gpu_.albedo_factor)), glm::vec3(1.0e-3f)))) {
+                            models_.Textures().UpdateMaterial(static_cast<uint32_t>(handy_lens_material_), lens_mat);
+                            if (handy_lens_gpu_.params.y <= 4.0f) {
+                                LogInfo("handy lens: radiance ({:.0f} {:.0f} {:.0f}) from the beam's intensity", radiance.r, radiance.g, radiance.b);
+                            }
+                            handy_lens_gpu_ = lens_mat;
+                        }
+                    }
                 }
                 if (handy_lens_mesh_ && handy_lens_material_ >= 0) {
                     DrawItem lens;
@@ -645,10 +945,12 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                     lens.transform = frame * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0012f, 0.1159f));
                     lens.material_override = handy_lens_material_;
                     lens.hidden_views = item.hidden_views;
+                    lens.handy_shadowless = true;
+                    lens.light_fitting = kHandyLightFitting;
                     out.push_back(lens);
                 }
             }
-            if (std::getenv("PT_HANDY_BONES") != nullptr) {
+            if (HandyBonesTrace()) {
                 glm::mat4 hand_model;
                 if (player_.BoneModel("SKL_013_LHAND", hand_model)) {
                     const glm::mat4 hand = player_.PoseTransform() * hand_model;
@@ -665,13 +967,87 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
     }
 }
 
+namespace {
+
+constexpr float kStandMaskRoll[50] = {0.13f,  0.07f,  0.02f,  -0.03f, -0.11f, -0.21f, -0.32f, -0.44f, -0.57f, -0.70f, -0.87f, -0.99f, -1.11f,
+                                      -1.19f, -1.20f, -1.18f, -1.15f, -1.09f, -1.03f, -0.94f, -0.82f, -0.72f, -0.61f, -0.48f, -0.31f, -0.17f,
+                                      -0.01f, 0.13f,  0.30f,  0.44f,  0.58f,  0.73f,  0.85f,  0.95f,  1.03f,  1.10f,  1.17f,  1.22f,  1.20f,
+                                      1.17f,  1.13f,  1.03f,  0.97f,  0.88f,  0.77f,  0.66f,  0.55f,  0.36f,  0.27f,  0.20f};
+constexpr float kWalkMaskRoll[36] = {-3.08f,  -5.90f, -8.86f, -11.58f, -14.09f, -16.41f, -18.26f, -19.17f, -19.27f, -18.68f, -17.62f, -16.15f,
+                                     -14.23f, -11.95f, -9.43f, -6.91f,  -4.27f,  -1.69f,  0.85f,   3.13f,   5.12f,   6.85f,   8.14f,   9.05f,
+                                     9.78f,   10.19f, 10.40f, 10.38f,  10.17f,  9.72f,   8.89f,   7.67f,   6.17f,   3.24f,   1.57f,   -0.45f};
+
+constexpr float kPickupMaskRoll[160] = {101.9f, 101.8f, 100.2f, 96.4f, 95.7f, 94.8f, 93.8f, 92.9f, 93.0f, 93.4f, 93.9f, 94.5f, 95.5f, 97.2f, 97.3f, 98.0f,
+                                         98.6f, 99.0f, 99.2f, 99.1f, 98.9f, 98.7f, 97.3f, 95.8f, 94.1f, 91.9f, 89.1f, 87.8f, 86.8f, 83.3f, 80.1f, 77.9f,
+                                         75.4f, 72.2f, 69.6f, 67.3f, 64.0f, 62.2f, 61.0f, 57.1f, 56.5f, 55.5f, 55.3f, 55.8f, 57.5f, 61.3f, 73.3f, 76.4f,
+                                         82.0f, 93.2f, 172.0f, 232.0f, 270.7f, 279.3f, 288.0f, 287.0f, 286.0f, 285.0f, 284.3f, 283.7f, 283.0f, 283.0f, 283.0f, 283.0f,
+                                         283.7f, 284.3f, 285.0f, 285.7f, 286.3f, 287.0f, 287.7f, 287.4f, 286.4f, 283.8f, 278.6f, 270.5f, 264.6f, 259.6f, 255.5f, 254.8f,
+                                         253.6f, 251.9f, 247.6f, 243.6f, 239.7f, 235.3f, 231.7f, 228.9f, 224.2f, 219.9f, 216.1f, 211.4f, 207.4f, 204.5f, 205.3f, 207.0f,
+                                         209.4f, 215.0f, 220.4f, 225.8f, 232.2f, 237.9f, 242.9f, 249.1f, 254.2f, 258.2f, 261.6f, 264.4f, 266.5f, 267.4f, 267.7f, 267.4f,
+                                         266.6f, 265.7f, 264.6f, 263.5f, 262.6f, 262.1f, 261.5f, 261.0f, 260.6f, 259.7f, 258.8f, 257.8f, 256.8f, 256.0f, 255.6f, 255.7f,
+                                         256.1f, 257.0f, 258.5f, 260.4f, 262.5f, 264.7f, 266.8f, 269.0f, 270.8f, 272.6f, 274.5f, 275.9f, 277.2f, 278.6f, 280.2f, 281.8f,
+                                         283.2f, 284.8f, 286.1f, 287.5f, 289.6f, 291.5f, 293.3f, 295.3f, 297.2f, 299.2f, 300.7f, 301.9f, 302.7f, 302.8f, 302.8f, 302.7f};
+
+float PickupMaskRoll(double frame) {
+    const float at = static_cast<float>(std::clamp(frame, 228.0, 546.0) - 228.0) * 0.5f;
+    const size_t i = std::min(static_cast<size_t>(at), std::size(kPickupMaskRoll) - 2);
+    const float t = std::min(at - static_cast<float>(i), 1.0f);
+    return kPickupMaskRoll[i] + (kPickupMaskRoll[i + 1] - kPickupMaskRoll[i]) * t;
+}
+
+template <size_t N>
+float ClipMaskRoll(const float (&table)[N], float frame) {
+    const float at = std::fmod(std::max(frame, 0.0f) * 0.5f, static_cast<float>(N));
+    const size_t i = static_cast<size_t>(at) % N;
+    const float t = at - std::floor(at);
+    return table[i] + (table[(i + 1) % N] - table[i]) * t;
+}
+
+}
+
 void Game::UpdateHandyTarget(float dt) {
+    {
+        const PlayerBody& body = player_.LogicBody();
+        const int key = static_cast<int>(body.ClipKind()) * 8 + body.Clip();
+        float clip_roll = handy_mask_roll_held_;
+        if (body.ClipKind() == PlayerBody::Kind::Node && body.Clip() == kClipStand) {
+            clip_roll = ClipMaskRoll(kStandMaskRoll, body.Frame());
+        } else if (body.ClipKind() == PlayerBody::Kind::Node && body.Clip() >= kClipFront && body.Clip() <= kClipLeft) {
+            clip_roll = ClipMaskRoll(kWalkMaskRoll, body.Frame());
+        }
+        if (key != handy_mask_clip_) {
+            handy_mask_roll_held_ = handy_mask_roll_;
+            handy_mask_clip_ = key;
+        }
+        handy_mask_roll_ = handy_mask_roll_held_ + (clip_roll - handy_mask_roll_held_) * std::clamp(body.Blend(), 0.0f, 1.0f);
+    }
+    if (dt > 0.0f) {
+        const glm::vec3 feet = player_.Feet();
+        const glm::vec2 step(feet.x - handy_breath_feet_.x, feet.z - handy_breath_feet_.z);
+        handy_breath_feet_ = feet;
+        const bool standing = glm::length(step) / dt < 0.15f;
+        if (player_.handy_light.enable) handy_breath_time_ = std::fmod(handy_breath_time_ + dt, 60.0f);
+        handy_breath_weight_ = std::clamp(handy_breath_weight_ + (standing ? dt : -dt) * 4.0f, 0.0f, 1.0f);
+    }
     constexpr glm::vec3 kRayOrigin{0.0f, 1.65f, 0.15f};
     constexpr float kRayLength = 10.0f;
     constexpr float kTargetKeep = 0.9375f;
     constexpr float kAimKeep = 0.32f;
     constexpr float kPoseBlendSeconds = 20.0f / 30.0f;
     const float pose_step = std::max(dt, 0.0f) / kPoseBlendSeconds;
+    constexpr double kPickupLast = 546.0;
+    if (const double pickup_frame = demos_.PlayFrame("gc_p00_030"); player_.handy_light.enable && pickup_frame >= 228.0) {
+        handy_pickup_frame_ = pickup_frame;
+        handy_pickup_roll_ = PickupMaskRoll(handy_pickup_frame_);
+        handy_pickup_weight_ = 1.0f;
+    } else if (player_.handy_light.enable && handy_pickup_frame_ >= 228.0 && handy_pickup_frame_ < kPickupLast) {
+        handy_pickup_frame_ = std::min(kPickupLast, handy_pickup_frame_ + static_cast<double>(std::max(dt, 0.0f)) * 60.0);
+        handy_pickup_roll_ = PickupMaskRoll(handy_pickup_frame_);
+        handy_pickup_weight_ = 1.0f;
+    } else {
+        handy_pickup_frame_ = -1.0;
+        handy_pickup_weight_ = std::max(0.0f, handy_pickup_weight_ - pose_step);
+    }
     const bool demo_camera = player_.handy_light.enable && demos_.HasActiveCamera();
     handy_demo_ = demo_camera ? 1.0f : std::max(0.0f, handy_demo_ - pose_step);
     if (demos_.IsPlaying("gc_p00_030")) {
@@ -748,7 +1124,7 @@ void Game::UpdateHandyReflection(float dt) {
     const Camera camera = detached_view_ && camera_override_ ? player_.MakeCamera() : GetCamera();
     glm::vec3 origin(0.0f);
     glm::vec3 direction(0.0f, 0.0f, 1.0f);
-    HandyLightPose(camera, light_aim_, handy_hold_, handy_demo_, origin, direction);
+    HandyLightPose(camera, light_aim_, handy_hold_, handy_demo_, origin, direction, nullptr, nullptr, HandyBreath());
     if (handy_pose_override_) {
         origin = handy_pose_override_->first;
         direction = handy_pose_override_->second;
@@ -784,7 +1160,7 @@ void Game::UpdateHandyReflection(float dt) {
     } else {
         normal_sum -= direction;
     }
-    if (std::getenv("PT_REFLECT_LOG")) {
+    if (ReflectLog()) {
         glm::vec3 from = origin;
         float left = outer;
         for (int n = 0; n < 8 && left > 0.0f; ++n) {
@@ -842,7 +1218,7 @@ void Game::UpdateHandyReflection(float dt) {
                         const glm::mat4 world = stage.ToWorld(f.WorldTransform(e));
                         const glm::vec3 local(glm::inverse(world) * glm::vec4(raw_hit, 1.0f));
                         const bool inside = std::abs(local.x) <= trap_extent && std::abs(local.y) <= trap_extent && std::abs(local.z) <= trap_extent;
-                        if (std::getenv("PT_REFLECT_LOG")) {
+                        if (ReflectLog()) {
                             LogInfo("reflect trap {} kind {} centre ({:.3f} {:.3f} {:.3f}) local ({:.2f} {:.2f} {:.2f}){}", f.GetString(e, "name"), f.GetInt(e, "trapKind"),
                                     world[3].x, world[3].y, world[3].z, local.x, local.y, local.z, inside ? " inside" : "");
                         }
@@ -879,7 +1255,7 @@ void Game::UpdateHandyReflection(float dt) {
         }
     }
     r.spot_share = std::clamp(r.spot_share + (kind0 ? 0.05f : -0.05f) * dt * 30.0f, 0.0f, 1.0f);
-    if (std::getenv("PT_REFLECT_LOG")) {
+    if (ReflectLog()) {
         LogInfo("reflect: hit ({:.3f} {:.3f} {:.3f}) weights {:.2f} {:.2f} spot share {:.2f}", position.x, position.y, position.z, r.first_weight,
                 r.second_weight, r.spot_share);
     }
@@ -948,6 +1324,8 @@ constexpr float kThirdCharacterHeight = 1.85f;
 constexpr float kThirdEnterSeconds = 0.6f;
 constexpr float kThirdLeaveSeconds = 0.25f;
 constexpr float kThirdShowBody = 0.35f;
+constexpr float kThirdPastHead = 0.4f;
+constexpr float kThirdBodyFrom = 0.58f;
 
 glm::vec3 LookForward(float yaw, float pitch) {
     return glm::vec3(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch));
@@ -978,6 +1356,13 @@ void Game::SetThirdPerson(bool on) {
     third_person_primed_ = false;
     third_person_blocked_ = false;
     LogInfo("third person: {}", on ? "on" : "off");
+}
+
+float Game::ThirdPersonBodyShare() const {
+    if (FreeView()) return BodyShown() ? 1.0f : 0.0f;
+    if (!third_person_ || !third_person_shown_) return 0.0f;
+    const float k = std::clamp((third_person_weight_ - kThirdBodyFrom) / (1.0f - kThirdBodyFrom), 0.0f, 1.0f);
+    return k * k * (3.0f - 2.0f * k);
 }
 
 glm::vec3 Game::ThirdPersonHead() const {
@@ -1018,6 +1403,67 @@ Camera Game::PlayerViewCamera() const {
 }
 
 Camera Game::ViewCamera(bool fov_offset) const {
+    Camera camera = ViewCameraBase(fov_offset);
+    if (survival_ && survival_->Active() && !camera_override_) {
+        camera.fov_y *= 1.0f + survival_->FovKick();
+        const glm::vec2 kick = survival_->ViewKick();
+        camera.pitch += kick.x;
+        camera.yaw += kick.y;
+        if (!third_person_) camera.position -= camera.Forward() * survival_->ViewPush();
+        if (!third_person_) {
+            const float running = survival_->RunBobWeight();
+            camera.position.y = run_eye_.Height(camera.position.y, running);
+            camera.roll = run_stride::SteadyEye::Roll(camera.roll, running);
+            const glm::vec4 bob = survival_->RunBob();
+            camera.position += camera.Right() * bob.x + glm::vec3(0.0f, bob.y, 0.0f);
+            camera.roll += bob.z;
+            camera.pitch += bob.w;
+        }
+        if (third_orbit_.z <= 0.0f) {
+            survival_->DeathCamera(camera);
+            if (survival_->WakingThirdPerson()) {
+                survival_->WakeCamera(camera);
+            }
+            if (survival_->Waking() || survival_->Hud().dead || survival_->Hud().caught) {
+                survival_->ClampCameraClear(camera);
+            }
+        }
+        const float shake = survival_->CameraShake();
+        if (shake > 0.0f) {
+            const float t = static_cast<float>(frame_) * (1.0f / 60.0f);
+            const float a = shake * shake * 0.018f;
+            camera.yaw += a * (std::sin(t * 37.0f) + 0.6f * std::sin(t * 23.3f + 1.7f));
+            camera.pitch += a * (std::sin(t * 41.0f + 0.4f) + 0.6f * std::sin(t * 19.1f));
+        }
+        if (!third_person_) {
+            const float dip = survival_->FlashClickCameraDip();
+            if (dip > 0.0f) {
+                camera.pitch -= 0.015f * dip;
+                camera.roll -= 0.014f * dip;
+            }
+        }
+    } else if ((street_walk_ || house_sprint_ || street_speed_ > 1.001f) && !camera_override_) {
+        const float run = StreetRunWeight();
+        camera.fov_y *= 1.0f + 0.1f * run;
+        if (!third_person_ && run > 0.0f) {
+            camera.position.y = run_eye_.Height(camera.position.y, run * street_bob_weight_);
+            camera.roll = run_stride::SteadyEye::Roll(camera.roll, run * street_bob_weight_);
+            const glm::vec4 bob = run_stride::Bob(street_bob_phase_, run * street_bob_weight_);
+            camera.position += camera.Right() * bob.x + glm::vec3(0.0f, bob.y, 0.0f);
+            camera.roll += bob.z;
+            camera.pitch += bob.w;
+        }
+    }
+    return camera;
+}
+
+glm::vec4 Game::ThirdOrbitFromEnvironment() {
+    glm::vec4 v(0.0f, 0.0f, 0.0f, 0.6f);
+    if (const char* e = std::getenv("PT_THIRD_ORBIT")) std::sscanf(e, "%f %f %f %f", &v.x, &v.y, &v.z, &v.w);
+    return v;
+}
+
+Camera Game::ViewCameraBase(bool fov_offset) const {
     Camera camera = GetCamera();
     float widen = fov_offset ? FovOffsetNow() : 0.0f;
     if (!third_person_ || camera_override_ || third_person_weight_ <= 0.0f) {
@@ -1028,7 +1474,17 @@ Camera Game::ViewCamera(bool fov_offset) const {
     const float s = w * w * (3.0f - 2.0f * w);
     WidenFov(camera, widen * (1.0f - s));
     const glm::vec3 aim = camera.position + camera.Forward() * third_person_aim_;
-    camera.position = glm::mix(camera.position, ThirdPersonPosition(camera.yaw, camera.pitch), s);
+    const glm::vec3 third = ThirdPersonPosition(camera.yaw, camera.pitch);
+    if (SurvivalActive()) {
+        const auto ease = [](float x) {
+            x = std::clamp(x, 0.0f, 1.0f);
+            return x * x * (3.0f - 2.0f * x);
+        };
+        const glm::vec3 behind = camera.Forward() * glm::dot(third - camera.position, camera.Forward());
+        camera.position += behind * ease((w - kThirdPastHead) / (1.0f - kThirdPastHead)) + (third - camera.position - behind) * ease(w / kThirdPastHead);
+    } else {
+        camera.position = glm::mix(camera.position, third, s);
+    }
     camera.roll *= 1.0f - s;
     const glm::vec3 to_aim = aim - camera.position;
     if (glm::length(to_aim) > 1.0e-3f) {
@@ -1038,20 +1494,25 @@ Camera Game::ViewCamera(bool fov_offset) const {
         camera.yaw += (yaw - camera.yaw) * s;
         camera.pitch += (pitch - camera.pitch) * s;
     }
-    static const glm::vec4 orbit = [] {
-        glm::vec4 v(0.0f, 0.0f, 0.0f, 0.6f);
-        if (const char* e = std::getenv("PT_THIRD_ORBIT")) std::sscanf(e, "%f %f %f %f", &v.x, &v.y, &v.z, &v.w);
-        return v;
-    }();
+    const glm::vec4& orbit = third_orbit_;
     if (orbit.z > 0.0f) {
         glm::vec3 target = glm::vec3(player_.PoseTransform()[3]) + glm::vec3(0.0f, orbit.w, 0.0f);
-        if (glm::mat4 hand; orbit.w < 0.0f && player_.BoneModel("SKL_013_LHAND", hand)) {
-            target = glm::vec3(player_.PoseTransform() * hand[3]);
+        if (orbit.w < 0.0f) {
+            static constexpr const char* kBones[] = {"SKL_013_LHAND", "SKL_023_RHAND", "SKL_004_HEAD", "SKL_000_WAIST", "SKL_002_CHEST", "SKL_032_LFOOT", "SKL_042_RFOOT"};
+            const size_t which = std::min(static_cast<size_t>(-orbit.w + 0.5f) - 1, std::size(kBones) - 1);
+            if (glm::mat4 bone; player_.BoneModel(kBones[which], bone)) target = glm::vec3(player_.PoseTransform() * bone[3]);
         }
-        camera.yaw = player_.yaw + glm::radians(orbit.x);
-        camera.pitch = -glm::radians(orbit.y);
+        static const bool world_orbit = std::getenv("PT_THIRD_ORBIT_WORLD") != nullptr;
+        glm::vec3 front = world_orbit ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(player_.PoseTransform() * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+        front = glm::length(glm::vec2(front.x, front.z)) > 1.0e-4f ? glm::normalize(glm::vec3(front.x, 0.0f, front.z)) : glm::vec3(0.0f, 0.0f, 1.0f);
+        const glm::vec3 right = glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f));
+        const float turn = glm::radians(orbit.x), tilt = glm::radians(orbit.y);
+        const glm::vec3 away = -front * std::cos(turn) + right * std::sin(turn);
+        camera.position = target + (away * std::cos(tilt) + glm::vec3(0.0f, std::sin(tilt), 0.0f)) * orbit.z;
+        const glm::vec3 look = glm::normalize(target - camera.position);
+        camera.yaw = std::atan2(-look.x, -look.z);
+        camera.pitch = std::asin(std::clamp(look.y, -1.0f, 1.0f));
         camera.roll = 0.0f;
-        camera.position = target - camera.Forward() * orbit.z;
     }
     return camera;
 }
@@ -1073,10 +1534,32 @@ Camera Game::ThirdPersonTurn(const Camera& before, const Camera& after) const {
     return out;
 }
 
+glm::mat4 Game::ThirdPersonBodyTurn(const Camera& before, const Camera& after) const {
+    if (!third_person_ || camera_override_ || third_person_weight_ <= 0.0f || !SurvivalActive()) {
+        return glm::mat4(1.0f);
+    }
+    const glm::vec3 f0 = LookForward(before.yaw, 0.0f);
+    const glm::vec3 f1 = LookForward(after.yaw, 0.0f);
+    const float angle = std::atan2(glm::cross(f0, f1).y, glm::dot(f0, f1));
+    const glm::vec3 head = ThirdPersonHead();
+    return glm::translate(glm::mat4(1.0f), head) * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.0f, 1.0f, 0.0f)) *
+           glm::translate(glm::mat4(1.0f), -head);
+}
+
 void Game::UpdateThirdPerson(float dt) {
     glm::vec3 demo_position(0.0f);
     glm::quat demo_rotation(1.0f, 0.0f, 0.0f, 0.0f);
     float demo_fov = 0.0f;
+    if (survival_ && survival_->WakingThirdPerson() && third_person_ && player_.spawned && !camera_override_) {
+        third_person_weight_ = 1.0f;
+        third_person_shown_ = true;
+        third_person_primed_ = true;
+        third_person_distance_ = kThirdDistance;
+        third_person_shoulder_ = kThirdShoulder;
+        third_person_lift_ = kThirdLift;
+        third_person_blocked_ = false;
+        return;
+    }
     if (!third_person_ || !player_.spawned || camera_override_ || demos_.ControlsPlayer() || demos_.CameraWorld(demo_position, demo_rotation, demo_fov) ||
         nazo_.IsPeepholeTheaterActive()) {
         third_person_weight_ = 0.0f;
@@ -1102,6 +1585,8 @@ void Game::UpdateThirdPerson(float dt) {
     const float pitch_share = view.pitch < 0.0f ? -view.pitch / Player::kPitchDown : view.pitch / Player::kPitchUp;
     float want = glm::mix(kThirdDistance, view.pitch < 0.0f ? kThirdDistanceDown : kThirdDistanceUp, std::clamp(pitch_share, 0.0f, 1.0f));
     want *= 1.0f - 0.3f * tight;
+    const float survival_aim = survival_ && survival_->Active() ? survival_->Hud().aim : 0.0f;
+    want *= 1.0f - 0.24f * survival_aim;
     {
         RayHit hit;
         float aim = kThirdAimFar;
@@ -1114,7 +1599,7 @@ void Game::UpdateThirdPerson(float dt) {
     }
     const float shoulder_room = std::max(0.0f, right_room - kThirdProbe);
     const float close = third_person_primed_ ? std::clamp((kThirdCloseFrom - third_person_distance_) / (kThirdCloseFrom - kThirdTooClose), 0.0f, 1.0f) : 0.0f;
-    const float shoulder_target = std::min(kThirdShoulder * (1.0f - 0.4f * tight) + kThirdCloseShoulder * close, shoulder_room);
+    const float shoulder_target = std::min(kThirdShoulder * (1.0f - 0.4f * tight) + kThirdCloseShoulder * close + 0.22f * survival_aim, shoulder_room);
     const float lift_room = std::max(0.0f, room(head, glm::vec3(0.0f, 1.0f, 0.0f), kThirdLift + kThirdProbe) - kThirdProbe);
     const float lift_target = std::min(kThirdLift, lift_room);
     const auto ease = [&](float& value, float target, float limit) {
@@ -1170,10 +1655,10 @@ void Game::UpdateThirdPerson(float dt) {
     }
     ease(third_person_distance_, free, free);
     third_person_primed_ = true;
-    const bool first_person = player_.zoom > 1.0001f || player_.zooming || third_person_blocked_;
+    const bool first_person = player_.zoom > 1.0001f || player_.zooming || third_person_blocked_ || (survival_ && survival_->AtSights());
     const float step = std::max(dt, 0.0f) / (first_person ? kThirdLeaveSeconds : kThirdEnterSeconds);
     third_person_weight_ = std::clamp(third_person_weight_ + (first_person ? -step : step), 0.0f, 1.0f);
-    third_person_shown_ = glm::distance(ViewCamera().position, view.position) > kThirdShowBody;
+    third_person_shown_ = glm::distance(ViewCamera().position, view.position) > kThirdShowBody && (!SurvivalActive() || third_person_weight_ > kThirdBodyFrom);
     static const bool trace = std::getenv("PT_THIRD_TRACE") != nullptr;
     if (trace) {
         LogInfo("third person: weight {:.2f} shown {} distance {:.2f} (want {:.2f} free {:.2f}) shoulder {:.2f} lift {:.2f} room {:.2f} {:.2f} tight {:.2f}{}",
@@ -1429,16 +1914,26 @@ bool Game::StartStreetWalk() {
                 walls.push_back(tri);
             }
         }
+        if (!house_) house_ = std::make_unique<StreetHouse>(*this);
+        if (house_->Ensure()) {
+            std::vector<GeomTriangle> house = house_->Walls();
+            walls.insert(walls.end(), house.begin(), house.end());
+        }
         stages_.PrepareWalkSurfaces(*street, std::move(walls));
     }
+    const bool night = browse_survival_ || survival_requested_;
+    const StreetHouse::Entry entry = night ? StreetHouse::Entry::Porch : StreetHouse::Entry::None;
+    if (house_) house_->Begin(entry);
     street_walk_ = true;
     street_pending_ = false;
     street_offer_ = StreetOffer::None;
+    if (std::exchange(browse_survival_, false)) RequestSurvival();
     player_.spawned = true;
     player_.handy_light.enable = false;
-    player_.Warp(kStreetSpawn, 0.0f);
+    const glm::vec3 spawn = house_ && entry != StreetHouse::Entry::None ? house_->EntryFeet() : kStreetSpawn;
+    player_.Warp(spawn, 0.0f);
     player_.pitch = player_.target_pitch = 0.0f;
-    street_safe_feet_ = kStreetSpawn;
+    street_safe_feet_ = spawn;
     if (audio_) {
         audio_->PostEvent("Set_state_in_game", nullptr);
     }
@@ -1450,23 +1945,42 @@ bool Game::StartStreetWalk() {
     return true;
 }
 
-void Game::ToggleStreetFlashlight() {
+void Game::ToggleStreetFlashlightImmediate() {
     if (!street_walk_ || !demos_.SceneryReady()) return;
     player_.handy_light.enable = !player_.handy_light.enable;
     if (audio_) audio_->PostEvent(player_.handy_light.enable ? "Play_sfx_light_on_01" : "Play_sfx_light_off_01", nullptr);
     LogInfo("street: flashlight {}", player_.handy_light.enable ? "on" : "off");
 }
 
+void Game::ToggleStreetFlashlight() {
+    if (!street_walk_ || !demos_.SceneryReady()) return;
+    if (survival_ && survival_->Active() && !survival_->Hud().dead && !survival_->Waking()) {
+        survival_->TriggerFlashlightClick();
+        return;
+    }
+    ToggleStreetFlashlightImmediate();
+}
+
 void Game::UpdateStreetWalk(float dt) {
     if (!street_walk_) {
         return;
     }
-    if (demos_.SceneryReady() && effects_.FadeShown().a > 0.5f && !effects_.IsFadeProcessing()) {
+    const bool survival_blackout = survival_ && survival_->Active() && (survival_->Hud().caught || survival_->Hud().dead);
+    if (!survival_blackout && demos_.SceneryReady() && effects_.FadeShown().a > 0.5f && !effects_.IsFadeProcessing()) {
         effects_.CallFadeIn(1.5f);
         LogInfo("street: scenery ready, fade in");
     }
     if (audio_ && demos_.SceneryReady() && (street_rain_ == 0 || !audio_->IsPlaying(street_rain_))) {
         street_rain_ = audio_->PostEvent(kStreetAmbience, nullptr);
+    }
+    if (house_ && demos_.SceneryReady()) house_->Update(dt);
+    if (survival_requested_ && demos_.SceneryReady()) {
+        survival_requested_ = false;
+        StartSurvival();
+    }
+    if (player_.controller.position.y < -0.1f && player_.controller.position.y > -5.0f) {
+        player_.controller.position.y = -0.02f;
+        player_.controller.vertical_velocity = 0.0f;
     }
     const glm::vec3 feet = player_.Feet();
     const bool inside = feet.x > kStreetMin.x && feet.x < kStreetMax.x && feet.z > kStreetMin.y && feet.z < kStreetMax.y;
@@ -1533,6 +2047,7 @@ void Game::SkipPortCredits() {
 }
 
 void Game::UpdateStreetOffer() {
+    if (street_offer_ == StreetOffer::Walk || street_offer_ == StreetOffer::Restart) ending_tier_ = -1;
     if (street_offer_ == StreetOffer::Walk) {
         street_offer_ = StreetOffer::None;
         if (!StartStreetWalk()) {
@@ -1550,10 +2065,114 @@ void Game::LeaveStreetWalk() {
     }
     LogInfo("street: left by the player, ending restart follows");
     EndStreetWalk();
+    browse_survival_ = false;
+    browse_night_door_ = false;
+    night_door_wait_ = -1.0f;
+    browse_loop_ = -1;
+    browse_waiting_entry_ = false;
+    browse_save_suppressed_ = false;
     controller_.SetStep(29);
 }
 
+SurvivalNight* Game::EnsureSurvival() {
+    if (!survival_) {
+        survival_ = std::make_unique<SurvivalNight>(*this);
+    }
+    return survival_.get();
+}
+
+void Game::StartSurvival() {
+    if (!street_walk_) {
+        return;
+    }
+    UnlockNight("survival night started");
+    if (!survival_) {
+        survival_ = std::make_unique<SurvivalNight>(*this);
+    }
+    survival_->Start(survival_best_, static_cast<SurvivalDifficulty>(std::clamp(survival_difficulty_, 0, 4)), std::exchange(survival_start_, SurvivalStart::Fresh));
+}
+
+void Game::StopSurvival() {
+    street_speed_ = 1.0f;
+    if (survival_ && survival_->Active()) {
+        survival_record_ = std::max(survival_record_, survival_->TakeRecord());
+        survival_->Stop();
+    }
+    player_.sprint_rate = 1.0f;
+    player_.sprint_stride = 1.0f;
+    player_.sprint_lean = 0.0f;
+    player_.right_hand_target.reset();
+    player_.right_grip = 0.0f;
+    player_.left_grip = 0.0f;
+    player_.SetRun(0.0f);
+    player_.SetStrideBlend(false);
+    player_.SetAim(0.0f, 0.0f, 0.0f);
+    player_.SetHeadLook(0.0f, 0.0f);
+    player_.SetAimStance(0.0f, 0.0f);
+    player_.SetSteady(0.0f);
+    player_.SetReachRate(12.0f);
+    player_.SetLunge(0.0f);
+    player_.SetMeleeBody(glm::vec3(0.0f));
+    player_.SetElbowHints(std::nullopt, std::nullopt);
+    player_.SetStraightWrists(0.0f, 0.0f);
+    player_.SetStockLine(std::nullopt);
+    player_.SetWristLimits({}, {});
+    player_.SetReachEase(false);
+    player_.SetFingerShapes(std::nullopt, std::nullopt);
+    reach_snap_ = true;
+}
+
+int Game::TakeSurvivalRecord() {
+    int record = std::exchange(survival_record_, 0);
+    if (survival_) {
+        record = std::max(record, survival_->TakeRecord());
+    }
+    survival_best_ = std::max(survival_best_, record);
+    return record;
+}
+
+void Game::UpdateStreetSprint(float dt, const InputState& input) {
+    const float heading = std::remainder(player_.StickHeading() - player_.FoxYaw(), 6.2831853f);
+    const bool forward = player_.StickMagnitude() > 0.45f && std::abs(heading) < 1.0f;
+    const bool allowed = street_walk_ || (house_sprint_ && !effects_.full_screen_blur && !demos_.ControlsPlayer() && !nazo_.IsPeepholeTheaterActive() &&
+                                          !player_.LeftStickLocked() && !player_.zooming && player_.zoom <= 1.0001f);
+    const bool sprinting = allowed && (input.survival_held & kSurvivalSprint) != 0 && forward;
+    if (sprinting != street_sprinting_) {
+        street_sprinting_ = sprinting;
+        LogInfo("{}: sprint {}", street_walk_ ? "street" : "house", sprinting ? "on" : "off");
+    }
+    const float target = sprinting ? run_stride::kSprintSpeed : 1.0f;
+    street_speed_ += (target - street_speed_) * std::min(1.0f, dt * (target > street_speed_ ? 3.0f : 5.0f));
+    if (!sprinting && std::abs(street_speed_ - 1.0f) < 1.0e-3f) street_speed_ = 1.0f;
+    player_.sprint_rate = run_stride::Cadence(street_speed_);
+    player_.sprint_stride = street_speed_ / player_.sprint_rate;
+    const float run = StreetRunWeight();
+    player_.sprint_lean = third_person_ ? 0.015f * run * std::min(1.0f, player_.StickMagnitude() * 1.5f) : 0.0f;
+    player_.SetRun(third_person_ || FreeView() ? run : 0.0f);
+    street_bob_weight_ += (std::min(1.0f, player_.StickMagnitude()) - street_bob_weight_) * std::min(1.0f, dt * 6.0f);
+    run_stride::AdvanceBob(street_bob_phase_, street_bob_steps_, player_.sounding_steps, player_.StickMagnitude(), player_.sprint_rate, dt);
+    run_eye_.Advance(player_.MakeCamera().position.y, dt);
+}
+
+void Game::ResetStreetSprint() {
+    street_speed_ = 1.0f;
+    street_sprinting_ = false;
+    street_bob_weight_ = 0.0f;
+    player_.sprint_rate = 1.0f;
+    player_.sprint_stride = 1.0f;
+    player_.sprint_lean = 0.0f;
+    player_.SetRun(0.0f);
+}
+
+float Game::StreetRunWeight() const {
+    return (street_walk_ || house_sprint_ || street_speed_ > 1.001f) ? run_stride::Weight(street_speed_) : 0.0f;
+}
+
 void Game::EndStreetWalk() {
+    StopSurvival();
+    ResetStreetSprint();
+    survival_requested_ = false;
+    survival_hub_request_ = false;
     const bool walking = street_walk_;
     street_walk_ = false;
     street_pending_ = false;
@@ -1829,12 +2448,28 @@ void Game::UpdateGamePlusDemos() {
     }
 }
 
-int Game::GamePlusTier() const {
-#if PT_GAMEPLUS
+static int ForcedGamePlusTier() {
     static const int forced = [] {
         const char* v = std::getenv("PT_GAMEPLUS_TIER");
         return v && *v ? std::atoi(v) : -1;
     }();
+    return forced;
+}
+
+bool Game::NightUnlocked() const {
+    return night_unlocked_ || SurvivalPlayed() || finishes_ > static_cast<uint32_t>(kTierSurvival);
+}
+
+void Game::UnlockNight(std::string_view why) {
+    if (night_unlocked_) return;
+    night_unlocked_ = true;
+    ++browse_unlock_generation_;
+    LogInfo("loop browser: the survival night's entry unlocks ({})", why);
+}
+
+int Game::GamePlusTier() const {
+#if PT_GAMEPLUS
+    const int forced = ForcedGamePlusTier();
     if (!game_plus_active_) return 0;
     if (forced >= 0) return forced;
     return game_plus_ ? static_cast<int>(finishes_) : 0;
@@ -2041,6 +2676,16 @@ void Game::LogCapturePose(const Camera& camera) {
             glm::degrees(camera.yaw), glm::degrees(camera.pitch), feet.x, feet.y, feet.z);
     LogInfo("capture route: goto {:.3f} {:.3f} 240 0.1", feet.x, feet.z);
     LogInfo("capture route: lookat {:.3f} {:.3f} {:.3f} 60", target.x, target.y, target.z);
+    const glm::vec3 forward = camera.Forward();
+    const glm::vec3 up = camera.Up();
+    LogInfo("capture camera: scamera {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} {:.9g} (roll {:.4f}, frame {})", camera.position.x,
+            camera.position.y, camera.position.z, forward.x, forward.y, forward.z, glm::degrees(camera.fov_y), up.x, up.y, up.z,
+            glm::degrees(camera.roll), frame_);
+    const glm::vec3 colour = effects_.handy_light_color;
+    std::string demos;
+    for (const PlayingDemo& demo : demos_.Playing()) demos += std::format("{}{} {:.0f}", demos.empty() ? "" : ", ", demo.demo_id, demo.frame);
+    LogInfo("capture state: handy light {} colour ({:.2f} {:.2f} {:.2f}), third person {}, demos [{}]", player_.handy_light.enable ? "on" : "off",
+            colour.r, colour.g, colour.b, third_person_ ? "on" : "off", demos);
 }
 
 void Game::NoteArchive(std::string_view key) {
@@ -2228,6 +2873,9 @@ bool Game::BrowseLoop(int index) {
         return false;
     }
     speedrun_.Abandon("loop browser pick");
+    browse_survival_ = false;
+    browse_night_door_ = false;
+    night_door_wait_ = -1.0f;
     browse_loop_ = index;
     browse_save_suppressed_ = true;
     browse_waiting_entry_ = true;
@@ -2238,6 +2886,28 @@ bool Game::BrowseLoop(int index) {
     browse_fade_wait_ = kBrowseFadeSeconds;
     effects_.CallStrongFadeOut(kBrowseFadeSeconds);
     LogInfo("loop browser: selected {} (pass {}); save writes suspended", kBrowseLoops[index].floor, kBrowseLoops[index].pass);
+    return true;
+}
+
+bool Game::FinishIntoNight() {
+    UnlockNight("a run of Game+ tier 4 finished into the night");
+    NoteEndingTier();
+    NoteGameFinished();
+    EnableGamePlus();
+    RequestSurvival();
+    if (StartStreetWalk()) {
+        LogInfo("ending: Game+ tier {} finished, no credits: out of the house onto the street into the night", ending_tier_);
+        return true;
+    }
+    survival_requested_ = false;
+    return false;
+}
+
+bool Game::BrowseSurvival() {
+    if (!BrowseLoop(BrowseIndexOf("f010", 1))) return false;
+    browse_survival_ = true;
+    browse_night_door_ = true;
+    LogInfo("loop browser: the survival night (difficulty {})", survival_difficulty_);
     return true;
 }
 
@@ -2354,8 +3024,21 @@ void Game::BrowseEnterHallway() {
                     const glm::vec3 feet = player_.Feet();
                     const glm::vec3 to_door(box.x - feet.x, 0.0f, box.z - feet.z);
                     const float fox_yaw = glm::length(to_door) > 1e-3f ? std::atan2(to_door.x, to_door.z) : player_.BodyFoxYaw();
-                    if (!std::getenv("PT_BROWSE_DOOR")) {
-                        player_.Warp(feet, fox_yaw);
+                    if (!std::getenv("PT_BROWSE_DOOR") || browse_night_door_) {
+                        if (browse_night_door_) {
+                            player_.Warp(feet, fox_yaw);
+                        } else {
+                            constexpr float kStandUpBack = 1.066f;
+                            constexpr float kStandUpPitch = -19.32f;
+                            const glm::vec3 away = glm::length(to_door) > 1e-3f ? -to_door / glm::length(to_door) : glm::vec3(0.0f);
+                            player_.pitch = player_.target_pitch = glm::radians(kStandUpPitch);
+                            player_.Warp(feet + away * kStandUpBack, fox_yaw);
+                        }
+                        if (browse_night_door_) {
+                            browse_arrived_ = true;
+                            LogInfo("loop browser: the night's start room, its door opens onto the street");
+                            return;
+                        }
                         LogInfo("loop browser: walk through the start room door");
                         return;
                     }
@@ -2373,6 +3056,29 @@ void Game::BrowseEnterHallway() {
         }
     }
     LogWarn("loop browser: start room has no exit door trap, door left to the player");
+}
+
+bool Game::OpenNightExit() {
+    if (!floor_.IsCurrentFloorName("ending") || BrowseSaveSuppressed() || GamePlusTier() < kTierSurvival || speedrun_.Enabled()) return false;
+    if (night_exit_wait_ < 0.0f) {
+        night_exit_wait_ = 0.7f;
+        UnlockNight("the last loop's door opens onto the night");
+        effects_.SetFadeColor(0, 0, 0, 255);
+        effects_.CallStrongFadeOut(0.6f);
+        LogInfo("ending: Game+ tier {}: the exit door opens onto the street night", GamePlusTier());
+    }
+    return true;
+}
+
+bool Game::OpenNightDoor() {
+    if (!browse_night_door_) return false;
+    if (night_door_wait_ < 0.0f) {
+        night_door_wait_ = 1.1f;
+        effects_.SetFadeColor(0, 0, 0, 255);
+        effects_.CallStrongFadeOut(0.9f);
+        LogInfo("loop browser: the start room's door opens onto the street");
+    }
+    return true;
 }
 
 void Game::RequestSave() {

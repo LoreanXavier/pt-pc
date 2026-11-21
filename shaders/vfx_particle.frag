@@ -80,7 +80,7 @@ vec3 PointLight(vec4 position, vec4 color) {
         return vec3(0.0);
     }
     vec3 delta = position.xyz - in_world;
-    float distance_to_light = max(length(delta), 0.01);
+    float distance_to_light = max(length(delta), max(color.a, 0.01));
     float distance_squared = distance_to_light * distance_to_light;
     float attenuation = max(0.0, 1.0 / distance_squared - distance_squared * position.w);
     return color.rgb * attenuation;
@@ -166,7 +166,7 @@ float FlareAlpha(float tex_alpha) {
         }
         a *= mix(1.0, in_luminance.x * push.frame.x / max(len, 1.0), min(in_luminance.z, 1.0));
     }
-    a = floor(clamp(a, 0.0, 1.0) * 255.0) / 255.0;
+    a = in_info.w != 0u ? clamp(a, 0.0, 1.0) : floor(clamp(a, 0.0, 1.0) * 255.0) / 255.0;
     vec2 pixel = in_params.xy / push.frame.zw;
     float tolerance = in_params.w;
     float v = clamp((SceneDepth(pixel + vec2(0.69, -3.94)) + tolerance - in_params.z) / tolerance, 0.0, 1.0);
@@ -174,6 +174,24 @@ float FlareAlpha(float tex_alpha) {
     v += clamp((SceneDepth(pixel + vec2(3.06, 2.57)) + tolerance - in_params.z) / tolerance, 0.0, 1.0);
     float r = 1.0 - v * 0.33325195;
     return (1.0 - r * r) * tex_alpha * a;
+}
+
+vec4 FlareTexture(vec2 uv, float lod, float reach) {
+    vec2 texel = reach / vec2(textureSize(PT_TEX2D(in_info.x), int(max(lod, 0.0))));
+    vec3 rgb = vec3(0.0);
+    float a = 0.0;
+    float total = 0.0;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            float w = float((2 - abs(i)) * (2 - abs(j)));
+            vec4 t = textureLod(PT_TEX2D(in_info.x), uv + vec2(float(i), float(j)) * texel, lod);
+            rgb += t.rgb * t.a * w;
+            a += t.a * w;
+            total += w;
+        }
+    }
+    vec2 edge = smoothstep(vec2(0.0), vec2(0.08), min(uv, 1.0 - uv));
+    return vec4(a > 1.0e-5 ? rgb / a : vec3(0.0), a / total * edge.x * edge.y);
 }
 
 void main() {
@@ -197,7 +215,10 @@ void main() {
     float alpha_far;
     float transmit = 0.0;
     if ((flags & kFlare) != 0u) {
-        rgb = tex.rgb * in_color.rgb;
+        if (in_info.w != 0u) {
+            tex = FlareTexture(base_uv, lit_lod, in_info.w == 2u ? 3.0 : 1.0);
+        }
+        rgb = tex.rgb * in_color.rgb * in_luminance.w;
         alpha = FlareAlpha(tex.a);
     } else if ((flags & kLiquid) != 0u) {
         vec3 nt;

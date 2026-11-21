@@ -1,7 +1,7 @@
 # The option screen and the PC settings with the mouse (1920 x 1080 pixels): a click on a camera row's value sets it, a click on PC
 # Settings opens them on their first tab, a click on a tab shows it and a click on the strip's left end button the tab before,
 # hovering moves the cursor, a click on a value changes it, a right click on a row steps its value back, a click on the footer's
-# Donate on Patreon uses it (headless: logged), a click on the page's Back returns to the option screen and a click on Back there
+# Support on Patreon uses it (headless: logged), a click on the page's Back returns to the option screen and a click on Back there
 # closes the menu.
 # pt.exe --headless --no-save --width 1920 --height 1080 --demo-rate 20 --frames 1500 --input-script tests/pad/pc_mouse.txt
 1150 menu

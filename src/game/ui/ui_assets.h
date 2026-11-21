@@ -72,12 +72,14 @@ public:
 
     UiFont* Font(UiFontType type, int language);
     UiFont* FontCovering(UiFontType type, int language, std::string_view text);
+    UiFont* HandFont(int language, std::string_view characters);
     const UiFontStyle* FontStyle(std::string_view name, int language) const;
     const UiFontStyle* FontStyleByHash(uint64_t hash, int language) const;
     const ui::LangFile* Options(int language);
     const ui::LangFile* System(int language);
     const SubtitleGeneratorSettings& Generator() const { return generator_; }
     uint32_t Texture(std::string_view path);
+    uint32_t MakeTexture(const std::string& name, uint32_t width, uint32_t height, std::span<const uint8_t> rgba);
     uint32_t LocalPreview(const std::string& path);
     void PreloadPreviews(const std::vector<std::string>& paths);
     uint32_t TextureAddressBits(uint32_t index) const;
@@ -99,6 +101,7 @@ private:
     std::array<std::unique_ptr<UiFont>, 6 + (kLanguageCount - 7) * 3> fonts_;
     std::array<std::chrono::steady_clock::time_point, 6 + (kLanguageCount - 7) * 3> font_retry_{};
     std::map<std::pair<int, int>, std::unique_ptr<UiFont>> covering_fonts_;
+    std::array<std::unique_ptr<UiFont>, kLanguageCount> hand_fonts_;
     std::vector<UiFontStyle> styles_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> options_;
     std::array<std::unique_ptr<ui::LangFile>, kLanguageCount> system_;

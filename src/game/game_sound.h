@@ -98,6 +98,8 @@ public:
     uint32_t PlayStream(std::vector<uint8_t> wem, const glm::vec3* position) override;
     uint32_t PlayStreamAs(std::vector<uint8_t> wem, std::string_view donor_event, const glm::vec3& position) override;
     uint32_t PlayMedia(std::shared_ptr<const audio::Media> media, const glm::vec3* position) override;
+    uint32_t PlayMediaAs(std::shared_ptr<const audio::Media> media, uint32_t donor_event_id, const glm::vec3& position) override;
+    std::shared_ptr<const audio::Media> FindMedia(uint32_t media_id) const override { return ready_ ? system_.FindMedia(media_id) : nullptr; }
     void SeekPlayingId(uint32_t playing_id, float seconds) override;
     void StopPlayingId(uint32_t playing_id, float fade_seconds) override;
     void SetState(std::string_view group, std::string_view state) override;

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "engine/core/log.h"
+#include "engine/fs/data_trace.h"
 
 namespace pt::fox2 {
 namespace {
@@ -68,6 +69,7 @@ uint32_t DataTypeSize(DataType type) {
 }
 
 const Property* Entity::Find(std::string_view name) const {
+    DataTraceProperty(trace_file, class_name, name);
     for (const Property& p : properties) {
         if (p.name == name) {
             return &p;
@@ -77,6 +79,7 @@ const Property* Entity::Find(std::string_view name) const {
 }
 
 const Property* Entity::FindDynamic(std::string_view name) const {
+    DataTraceProperty(trace_file, class_name, name);
     for (const Property& p : dynamic_properties) {
         if (p.name == name) {
             return &p;
@@ -161,6 +164,7 @@ bool DataSetFile::Load(std::string name, std::span<const uint8_t> data) {
         parse_properties(pos + static_offset, static_count, e.properties);
         parse_properties(pos + dynamic_offset, dynamic_count, e.dynamic_properties);
         by_address_[e.address] = entities_.size();
+        e.trace_file = DataTraceFileId(name_);
         entities_.push_back(std::move(e));
         pos += entity_size;
     }

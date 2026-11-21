@@ -37,6 +37,28 @@ enum PadRaw : uint32_t {
     kRawRight = 1u << 15,
 };
 
+enum SurvivalButton : uint32_t {
+    kSurvivalFire = 1u << 0,
+    kSurvivalAim = 1u << 1,
+    kSurvivalReload = 1u << 2,
+    kSurvivalSprint = 1u << 3,
+    kSurvivalSwap = 1u << 4,
+    kSurvivalMelee = 1u << 5,
+    kSurvivalFlare = 1u << 6,
+    kSurvivalUse = 1u << 7,
+    kSurvivalPick1 = 1u << 8,
+    kSurvivalPick2 = 1u << 9,
+    kSurvivalPick3 = 1u << 10,
+    kSurvivalInfo = 1u << 11,
+    kSurvivalSlot1 = 1u << 12,
+    kSurvivalSlot2 = 1u << 13,
+    kSurvivalSlot3 = 1u << 14,
+    kSurvivalSlot4 = 1u << 15,
+    kSurvivalSlot5 = 1u << 16,
+    kSurvivalSlot0 = 1u << 17,
+    kSurvivalSwapPrev = 1u << 18,
+};
+
 enum PadButton : uint32_t {
     kPadZoom = 1u << 0,
     kPadL1 = 1u << 1,
@@ -61,7 +83,12 @@ enum class KeyAction : uint8_t {
     PhotoSave, PhotoHide, FreeRise, FreeSink, FreeFast,
     MusicBack, MusicForward, MusicRestart, MusicLoop,
     MenuTabPrev, MenuTabNext, MenuDonate,
-    MenuUpdate
+    MenuUpdate,
+    MenuCrosshair,
+    MenuSurvival,
+    SurvivalFire, SurvivalReload, SurvivalSprint, SurvivalSwap,
+    SurvivalMelee, SurvivalFlare, SurvivalUse, SurvivalPick1, SurvivalPick2, SurvivalPick3,
+    SurvivalInfo
 };
 
 inline constexpr uint32_t kMenuKeyTabPrev = 1;
@@ -69,6 +96,11 @@ inline constexpr uint32_t kMenuKeyTabNext = 2;
 inline constexpr uint32_t kMenuKeyDonate = 4;
 inline constexpr uint32_t kMenuKeyFromE = 8;
 inline constexpr uint32_t kMenuKeyUpdate = 16;
+inline constexpr uint32_t kMenuKeyCrosshair = 32;
+inline constexpr uint32_t kMenuKeySurvival = 64;
+inline constexpr uint32_t kMenuKeyArmoryTab = 128;
+inline constexpr uint32_t kMenuKeyArmoryReplay = 256;
+inline constexpr uint32_t kMenuKeyArmoryApplyAll = 512;
 
 inline constexpr uint32_t kMusicPressBack = 1;
 inline constexpr uint32_t kMusicPressForward = 2;
@@ -83,6 +115,14 @@ struct KeyBinding {
 
 std::span<const KeyBinding> KeyBindings();
 const KeyBinding* FirstBinding(KeyAction action, bool keys_only = false);
+bool SetKeyBinding(KeyAction action, uint16_t scancode, uint8_t mouse);
+void ResetKeyBindings();
+const char* KeyActionIniName(KeyAction action);
+bool KeyActionFromIniName(std::string_view name, KeyAction& out);
+std::string KeyBindingToken(const KeyBinding& binding);
+bool ParseKeyBindingToken(std::string_view token, uint16_t& scancode, uint8_t& mouse);
+void ApplyKeyBindings(const std::map<std::string, std::string>& overrides);
+std::map<std::string, std::string> ExportKeyBindings();
 std::string KeyBindingName(const KeyBinding& binding);
 using KeyLayoutFunction = uint32_t (*)(uint16_t scancode);
 void SetKeyLayoutForTest(KeyLayoutFunction layout);
@@ -116,6 +156,7 @@ struct InputState {
     bool from_gamepad = false;
     bool left_stick_from_pad = false;
     bool click = false;
+    bool click_held = false;
     bool right_click = false;
     float wheel = 0.0f;
     bool gouge_pressed = false;
@@ -125,7 +166,10 @@ struct InputState {
     bool date_skip_pressed = false;
     uint32_t music_pressed = 0;
     uint32_t menu_keys_pressed = 0;
+    bool support_pressed = false;
     bool capture_pose_pressed = false;
+    uint32_t survival_held = 0;
+    uint32_t survival_pressed = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     PromptStyle prompts;
@@ -137,6 +181,8 @@ struct InputState {
 };
 
 void MergeFrameButtons(InputState& pending, const InputState& polled);
+
+void SpendTickInput(InputState& pending);
 
 struct InputSettings {
     float mouse_sensitivity = 0.0015f;
@@ -204,6 +250,7 @@ public:
     PromptStyle Prompts() const { return ShownPrompts(); }
     void InjectKey(uint32_t scancode, bool down);
     void InjectMouseButton(uint8_t button, bool down);
+    void ListenCaptureKeyEverywhere();
     void InjectMouseMotion(float dx, float dy, int polls);
     const GyroTracker& Gyro() const { return gyro_; }
     void StartGyroCalibration() { gyro_.StartCalibration(); }
@@ -212,6 +259,30 @@ public:
     float GyroCalibrationProgress() const { return gyro_.CalibrationProgress(); }
     bool AnyGyroPad() const;
     bool TakeGyroCalibrated(std::string& guid, std::array<float, 3>& offset);
+    void SetToggleModes(bool sprint_toggle, bool zoom_toggle) {
+        if (!sprint_toggle) sprint_toggled_ = false;
+        if (!zoom_toggle) zoom_toggled_ = false;
+        sprint_toggle_ = sprint_toggle;
+        zoom_toggle_ = zoom_toggle;
+    }
+    void BeginKeyCapture() {
+        capturing_key_ = true;
+        captured_ready_ = false;
+        captured_cancel_ = false;
+        captured_scancode_ = 0;
+        captured_mouse_ = 0;
+    }
+    bool CapturingKey() const { return capturing_key_; }
+    void CancelKeyCapture() { capturing_key_ = false; captured_ready_ = false; }
+    bool PollCapturedKey(uint16_t& scancode, uint8_t& mouse, bool& cancelled) {
+        if (!captured_ready_) return false;
+        scancode = captured_scancode_;
+        mouse = captured_mouse_;
+        cancelled = captured_cancel_;
+        captured_ready_ = false;
+        capturing_key_ = false;
+        return true;
+    }
 
     InputSettings settings;
 
@@ -225,6 +296,8 @@ private:
         uint32_t previous_gouge = 0;
         bool previous_voice_chord = false;
         bool trigger_rumble_supported = false;
+        mutable bool l2_down = false;
+        mutable bool r2_down = false;
         bool has_gyro = false;
         bool gyro_on = false;
         std::string guid;
@@ -255,7 +328,11 @@ private:
     uint32_t previous_raw_ = 0;
     bool previous_gouge_key_ = false;
     bool previous_house_key_ = false;
+    bool previous_support_key_ = false;
     uint32_t previous_menu_keys_ = 0;
+    uint32_t previous_survival_ = 0;
+    MouseUse previous_mouse_use_ = MouseUse::None;
+    uint32_t swallowed_survival_ = 0;
     bool pad_back_edge_ = false;
     bool previous_date_auto_key_ = false;
     bool previous_date_skip_key_ = false;
@@ -290,6 +367,17 @@ private:
     uint16_t trigger_rumble_sent_[2] = {0, 0};
     uint64_t trigger_rumble_sent_at_ = 0;
     uint64_t rumble_sent_at_ = 0;
+    bool sprint_toggle_ = false;
+    bool zoom_toggle_ = false;
+    bool sprint_toggled_ = false;
+    bool zoom_toggled_ = false;
+    bool prev_sprint_raw_ = false;
+    bool prev_zoom_raw_ = false;
+    bool capturing_key_ = false;
+    bool captured_ready_ = false;
+    bool captured_cancel_ = false;
+    uint16_t captured_scancode_ = 0;
+    uint8_t captured_mouse_ = 0;
 };
 
 }

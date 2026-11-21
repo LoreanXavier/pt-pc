@@ -44,20 +44,30 @@ void Envelope::Start(float in, float hold, float out) {
     out_duration = out;
 }
 
-void SubliminalEffect::Trigger(int index, bool flag, bool no_string, glm::vec2 position) {
-    if (index < 0 || index >= kImageCount) {
+void SubliminalEffect::Hold(float hold) {
+    string_.Start(0.001f, hold, 0.03f);
+    image_ = kPortImage;
+}
+
+void SubliminalEffect::Trigger(int index, bool flag, bool no_string, glm::vec2 position, float hold) {
+    if (index < 0 || index > kPortImage) {
         return;
     }
     noise_a_.Start(0.03f, 0.001f, 0.03f);
     string_.in_time = 0.0f;
     if (!no_string) {
-        string_.Start(0.03f, 3.0f, 0.03f);
+        string_.Start(0.03f, hold, 0.03f);
         position_ = position;
         image_ = index;
     } else {
         string_ = Envelope{};
     }
     flag_ = flag;
+    step_time_ = kOriginalStep;
+}
+
+void SubliminalEffect::Flash() {
+    noise_a_.Start(0.03f, 0.001f, 0.03f);
     step_time_ = kOriginalStep;
 }
 

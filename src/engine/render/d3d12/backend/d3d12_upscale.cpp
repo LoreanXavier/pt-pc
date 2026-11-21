@@ -76,6 +76,16 @@ const std::wstring& DataPath() {
     return path;
 }
 
+unsigned long InitNgxSafely(ID3D12Device* device, const wchar_t* data_path, const NVSDK_NGX_FeatureCommonInfo* common, NVSDK_NGX_Result& result) {
+    __try {
+        result = NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, data_path, device, common,
+                                                     NVSDK_NGX_Version_API);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+}
+
 NVSDK_NGX_FeatureCommonInfo FeatureInfo() {
     static const std::wstring feature_path = ExecutableDir().wstring();
     static const std::wstring nr_path = [] {
@@ -146,13 +156,23 @@ public:
     bool InitializeNeuralCore(std::string& reason) override {
         if (initialized_ && params_) return true;
         if (device_.Info().vendor_id != kNvidiaVendor) { reason = "needs an NVIDIA RTX GPU"; return false; }
+        if (init_fault_) {
+            reason = std::format("the NVIDIA driver faulted while DLSS started ({:#x}); DLSS is off until the game starts again", init_fault_);
+            return false;
+        }
         const NVSDK_NGX_FeatureCommonInfo common = FeatureInfo();
         ngx_device_ = ReShadeNative(NativeDevice(device_));
         if (ngx_device_.Get() != NativeDevice(device_)) {
             LogInfo("dlss d3d12: NGX uses ReShade's unwrapped device with native command lists");
         }
-        NVSDK_NGX_Result result = NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(),
-                                                                      ngx_device_.Get(), &common, NVSDK_NGX_Version_API);
+        NVSDK_NGX_Result result = NVSDK_NGX_Result_Fail;
+        init_fault_ = InitNgxSafely(ngx_device_.Get(), DataPath().c_str(), &common, result);
+        if (init_fault_) {
+            reason = std::format("the NVIDIA driver faulted while DLSS started ({:#x}); DLSS is off until the game starts again", init_fault_);
+            LogError("dlss d3d12: the NVIDIA driver faulted inside NVSDK_NGX_D3D12_Init_with_ProjectID (exception {:#x}); DLSS stays off "
+                     "for this session, the other upscalers work", init_fault_);
+            return false;
+        }
         if (NVSDK_NGX_FAILED(result)) {
             reason = "NGX did not initialise (driver without DLSS support?)";
             LogWarn("dlss d3d12: NVSDK_NGX_D3D12_Init_with_ProjectID failed ({:#x})", static_cast<uint32_t>(result));
@@ -391,6 +411,7 @@ private:
     gpu::Device& device_;
     Microsoft::WRL::ComPtr<ID3D12Device> ngx_device_;
     bool initialized_ = false;
+    unsigned long init_fault_ = 0;
     NVSDK_NGX_Parameter* params_ = nullptr;
     NVSDK_NGX_Handle* feature_ = nullptr;
     bool ray_reconstruction_ = false;
@@ -698,7 +719,9 @@ public:
 
     bool Create(VkCommandBuffer, const UpscaleCreate& create) override {
         Release();
-        if (create.ray_reconstruction && !rr_.Create(create.render)) return false;
+        const char* input_check = std::getenv("PT_FSR_RR_INPUT_CHECK");
+        const bool stand_in = input_check && input_check[0] == '2';
+        if ((create.ray_reconstruction || stand_in) && !rr_.Create(create.render)) return false;
         ffxCreateBackendDX12Desc backend{};
         backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
         backend.device = NativeDevice(device_);

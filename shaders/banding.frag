@@ -34,7 +34,8 @@ void main() {
         out_color = center;
         return;
     }
-    vec3 c = center.rgb;
+    bool hdr = HdrOutput();
+    vec3 c = hdr ? PostLight(center.rgb) : center.rgb;
     float k = 1.0;
     for (int level = 0; level < 8; ++level) {
         vec2 o = texel * k;
@@ -50,9 +51,10 @@ void main() {
         }
         vec3 sum = c;
         for (int i = 0; i < 4; ++i) {
-            sum += Img(source, SMP_LINEAR_CLAMP, taps[i]).rgb;
+            vec3 tap = Img(source, SMP_LINEAR_CLAMP, taps[i]).rgb;
+            sum += hdr ? PostLight(tap) : tap;
         }
         c = sum * 0.2;
     }
-    out_color = vec4(Saturate(c), 1.0);
+    out_color = vec4(hdr ? PostEncode(c) : Saturate(c), 1.0);
 }

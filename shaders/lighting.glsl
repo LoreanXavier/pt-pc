@@ -203,9 +203,9 @@ bool EvaluateLight(Light l, View v, Surface s, bool shadows, vec2 frag, out vec3
         if (c.w > 0.0) {
             vec2 uv = vec2(0.5 * c.x / c.w + 0.5, 1.0 - (0.5 * c.y / c.w + 0.5));
             if (l.info.w > 0) {
-                mask = textureLod(PT_TEX2D(uint(l.info.w - 1)), uv, 0.0).rgb;
+                mask = textureLod(PT_TEX2D(uint(l.info.w - 1)), LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb;
             } else {
-                mask = ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, uv, 0.0).rgb;
+                mask = ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb;
             }
         } else {
             mask = vec3(0.0);

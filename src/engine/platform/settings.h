@@ -21,6 +21,21 @@ struct AppSettings {
         bool hdr = false;
         int hdr_paper_white = 200;
         int hdr_peak = 0;
+        int hdr_ui_white = 0;
+        int hdr_reach = 100;
+        int hdr_gamma = 0;
+        bool hdr_keep_hue = false;
+        int hdr_colour_range = 2;
+        int hdr_exposure = 0;
+        int hdr_contrast = 100;
+        int hdr_highlights = 100;
+        int hdr_shadows = 100;
+        int hdr_saturation = 100;
+        int hdr_highlight_saturation = 100;
+        int hdr_blowout = 0;
+        bool hdr_see_through = true;
+        bool hdr_windows_switch = false;
+        bool hdr_windows_held = false;
         int letterbox = 0;
         std::string rendering_api = "vulkan";
         bool rendering_api_asked = false;
@@ -97,6 +112,15 @@ struct AppSettings {
         bool motion_blur = true;
         bool lens_distortion = true;
         bool lens_ghosts = true;
+        int bloom_strength = 100;
+        int flare_strength = 100;
+        int ghost_strength = 100;
+        bool camera_motion_blur = true;
+        int motion_blur_strength = 100;
+        int pt_floor_reflection = 100;
+        int pt_glass_reflection = 100;
+        int pt_reflection_softness = 50;
+        int film_grain_type = 0;
         bool deband = false;
         float film_grain = 1.0f;
         float clarity = 0.0f;
@@ -106,8 +130,25 @@ struct AppSettings {
     } graphics;
     struct Game {
         bool game_plus = true;
+        int survival_best_wave = 0;
+        int survival_difficulty = 1;
+        std::string survival_profile;
         bool operator==(const Game&) const = default;
     } game;
+    struct Crosshair {
+        int shape = 0;
+        int color = 0;
+        int length = 7;
+        int thickness = 3;
+        int gap = 3;
+        bool dynamic = true;
+        bool dot = true;
+        bool outline = true;
+        int opacity = 8;
+        bool hit_marker = true;
+        bool behind_sights = false;
+        bool operator==(const Crosshair&) const = default;
+    } crosshair;
     struct Extras {
         int speedrun = 0;
         bool livesplit = false;
@@ -123,8 +164,20 @@ struct AppSettings {
         std::map<std::string, std::array<float, 3>> gyro_bias;
         int fov_offset = 0;
         bool fps_counter = false;
+        int subtitle_size = 0;
+        int subtitle_bg = 0;
+        bool reduced_flashing = false;
+        bool house_sprint = false;
+        bool sprint_toggle = false;
+        bool zoom_toggle = false;
         bool operator==(const Accessibility&) const = default;
     } accessibility;
+    std::map<std::string, std::string> keys;
+    struct Ui {
+        bool support_prompts = true;
+        std::string last_version;
+        bool operator==(const Ui&) const = default;
+    } ui;
     struct Vr {
         bool enabled = false;
         int flashlight = 0;
@@ -141,6 +194,8 @@ struct AppSettings {
     struct Progress {
         uint32_t loops_reached = 0;
         bool game_finished = false;
+        bool night_unlocked = false;
+        bool survival_announced = false;
         std::string archive;
         int archive_backfill = 0;
         bool operator==(const Progress&) const = default;

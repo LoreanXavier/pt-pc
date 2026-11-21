@@ -37,6 +37,25 @@ int main() {
     assert(!IntelDriverCrashesFirstFrame(0x8086, Intel(101, 2127), false));
     assert(!IntelDriverCrashesFirstFrame(0x8086, 0, true));
 
+    auto dxgi = [](uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
+        WindowsDriverVersion v;
+        v.field[0] = a;
+        v.field[1] = b;
+        v.field[2] = c;
+        v.field[3] = d;
+        v.valid = true;
+        return v;
+    };
+    assert(!IntelDriverCrashesFirstFrame(0x8086, 0x194C27, true));
+    assert(IntelDriverCrashesFirstFrame(0x8086, 0x194C27, true, dxgi(30, 0, 101, 3111)));
+    assert(WindowsDriverName(dxgi(30, 0, 101, 3111)) == "30.0.101.3111");
+    assert(IntelDriverCrashesFirstFrame(0x8086, Intel(101, 2135), true, dxgi(31, 0, 101, 2135)));
+    assert(IntelDriverCrashesFirstFrame(0x8086, Intel(100, 9466), true, dxgi(27, 20, 100, 9466)));
+    assert(!IntelDriverCrashesFirstFrame(0x8086, Intel(101, 2145), true, dxgi(31, 0, 101, 2145)));
+    assert(!IntelDriverCrashesFirstFrame(0x8086, Intel(101, 5522), true, dxgi(31, 0, 101, 5522)));
+    assert(!IntelDriverCrashesFirstFrame(0x8086, Intel(101, 8993), true, dxgi(32, 0, 101, 8993)));
+    assert(!IntelDriverCrashesFirstFrame(0x10DE, 0x9B404000, true, dxgi(32, 0, 16, 2101)));
+
     const std::string_view english_title = pt::game::PcText("pc_intel_driver_title", 0);
     const std::string_view english = pt::game::PcText("pc_intel_driver_prompt", 0);
     assert(english_title == "Intel graphics driver");

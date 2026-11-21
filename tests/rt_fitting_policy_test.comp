@@ -16,4 +16,5 @@ void main() {
     results.values[9] = vec4(RtFittingAllows(0u,rays,1u,.01) ? 1.0 : 0.0,0,0,0);
     results.values[10] = vec4(RtFittingAllows(5u,rays,3u,.01) ? 1.0 : 0.0,0,0,0);
     results.values[11] = vec4(float(0u & 1u),float(1u & 1u),float(2u & 1u),float(3u & 1u));
+    results.values[12] = vec4(RtFittingAllows(49u,rays|(63u<<25u),3u,.01) ? 1.0 : 0.0,0,0,0);
 }

@@ -30,7 +30,8 @@ struct UnicodeFontState {
     ~UnicodeFontState() { ScriptFreeCache(&cache); if (dc) { SelectObject(dc, previous); DeleteObject(font); DeleteDC(dc); } }
 };
 namespace {
-constexpr const wchar_t* kBundledFonts[] = {L"NotoSans.ttf", L"NotoSansSC.ttf", L"NotoKufiArabic.ttf", L"NotoNaskhArabic.ttf"};
+constexpr const wchar_t* kBundledFonts[] = {L"NotoSans.ttf", L"NotoSansSC.ttf", L"NotoKufiArabic.ttf", L"NotoNaskhArabic.ttf",
+                                            L"MarckScript.ttf", L"Yomogi.ttf", L"LongCang.ttf", L"ArefRuqaa.ttf"};
 struct PrivateFonts {
     std::vector<std::wstring> paths;
     PrivateFonts() {

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/audio/audio_objects.h"
 #include "engine/audio/output_device.h"
 
 struct SDL_AudioStream;
@@ -27,7 +28,8 @@ public:
     AudioOutput(const AudioOutput&) = delete;
     AudioOutput& operator=(const AudioOutput&) = delete;
 
-    bool Open(uint32_t sample_rate, bool surround, RenderFunction render);
+    using ObjectRenderFunction = std::function<void(float* bed, uint32_t frames, AudioObjectMix& mix)>;
+    bool Open(uint32_t sample_rate, bool surround, RenderFunction render, ObjectRenderFunction object_render = nullptr);
     void Close();
     bool IsOpen() const { return stream_ != nullptr || spatial_ != nullptr; }
     uint32_t Channels() const { return channels_; }

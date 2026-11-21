@@ -488,7 +488,7 @@ uint32_t TextureManager::LoadFox(const QarArchive& qar, const std::string& path,
         if (!model_scope_) Pin(it->second);
         return it->second;
     }
-    if (mods::Active()) {
+    {
         if (const auto png = mods::ReadOverride(stem + ".png")) {
             const uint32_t index = LoadModImage(qar, key, stem, *png, raw);
             if (index != kWhite) {
@@ -664,6 +664,59 @@ uint32_t TextureManager::LoadModImage(const QarArchive& qar, const std::string& 
         LogInfo("mods: texture {} from a {} x {} PNG", stem, width, height);
     }
     return index;
+}
+
+void TextureManager::PreloadModImages(const QarArchive& qar, std::span<const std::string> paths) {
+    struct Job {
+        std::string key;
+        std::string stem;
+        std::vector<uint8_t> png;
+        bool srgb = true;
+        std::vector<std::vector<uint8_t>> levels;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool ok = false;
+        std::string error;
+    };
+    std::vector<Job> jobs;
+    std::unordered_set<std::string> seen;
+    for (const std::string& path : paths) {
+        const std::string stem = FtexStem(path);
+        if (stem.empty() || !seen.insert(stem).second || by_name_.contains(stem)) continue;
+        auto png = mods::ReadOverride(stem + ".png");
+        if (!png) continue;
+        FtexTexture original;
+        const bool has_original = LoadFtex(qar, stem, original);
+        if (has_original && (original.faces != 1 || original.depth > 1)) continue;
+        const bool data_name = stem.ends_with("_nrm") || stem.ends_with("_srm") || stem.ends_with("_lin");
+        Job j;
+        j.key = stem;
+        j.stem = stem;
+        j.png = std::move(*png);
+        j.srgb = has_original ? original.Srgb() : !data_name;
+        jobs.push_back(std::move(j));
+    }
+    if (jobs.size() < 2) return;
+    ParallelChunks(jobs.size(), jobs.size(), [&](size_t, size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            Job& j = jobs[i];
+            j.ok = ModImageLevels(j.png, j.srgb, j.levels, j.width, j.height, j.error);
+        }
+    });
+    for (Job& j : jobs) {
+        if (!j.ok) {
+            LogWarn("mods: {}.png ignored: {}", j.stem, j.error);
+            continue;
+        }
+        std::vector<TextureMip> mips;
+        for (uint32_t level = 0; level < j.levels.size(); ++level) {
+            mips.push_back({std::max(1u, j.width >> level), std::max(1u, j.height >> level), j.levels[level]});
+        }
+        const uint32_t idx = Create(j.key, j.srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
+        if (idx != kWhite) {
+            LogInfo("mods: texture {} from a {} x {} PNG", j.stem, j.width, j.height);
+        }
+    }
 }
 
 uint32_t TextureManager::LoadImageFile(const std::filesystem::path& path, const std::string& key) {

@@ -4,4 +4,5 @@ namespace pt {
 enum class GraphicsPreset { Low, Original, High, Ultra, Custom };
 void ApplyGraphicsPreset(AppSettings& settings, GraphicsPreset preset, bool ray_tracing_supported);
 GraphicsPreset DetectGraphicsPreset(const AppSettings& settings, bool ray_tracing_supported);
+void MoveOldGraphicsPreset(AppSettings& settings);
 }

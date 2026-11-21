@@ -270,6 +270,9 @@ public:
         if (named) {
             LogInfo("fsr: upscaler {} created for {}x{} -> {}x{}", created, create.render.width, create.render.height,
                     create.display.width, create.display.height);
+#ifndef _WIN32
+            LogShaderSet();
+#endif
         }
         debug_view_ = std::getenv("PT_UPSCALE_DEBUG") != nullptr;
         return true;
@@ -323,6 +326,24 @@ public:
     }
 
 private:
+#ifndef _WIN32
+    void LogShaderSet() const {
+        VkPhysicalDeviceSubgroupSizeControlProperties subgroups{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &subgroups};
+        vkGetPhysicalDeviceProperties2(ctx_.physical, &properties);
+        VkPhysicalDeviceShaderFloat16Int8Features float16{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &float16};
+        vkGetPhysicalDeviceFeatures2(ctx_.physical, &features);
+        const bool no_lut = std::getenv("PT_FSR_NO_LUT") != nullptr;
+        const bool no_fp16 = std::getenv("PT_FSR_NO_FP16") != nullptr;
+        const bool lut = subgroups.minSubgroupSize == 32 && subgroups.maxSubgroupSize == 64 && !no_lut;
+        const bool half = float16.shaderFloat16 && !no_fp16;
+        LogInfo("fsr: shader set: subgroups {}-{}, float16 {}: reprojection {}, {}-bit shaders{}{}", subgroups.minSubgroupSize,
+                subgroups.maxSubgroupSize, float16.shaderFloat16 ? "yes" : "no", lut ? "by the Lanczos table" : "computed",
+                half ? 16 : 32, no_lut ? " (PT_FSR_NO_LUT)" : "", no_fp16 ? " (PT_FSR_NO_FP16)" : "");
+    }
+#endif
+
     vk::Context& ctx_;
     int generation_ = 3;
     bool probed_ = false;

@@ -28,6 +28,7 @@ public:
     static std::span<const CaptionRule> Rules();
     static const CaptionRule* Find(uint32_t event);
     static CaptionSide SideOf(const glm::vec3& listener, const glm::vec3& forward, const glm::vec3& source);
+    void SkipNext(uint32_t event) { skip_ = event; }
 
     struct Line {
         const CaptionRule* rule = nullptr;
@@ -56,6 +57,7 @@ private:
     float pulse_strength_ = 0.0f;
     uint64_t posted_ = 0;
     bool log_posts_ = false;
+    uint32_t skip_ = 0;
 };
 
 }

@@ -806,7 +806,8 @@ void StageManager::PrepareWalkSurfaces(Stage& stage, std::vector<GeomTriangle> b
     size_t triangles = 0;
     for (Stage::CollisionPiece& piece : stage.collision) {
         const StageData* file = piece.entity ? stage.FileOf(piece.entity) : nullptr;
-        if (!piece.entity || piece.walk || (file && file->file->EntityName(*piece.entity).starts_with("shsb_leaf"))) {
+        const std::string_view entity = piece.entity && file ? file->file->EntityName(*piece.entity) : std::string_view();
+        if (!piece.entity || piece.walk || entity.starts_with("shsb_leaf") || entity == "shsb_carr001_0002") {
             continue;
         }
         auto it = walk_cache_.find(piece.geom_file);
@@ -831,6 +832,9 @@ void StageManager::PrepareWalkSurfaces(Stage& stage, std::vector<GeomTriangle> b
     std::erase_if(stage.collision, [](const Stage::CollisionPiece& piece) { return !piece.entity; });
     Stage::CollisionPiece walls;
     walls.triangles = std::move(bounds);
+    auto lines = std::make_shared<std::vector<GeomTriangle>>(walls.triangles);
+    for (GeomTriangle& t : *lines) t.tags |= 0x100u;
+    walls.lines = std::move(lines);
     stage.collision.push_back(std::move(walls));
     stage.walk_detail_surfaces = true;
     MarkCollisionDirty();

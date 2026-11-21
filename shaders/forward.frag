@@ -35,7 +35,8 @@ vec4 ForwardOut(vec3 encoded_premultiplied, float a) {
 }
 
 vec4 GammaSource(vec3 c, float a) {
-    return ForwardOut(min(SrgbEncode(max(c, vec3(0.0))) * a, vec3(1.0)), a);
+    vec3 encoded = SrgbEncode(max(c, vec3(0.0))) * a;
+    return ForwardOut(HdrOutput() ? encoded : min(encoded, vec3(1.0)), a);
 }
 
 void main() {
@@ -46,7 +47,8 @@ void main() {
     float e = v.exposure.x;
     if (m.kind == KIND_CONSTANT || m.kind == KIND_SKY) {
         vec4 t = Tex(m.albedo, in_uv0);
-        vec3 c = min(vec3(32.0), m.albedo_factor.rgb * t.rgb * m.params.y * e);
+        float hdr_gain = HdrOutput() && m.params.w > 1.0 ? m.params.w : 1.0;
+        vec3 c = min(vec3(32.0), m.albedo_factor.rgb * t.rgb * m.params.y * hdr_gain * e);
         float a = Saturate(m.albedo_factor.a * t.a * draw.tint.a);
         out_color = GammaSource(c, a);
         return;
@@ -83,14 +85,16 @@ void main() {
             clip.xy -= capture.jitter.xy * clip.w;
             float size = frame.mirror.y;
             vec2 pixel = clamp((clip.xy / clip.w * 0.5 + 0.5) * size, vec2(0.5), vec2(size - 0.5));
-            reflection = SrgbEncode(min(Img(IMG_MIRROR, SMP_LINEAR_CLAMP, pixel * v.viewport.zw).rgb, vec3(1.0)));
+            vec3 mirrored = Img(IMG_MIRROR, SMP_LINEAR_CLAMP, pixel * v.viewport.zw).rgb;
+            mirrored = HdrOutput() ? clamp(mirrored, vec3(0.0), vec3(6.0e4)) : min(mirrored, vec3(1.0));
+            reflection = SrgbEncode(mirrored);
             if ((flags & 8u) != 0u) {
-                reflection = min(Img(IMG_MIRROR, SMP_LINEAR_CLAMP, pixel * v.viewport.zw).rgb, vec3(1.0));
+                reflection = mirrored;
             }
         }
         float dither = ImgFetch(RES_DITHER, ivec2(gl_FragCoord.xy) & 7).z * 0.0078125;
         vec3 color = mix(reflection, lit, dirt.a) * (1.0 + dither) + dither;
-        out_color = ForwardOut(min(color, vec3(1.0)), 1.0);
+        out_color = ForwardOut(HdrOutput() ? max(color, vec3(0.0)) : min(color, vec3(1.0)), 1.0);
         return;
     }
     vec3 n = N;

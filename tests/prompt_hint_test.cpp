@@ -62,6 +62,23 @@ int main() {
             Check(opens == closes, "unbalanced {kb} blocks", language, key);
         }
     }
+    const pt::game::PromptLine fire_pad = ExpandPromptHint("{fire} {aim}", false);
+    Check(fire_pad.pictures.size() == 2 && fire_pad.pictures[0].button == PromptButton::R2 && fire_pad.pictures[1].button == PromptButton::L2, "a pad fires with R2 and aims with L2");
+    Check(ExpandPromptHint("{picks}", true).pictures.size() == 3 && ExpandPromptHint("{picks}", false).pictures.size() == 2, "the radio's offers: three keys, the D-pad");
+    const std::string_view night[] = {"pc_note_survival", "pc_survival_pickup_pipe", "pc_survival_hint_shove", "pc_survival_pickup_flare"};
+    const std::string_view named[] = {"R1", "L1", "R2", "L2", "L3", "Tab", "Shift", " V ", " G ", " E ", " Q", "1, 2, 3", "(View)"};
+    for (int language = 0; language < 14; ++language) {
+        for (const std::string_view key : night) {
+            const std::string text(pt::game::PcText(key, language));
+            Check(HasPromptTokens(text), "the night's line has a button token", language, key);
+            for (const std::string_view name : named) Check(text.find(name) == std::string::npos, "the night's line names a key in words", language, key);
+            for (const bool keyboard_device : {true, false}) {
+                const pt::game::PromptLine line = ExpandPromptHint(text, keyboard_device);
+                Check(line.text.find('{') == std::string::npos, "a token was left in the night's line", language, key);
+                Check(line.pictures.size() == (key == "pc_note_survival" ? (keyboard_device ? 12u : 11u) : 1u), "the night's line shows its pictures", language, key);
+            }
+        }
+    }
     std::printf("%s prompt hints\n", failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

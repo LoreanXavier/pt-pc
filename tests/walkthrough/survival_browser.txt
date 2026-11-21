@@ -1,0 +1,13 @@
+# the loop browser's survival night (docs/street-city.md): its pick at the nightmare difficulty starts in the start room on f000,
+# the player standing up from the floor; its door opens onto the street, not the hallway, the walk starts on the house's porch with
+# its door shutting behind him and the night begins (PT_SURVIVAL_AUTO playing it)
+sstep 15
+swait 30
+snight 3
+sbrowsed
+swait 60
+sshot {shots}/survival_browser_room.png
+sstick 0 1 420
+sstep 31
+swait 600
+sshot {shots}/survival_browser.png

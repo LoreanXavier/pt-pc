@@ -58,6 +58,10 @@ private:
         gpu::ImageViewHandle forward_scene;
         gpu::ImageViewHandle filter_scene;
         gpu::ImageViewHandle effects_scene;
+        uint64_t forward_destroys = 0;
+        uint64_t filter_destroys = 0;
+        uint64_t effects_destroys = 0;
+        uint64_t depth_only_destroys = 0;
         uint64_t uploaded = 0;
     };
 

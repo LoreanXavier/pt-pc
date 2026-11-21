@@ -175,8 +175,9 @@ void VkRayTracing::Shutdown() {
         if (slot.tlas) {
             vkDestroyAccelerationStructureKHR(device_, slot.tlas, nullptr);
         }
-        vk::Buffer* buffers[] = {&slot.instances, &slot.records, &slot.tlas_buffer, &slot.scratch, &slot.positions, &slot.dynamic_storage,
-                                 &slot.light_state, &slot.path_remap};
+        vk::Buffer* buffers[] = {&slot.instances,       &slot.records,        &slot.tlas_buffer,    &slot.scratch,
+                                 &slot.positions,       &slot.dynamic_storage, &slot.effect_vertices, &slot.effect_indices,
+                                 &slot.effect_storage,  &slot.light_state,    &slot.path_remap};
         for (vk::Buffer* b : buffers) {
             ctx_->DestroyBuffer(*b);
         }
@@ -458,6 +459,11 @@ void VkRayTracing::WriteSet(Slot& slot) {
     slot.written = true;
 }
 
+void VkRayTracing::SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
+    effect_vertices_.assign(vertices.begin(), vertices.end());
+    effect_indices_.assign(indices.begin(), indices.end());
+}
+
 bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<const RtCaster> casters) {
     const VkCommandBuffer cmd = gpu::vk::Native(list);
     const vk::AllocTag tag("ray tracing");
@@ -610,7 +616,52 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
         }
     }
 
-    const uint32_t count = static_cast<uint32_t>(casters.size());
+    VkDeviceAddress effects_blas = 0;
+    stats_.effect_triangles = 0;
+    const uint32_t effect_primitives = static_cast<uint32_t>(effect_indices_.size() / 3);
+    const VkBufferUsageFlags effect_usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    if (effect_primitives > 0 && EnsureBuffer(slot, slot.effect_vertices, effect_vertices_.size() * sizeof(Vertex), effect_usage, true) &&
+        EnsureBuffer(slot, slot.effect_indices, effect_indices_.size() * sizeof(uint32_t), effect_usage, true)) {
+        std::memcpy(slot.effect_vertices.mapped, effect_vertices_.data(), effect_vertices_.size() * sizeof(Vertex));
+        std::memcpy(slot.effect_indices.mapped, effect_indices_.data(), effect_indices_.size() * sizeof(uint32_t));
+        vmaFlushAllocation(ctx_->allocator, slot.effect_vertices.allocation, 0, VK_WHOLE_SIZE);
+        vmaFlushAllocation(ctx_->allocator, slot.effect_indices.allocation, 0, VK_WHOLE_SIZE);
+        BuildJob job;
+        job.geometry = Triangles(Address(slot.effect_vertices), sizeof(Vertex), static_cast<uint32_t>(effect_vertices_.size()),
+                                 Address(slot.effect_indices));
+        job.range = {effect_primitives, 0, 0, 0};
+        job.info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        job.info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+        job.info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        job.info.geometryCount = 1;
+        job.info.pGeometries = &job.geometry;
+        VkAccelerationStructureBuildSizesInfoKHR sizes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        uint32_t primitives = effect_primitives;
+        vkGetAccelerationStructureBuildSizesKHR(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &job.info, &primitives, &sizes);
+        job.scratch = sizes.buildScratchSize;
+        VkAccelerationStructureKHR handle = VK_NULL_HANDLE;
+        if (EnsureBuffer(slot, slot.effect_storage, sizes.accelerationStructureSize,
+                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false)) {
+            VkAccelerationStructureCreateInfoKHR create{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+            create.buffer = slot.effect_storage.buffer;
+            create.size = sizes.accelerationStructureSize;
+            create.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            if (vk::Check(vkCreateAccelerationStructureKHR(device_, &create, nullptr, &handle), "vkCreateAccelerationStructureKHR (effects)")) {
+                slot.dynamic.push_back(handle);
+                job.info.dstAccelerationStructure = handle;
+                std::vector<BuildJob> effect_jobs{job};
+                if (RunJobs(cmd, slot, effect_jobs)) {
+                    VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+                    address.accelerationStructure = handle;
+                    effects_blas = vkGetAccelerationStructureDeviceAddressKHR(device_, &address);
+                    stats_.effect_triangles = effect_primitives;
+                }
+            }
+        }
+    }
+
+    const uint32_t count = static_cast<uint32_t>(casters.size()) + (effects_blas != 0 ? 1u : 0u);
     if (count > slot.capacity || !slot.instances.buffer) {
         uint32_t capacity = 1024;
         while (capacity < count) {
@@ -669,6 +720,24 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
         rec.vertex_offset = sub.vertex_offset;
         rec.material = c.material;
         rec.flags = RtRecordFlags(c);
+        ++used;
+    }
+    if (effects_blas != 0) {
+        VkAccelerationStructureInstanceKHR& inst = instances[used];
+        inst = VkAccelerationStructureInstanceKHR{};
+        inst.transform.matrix[0][0] = 1.0f;
+        inst.transform.matrix[1][1] = 1.0f;
+        inst.transform.matrix[2][2] = 1.0f;
+        inst.instanceCustomIndex = used;
+        inst.mask = 64;
+        inst.instanceShaderBindingTableRecordOffset = 0;
+        inst.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR | VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        inst.accelerationStructureReference = effects_blas;
+        RtRecord& rec = records[used];
+        rec = RtRecord{};
+        rec.vertices = Address(slot.effect_vertices);
+        rec.indices = Address(slot.effect_indices);
+        rec.flags = kRtRecordEffect;
         ++used;
     }
     vmaFlushAllocation(ctx_->allocator, slot.instances.allocation, 0, VK_WHOLE_SIZE);

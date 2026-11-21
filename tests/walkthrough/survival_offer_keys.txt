@@ -1,0 +1,19 @@
+# the radio's offer taken by the keyboard's 2. The offer frees the mouse for its cards: read with the look alone, 1, 2 and 3 never took a card, and the
+# offer names them (10 November). Digit_2 is the number row's key (a bare 2 reads as a number in a script's line)
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+swait 20
+sact weapon=1
+swait 60
+sact offer
+swait 60
+sktap Digit_2 4
+swait 40
+slog

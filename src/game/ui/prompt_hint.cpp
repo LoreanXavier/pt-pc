@@ -24,8 +24,8 @@ constexpr Prompt Key(KeyAction action) { return {PromptButton::Cross, action, ac
 constexpr Prompt Both(PromptButton button, KeyAction action) { return {button, action, action}; }
 constexpr Prompt Pair(PromptButton button, KeyAction a, KeyAction b) { return {button, a, b}; }
 
-const std::array<Token, 21>& Tokens() {
-    static const std::array<Token, 21> tokens = {{
+const std::array<Token, 36>& Tokens() {
+    static const std::array<Token, 36> tokens = {{
         {"accept", {Both(PromptButton::Cross, KeyAction::Confirm)}, 1, {Both(PromptButton::Cross, KeyAction::Confirm)}, 1},
         {"back", {Both(PromptButton::Circle, KeyAction::Menu)}, 1, {Both(PromptButton::Circle, KeyAction::Menu)}, 1},
         {"pause", {Both(PromptButton::Options, KeyAction::Menu)}, 1, {Both(PromptButton::Options, KeyAction::Menu)}, 1},
@@ -50,6 +50,22 @@ const std::array<Token, 21>& Tokens() {
         {"tabnext", {Key(KeyAction::MenuTabNext)}, 1, {Both(PromptButton::R1, KeyAction::MenuTabNext)}, 1},
         {"donate", {Key(KeyAction::MenuDonate)}, 1, {Both(PromptButton::Select, KeyAction::MenuDonate)}, 1},
         {"update", {Key(KeyAction::MenuUpdate)}, 1, {Both(PromptButton::Triangle, KeyAction::MenuUpdate)}, 1},
+        {"support", {Key(KeyAction::MenuDonate)}, 1, {Both(PromptButton::L3, KeyAction::MenuDonate)}, 1},
+        {"swap", {Key(KeyAction::SurvivalSwap)}, 1, {Both(PromptButton::Triangle, KeyAction::SurvivalSwap)}, 1},
+        {"melee", {Both(PromptButton::R1, KeyAction::SurvivalMelee)}, 1, {Both(PromptButton::R1, KeyAction::SurvivalMelee)}, 1},
+        {"flare", {Both(PromptButton::L1, KeyAction::SurvivalFlare)}, 1, {Both(PromptButton::L1, KeyAction::SurvivalFlare)}, 1},
+        {"fire", {Both(PromptButton::R2, KeyAction::SurvivalFire)}, 1, {Both(PromptButton::R2, KeyAction::SurvivalFire)}, 1},
+        {"aim", {Both(PromptButton::L2, KeyAction::Zoom)}, 1, {Both(PromptButton::L2, KeyAction::Zoom)}, 1},
+        {"reload", {Both(PromptButton::Square, KeyAction::SurvivalReload)}, 1, {Both(PromptButton::Square, KeyAction::SurvivalReload)}, 1},
+        {"sprint", {Both(PromptButton::L3, KeyAction::SurvivalSprint)}, 1, {Both(PromptButton::L3, KeyAction::SurvivalSprint)}, 1},
+        {"use", {Both(PromptButton::Cross, KeyAction::SurvivalUse)}, 1, {Both(PromptButton::Cross, KeyAction::SurvivalUse)}, 1},
+        {"picks", {Key(KeyAction::SurvivalPick1), Key(KeyAction::SurvivalPick2), Key(KeyAction::SurvivalPick3)}, 3,
+         {Pair(PromptButton::DpadLeftRight, KeyAction::PadLeft, KeyAction::PadRight), Pair(PromptButton::DpadUpDown, KeyAction::PadUp, KeyAction::PadDown)}, 2},
+        {"task", {Both(PromptButton::Select, KeyAction::SurvivalInfo)}, 1, {Both(PromptButton::Select, KeyAction::SurvivalInfo)}, 1},
+        {"survival", {Key(KeyAction::MenuSurvival)}, 1, {Both(PromptButton::R2, KeyAction::MenuSurvival)}, 1},
+        {"armorytab", {Key(KeyAction::MenuColumn)}, 1, {Both(PromptButton::L2, KeyAction::MenuColumn), Both(PromptButton::R2, KeyAction::MenuColumn)}, 2},
+        {"armoryall", {Key(KeyAction::SurvivalMelee)}, 1, {Both(PromptButton::Triangle, KeyAction::SurvivalMelee)}, 1},
+        {"armoryorbit", {Both(PromptButton::R3, KeyAction::SurvivalFire)}, 1, {Both(PromptButton::R3, KeyAction::SurvivalFire)}, 1},
     }};
     return tokens;
 }

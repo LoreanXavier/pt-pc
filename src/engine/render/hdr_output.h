@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <glm/glm.hpp>
 
 #include "engine/render/vk.h"
@@ -102,16 +103,109 @@ inline float ResolveHdrPeak(float setting, float display) {
     return std::isfinite(chosen) ? std::clamp(chosen, float(kHdrPeakMin), float(kHdrPeakMax)) : float(kHdrPeakFallback);
 }
 
-constexpr float kHdrSourceWhite = 3.0f;
-inline float HdrShoulder(float m, float ratio) {
-    if (m <= 1.0f || ratio <= 1.001f) return std::min(m, 1.0f);
-    const float width = std::min(kHdrSourceWhite - 1.0f, 2.97f * (ratio - 1.0f));
-    if (m >= 1.0f + width) return ratio;
-    const float t = (m - 1.0f) / width;
-    const float t2 = t * t;
-    const float t3 = t2 * t;
-    return (1.0f - 3.0f * t2 + 2.0f * t3) + (t - 2.0f * t2 + t3) * width + (3.0f * t2 - 2.0f * t3) * ratio;
+inline float SrgbEncodeLinear(float linear) {
+    linear = std::max(linear, 0.0f);
+    return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
 }
+
+inline float SrgbDecodeLinear(float encoded) {
+    encoded = std::max(encoded, 0.0f);
+    return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+}
+
+inline float HdrShoulderAsymptote(float ratio) {
+    ratio = std::isfinite(ratio) ? std::clamp(ratio, 1.0f, 64.0f) : 1.0f;
+    return SrgbDecodeLinear(std::pow(ratio, 1.0f / 2.2f));
+}
+
+constexpr float kHdrRollKnee = 0.8f;
+inline float HdrPeakRoll(float light, float ratio) {
+    const float knee = kHdrRollKnee * ratio;
+    if (!(light > knee)) return std::max(light, 0.0f);
+    const float room = ratio - knee;
+    return knee + room * (1.0f - std::exp(-(light - knee) / room));
+}
+
+inline float MeterWeighted(const glm::vec2* cells, uint32_t count) {
+    struct Cell {
+        float value;
+        float weight;
+    };
+    std::vector<Cell> list;
+    list.reserve(count);
+    double total = 0.0;
+    const int side = 32;
+    for (uint32_t i = 0; i < count; ++i) {
+        const float value = cells[i].x;
+        if (cells[i].y <= 0.0f || !std::isfinite(value)) {
+            continue;
+        }
+        const float x = (static_cast<float>(i % side) + 0.5f) / side - 0.5f;
+        const float y = (static_cast<float>(i / side) + 0.5f) / side - 0.5f;
+        const float weight = cells[i].y * (0.6f + 0.4f * std::exp(-(x * x + y * y) / (2.0f * 0.28f * 0.28f)));
+        list.push_back({std::max(value, 0.0f), weight});
+        total += weight;
+    }
+    if (list.empty() || total <= 0.0) {
+        return -1.0f;
+    }
+    std::sort(list.begin(), list.end(), [](const Cell& a, const Cell& b) { return a.value < b.value; });
+    const double low = 0.02 * total;
+    const double high = 0.98 * total;
+    double at = 0.0;
+    double sum = 0.0;
+    double kept = 0.0;
+    for (const Cell& c : list) {
+        const double next = at + c.weight;
+        const double share = std::max(0.0, std::min(next, high) - std::max(at, low));
+        sum += share * c.value;
+        kept += share;
+        at = next;
+    }
+    return kept > 0.0 ? static_cast<float>(sum / kept) : -1.0f;
+}
+
+inline float AdaptEv(float ev, float target, float dt, float speed) {
+    constexpr float kAdaptJoin = 1.5f;
+    if (!(dt > 0.0f)) {
+        return ev;
+    }
+    dt = std::min(dt, 0.1f);
+    const float scale = std::max(speed, 0.0f) / 1.6f;
+    const float rate = (target < ev ? 3.0f : 1.5f) * scale;
+    if (rate <= 0.0f) {
+        return ev;
+    }
+    const float side = target < ev ? -1.0f : 1.0f;
+    float gap = std::fabs(target - ev);
+    if (gap > kAdaptJoin) {
+        const float steady = (gap - kAdaptJoin) / rate;
+        if (dt <= steady) {
+            return target - side * (gap - rate * dt);
+        }
+        dt -= steady;
+        gap = kAdaptJoin;
+    }
+    return target - side * gap * std::exp(-dt * rate / kAdaptJoin);
+}
+
+struct HdrLook {
+    int gamma = 0;
+    bool keep_hue = false;
+    int colour_range = 0;
+    float exposure = 0.0f;
+    float contrast = 1.0f;
+    float highlights = 1.0f;
+    float shadows = 1.0f;
+    float saturation = 1.0f;
+    float highlight_saturation = 1.0f;
+    float blowout = 0.0f;
+    bool Graded() const {
+        return exposure != 0.0f || contrast != 1.0f || highlights != 1.0f || shadows != 1.0f || saturation != 1.0f ||
+               highlight_saturation != 1.0f || blowout != 0.0f;
+    }
+    bool operator==(const HdrLook&) const = default;
+};
 
 inline uint8_t LinearToSrgb8(float linear) {
     linear = std::max(linear, 0.0f);

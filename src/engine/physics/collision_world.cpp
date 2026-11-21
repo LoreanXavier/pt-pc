@@ -625,7 +625,8 @@ float CharacterController::Depenetrate(const CollisionWorld& world, glm::vec3& c
     for (int i = 0; i < contacts.count; ++i) {
         nearest = std::min(nearest, std::abs(glm::dot(center, contacts.normals[i]) - contacts.distances[i]));
     }
-    if (std::getenv("PT_TRACE_COLLISION") && glm::length(center-before) > .035f) {
+    static const bool trace_collision = std::getenv("PT_TRACE_COLLISION") != nullptr;
+    if (trace_collision && glm::length(center-before) > .035f) {
         LogInfo("depenetration: shift {:.4f}, nearest {:.4f}, cast radius {:.4f}, contacts {}", glm::length(center-before), nearest, radius_, contacts.count);
         for(int i=0;i<contacts.count;++i)
             LogInfo("contact: normal ({:.4f} {:.4f} {:.4f}), plane {:.4f}, before distance {:.4f}", contacts.normals[i].x,contacts.normals[i].y,contacts.normals[i].z,contacts.distances[i],glm::dot(before,contacts.normals[i])-contacts.distances[i]);

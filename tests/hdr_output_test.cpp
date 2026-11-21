@@ -1,7 +1,10 @@
 #include "engine/render/hdr_output.h"
+#include "engine/render/hdr_png.h"
 
 #include <array>
 #include <cmath>
+#include <vector>
+#include <cstring>
 #include <cstdio>
 #include <limits>
 
@@ -50,27 +53,30 @@ int main() {
           "linear-to-sRGB PNG transfer has exact black and white endpoints");
 
     {
+        bool asymptote = true;
+        for (float ratio : {1.0f, 2.0f, 5.0f, 12.5f, 50.0f}) {
+            const float a = pt::render::HdrShoulderAsymptote(ratio);
+            const float shown = std::pow(pt::render::SrgbEncodeLinear(a), 2.2f);
+            asymptote &= std::abs(shown - ratio) <= ratio * 1.0e-4f;
+        }
+        check(asymptote, "shoulder asymptote shows at the peak");
+        check(pt::render::HdrShoulderAsymptote(1.0f) == 1.0f, "no headroom: the asymptote is paper white");
         bool identity = true, monotonic = true, bounded = true, smooth = true;
         for (float ratio : {1.2f, 2.0f, 5.0f, 10.0f, 50.0f}) {
             float previous = 0.0f;
-            for (float m = 0.0f; m <= 20.0f; m += 0.01f) {
-                const float s = pt::render::HdrShoulder(m, ratio);
-                if (m <= 1.0f) identity &= s == m;
+            for (float m = 0.0f; m <= 200.0f; m += 0.01f) {
+                const float s = pt::render::HdrPeakRoll(m, ratio);
+                if (m <= pt::render::kHdrRollKnee * ratio) identity &= s == m;
                 monotonic &= s >= previous - 1.0e-5f;
-                bounded &= s <= ratio + 1.0e-4f;
-                const float width = std::min(pt::render::kHdrSourceWhite - 1.0f, 2.97f * (ratio - 1.0f));
-                smooth &= std::abs(s - previous) <= 1.6f * std::max(1.0f, (ratio - 1.0f) / width) * 0.01f + 1.0e-4f;
+                bounded &= s <= ratio;
+                smooth &= s - previous <= 0.01f + 1.0e-4f;
                 previous = s;
             }
         }
-        check(identity, "highlight curve leaves the SDR range untouched");
-        check(monotonic, "highlight curve never falls");
-        check(bounded, "highlight curve never passes the peak");
-        check(smooth, "highlight curve has no jump");
-        check(std::abs(pt::render::HdrShoulder(1.0f, 5.0f) - 1.0f) < 1.0e-6f && pt::render::HdrShoulder(3.0f, 5.0f) == 5.0f &&
-                  pt::render::HdrShoulder(100.0f, 5.0f) == 5.0f,
-              "highlight curve starts at paper white and holds the peak from the source white");
-        check(pt::render::HdrShoulder(7.0f, 1.0f) == 1.0f, "no headroom, no highlights");
+        check(identity, "peak roll leaves the light below its knee untouched");
+        check(monotonic, "peak roll never falls");
+        check(bounded, "peak roll never passes the peak");
+        check(smooth, "peak roll is never steeper than the light itself");
         check(pt::render::ResolveHdrPeak(0.0f, 0.0f) == 1000.0f && pt::render::ResolveHdrPeak(0.0f, 800.0f) == 800.0f &&
                   pt::render::ResolveHdrPeak(1500.0f, 800.0f) == 1500.0f && pt::render::ResolveHdrPeak(0.0f, 20000.0f) == 4000.0f &&
                   pt::render::ResolveHdrPeak(100.0f, 0.0f) == 400.0f,
@@ -78,6 +84,53 @@ int main() {
         check(pt::render::ClampHdrPaperWhite(10.0f) == 80.0f && pt::render::ClampHdrPaperWhite(900.0f) == 500.0f &&
                   pt::render::ClampHdrPaperWhite(200.0f) == 200.0f,
               "paper white is kept within 80 to 500");
+    }
+
+    {
+        const std::vector<float> pixels = {203.0f, 203.0f, 203.0f, 1000.0f, 0.0f, 0.0f};
+        const std::vector<uint8_t> png = pt::render::EncodeHdrPng(2, 1, pixels);
+        auto find = [&](const char* type) {
+            for (size_t i = 8; i + 8 <= png.size();) {
+                const uint32_t length = (uint32_t(png[i]) << 24) | (uint32_t(png[i + 1]) << 16) | (uint32_t(png[i + 2]) << 8) | png[i + 3];
+                if (std::memcmp(png.data() + i + 4, type, 4) == 0) return i;
+                i += 12 + length;
+            }
+            return size_t(0);
+        };
+        const size_t cicp = find("cICP");
+        const size_t clli = find("cLLi");
+        const size_t idat = find("IDAT");
+        check(png.size() > 8 && png[0] == 0x89 && png[1] == 'P' && cicp && clli && idat && cicp < idat && clli < idat,
+              "HDR photo: PNG with cICP and cLLi before the image data");
+        check(cicp && png[cicp + 8] == 9 && png[cicp + 9] == 16 && png[cicp + 10] == 0 && png[cicp + 11] == 1,
+              "HDR photo: cICP is BT.2020 primaries, PQ transfer, RGB, full range");
+        const uint32_t max_cll = clli ? (uint32_t(png[clli + 8]) << 24) | (uint32_t(png[clli + 9]) << 16) | (uint32_t(png[clli + 10]) << 8) | png[clli + 11] : 0;
+        check(max_cll == 10000000u, "HDR photo: cLLi MaxCLL is the brightest channel (1000 nits)");
+        const pt::render::HdrPngStats stats = pt::render::MeasureHdrLevels(pixels);
+        check(std::abs(stats.max_fall - 601.5f) < 0.01f, "HDR photo: MaxFALL is the mean of the brightest channels");
+        check(pt::render::EncodeHdrPng(3, 1, pixels).empty(), "HDR photo: a pixel count that does not match is refused");
+    }
+
+    {
+        const auto run = [](float fps, float seconds, float from, float to) {
+            float ev = from;
+            for (int i = 0; i < static_cast<int>(seconds * fps); ++i) ev = pt::render::AdaptEv(ev, to, 1.0f / fps, 1.6f);
+            return ev;
+        };
+        for (const float to : {-6.0f, 2.0f}) {
+            const float reference = run(240.0f, 1.0f, -2.0f, to);
+            check(std::fabs(run(30.0f, 1.0f, -2.0f, to) - reference) < 2.0e-3f && std::fabs(run(60.0f, 1.0f, -2.0f, to) - reference) < 2.0e-3f,
+                  "HDR adaptation: the frame rate does not change the path");
+            check(std::fabs(run(60.0f, 20.0f, -2.0f, to) - to) < 1.0e-3f, "HDR adaptation: the target is reached");
+        }
+        check(pt::render::AdaptEv(-3.0f, 0.0f, 0.0f, 1.6f) == -3.0f, "HDR adaptation: no time, no step");
+        check(pt::render::AdaptEv(-3.0f, 0.0f, 100.0f, 1.6f) < -2.0f, "HDR adaptation: a stall counts as 100 ms");
+        std::vector<glm::vec2> cells(1024, glm::vec2(0.5f, 1.0f));
+        check(std::fabs(pt::render::MeterWeighted(cells.data(), 1024) - 0.5f) < 1.0e-5f, "HDR meter: an even view reads its level");
+        for (int i = 0; i < 10; ++i) cells[500 + i].x = 1.0e5f;
+        check(std::fabs(pt::render::MeterWeighted(cells.data(), 1024) - 0.5f) < 1.0e-5f, "HDR meter: a few bright cells are left out");
+        for (auto& c : cells) c.y = 0.0f;
+        check(pt::render::MeterWeighted(cells.data(), 1024) < 0.0f, "HDR meter: no surface, no reading");
     }
 
     pt::render::PixelRect rect;

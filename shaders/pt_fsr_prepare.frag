@@ -14,6 +14,8 @@ layout(push_constant) uniform PassPush {
 #define PT_IMAGES_READONLY 1
 #include "pt_images.glsl"
 
+#include "pt_fsr_albedo.glsl"
+
 layout(location = 0) out vec4 out_direct_diffuse;
 layout(location = 1) out vec4 out_direct_specular;
 layout(location = 2) out vec4 out_indirect_diffuse;
@@ -52,16 +54,20 @@ void main() {
     float inverse_exposure = 1.0 / max(v.exposure.x, 1.0e-12);
     vec4 diffuse = imageLoad(rt_gi_raw, p);
     vec4 specular = imageLoad(rt_glossy_raw, p);
-    out_indirect_diffuse = vec4(max(diffuse.rgb * albedo * remaining, vec3(0.0)), max(diffuse.a, 0.0));
+    vec3 indirect_diffuse = max(diffuse.rgb * remaining, vec3(0.0));
     vec3 reflected = specular.a >= 0.0 ? specular.rgb * g.y * mat0.rgb * remaining : vec3(0.0);
-    out_indirect_specular = vec4(max(reflected + layer.rgb * amount, vec3(0.0)), max(specular.a, 0.0));
+    vec3 indirect_specular = max(reflected + layer.rgb * amount, vec3(0.0));
     if (pass.ids.y == 0u) {
-        out_indirect_diffuse = vec4(0.0);
-        out_indirect_specular = vec4(max(layer.rgb * amount, vec3(0.0)), max(specular.a, 0.0));
+        indirect_diffuse = vec3(0.0);
+        indirect_specular = max(layer.rgb * amount, vec3(0.0));
     }
     vec3 diffuse_light = ImgFetch(IMG_DIFFUSE, p).rgb * inverse_exposure;
     vec3 specular_light = ImgFetch(IMG_SPECULAR, p).rgb * inverse_exposure;
-    out_direct_diffuse = vec4(max(diffuse_light * albedo - out_indirect_diffuse.rgb, vec3(0.0)), 0.0);
-    out_direct_specular = vec4(max(specular_light - out_indirect_specular.rgb, vec3(0.0)), 0.0);
-
+    vec3 direct_diffuse = max(diffuse_light - indirect_diffuse, vec3(0.0));
+    vec3 direct_specular = max(specular_light - indirect_specular, vec3(0.0));
+    vec3 specular_albedo = FsrSpecularAlbedo(v, p, c, n, g, mat0, mat1, amount);
+    out_indirect_diffuse = vec4(FsrSignal(indirect_diffuse, v), max(diffuse.a, 0.0));
+    out_indirect_specular = vec4(FsrSignal(indirect_specular / specular_albedo, v), max(specular.a, 0.0));
+    out_direct_diffuse = vec4(FsrSignal(direct_diffuse, v), 0.0);
+    out_direct_specular = vec4(FsrSignal(direct_specular / specular_albedo, v), 0.0);
 }

@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include "engine/audio/audio_objects.h"
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -114,6 +116,10 @@ public:
 
     void Render(float* out, uint32_t frames);
     void Render(float* out, uint32_t frames, uint32_t channels);
+
+    using AudioObjectBlock = audio::AudioObjectBlock;
+    using ObjectMix = AudioObjectMix;
+    void RenderObjects(float* bed, uint32_t frames, ObjectMix& mix);
 
     struct LayerLink {
         const Layer* layer = nullptr;
@@ -355,6 +361,8 @@ private:
         double pitch_ratio = 1.0;
         uint8_t sc_mode = 0;
         uint32_t sc_split = 0;
+        bool object_ok = false;
+        glm::vec3 object_position{0.0f};
         std::array<std::array<float, 8>, 8> sc_matrix{};
         std::array<std::vector<float>, 8> sc_rs;
         float sc_lpf_hist[8][4] = {};
@@ -572,6 +580,10 @@ private:
     ControllerPcmCapture controller_pcm_capture_;
     std::array<std::vector<float>, 8> sc_;
     std::array<std::vector<float>, 8> sc_voice_;
+    ObjectMix* object_mix_ = nullptr;
+    uint32_t object_frames_ = 0;
+    uint32_t object_block_base_ = 0;
+    AudioObjectBlock* ObjectFor(const Voice& v);
     std::vector<float> sc_peak_;
     std::vector<float> sc_weight_;
     std::vector<PendingAction> due_actions_;

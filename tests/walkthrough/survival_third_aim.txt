@@ -1,0 +1,32 @@
+# third person: a round lands under the crosshair (owner, 8 November: the shots landed somewhere else entirely). A doll stands
+# held 7 m ahead and 2 m to the side; the view is turned until the crosshair (the drawn view's middle) is on its head, and the
+# handgun's rounds must land there: each shot's line gives how far from the crosshair it landed and on what
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+swait 60
+sact spawn=0@7,2
+swait 150
+sact freeze
+sact aimat
+sact aim+
+swait 60
+sshot {shots}/third_aim.png
+sact fire
+swait 2
+sshot {shots}/third_aim_shot.png
+swait 30
+sact fire
+swait 30
+sact fire
+swait 60
+slog

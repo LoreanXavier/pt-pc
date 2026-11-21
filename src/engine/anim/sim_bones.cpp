@@ -107,6 +107,7 @@ void SimBones::Init(const Skeleton& skeleton) {
     is_player_ = true;
     chains_.resize(16);
     const glm::vec3 chest_bind = skeleton.bind_world[static_cast<size_t>(chest_bone_)];
+    const glm::vec3 waist_bind = skeleton.bind_world[static_cast<size_t>(waist_bone_)];
 
     for (size_t s = 0; s < 16; ++s) {
         Chain& c = chains_[s];
@@ -115,6 +116,8 @@ void SimBones::Init(const Skeleton& skeleton) {
             c.bones[k] = def.b0 + k;
             c.rest_pos[k] = def.rest[k];
             c.rest_local_to_chest[k] = def.rest[k] - chest_bind;
+            c.rest_local_to_waist[k] = def.rest[k] - waist_bind;
+            c.waist_share[k] = std::clamp((chest_bind.y + 0.05f - def.rest[k].y) / (chest_bind.y + 0.05f - waist_bind.y), 0.0f, 1.0f);
             c.pos[k] = c.prev_pos[k] = def.rest[k];
         }
         for (int k = 0; k < 3; ++k) {
@@ -143,6 +146,10 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
     const glm::mat4& chest_m = world[static_cast<size_t>(chest_bone_)];
     const glm::mat4& waist_m = world[static_cast<size_t>(waist_bone_)];
     const glm::quat chest_rot = glm::quat_cast(chest_m);
+    const glm::quat waist_rot = glm::quat_cast(waist_m);
+    const auto rest_at = [&](const Chain& c, int k) {
+        return glm::mix(glm::vec3(chest_m * glm::vec4(c.rest_local_to_chest[k], 1.0f)), glm::vec3(waist_m * glm::vec4(c.rest_local_to_waist[k], 1.0f)), c.waist_share[k]);
+    };
 
     const glm::vec3 waist_center = glm::vec3(waist_m * glm::vec4(0.0f, 0.0015f, 0.035f, 1.0f));
     const float waist_radius = 0.155f;
@@ -154,7 +161,6 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
     const float torso_len_sq = glm::dot(torso_axis, torso_axis);
 
     const float time_step = std::clamp(dt, 1.0f / 120.0f, 1.0f / 30.0f);
-    const glm::vec3 gravity(0.0f, -9.81f, 0.0f);
     const float damp = 0.85f;
     const float spring_k = 240.0f;
 
@@ -162,17 +168,17 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
         for (size_t s = 0; s < chains_.size(); ++s) {
             Chain& c = chains_[s];
             for (int k = 0; k < 4; ++k) {
-                c.pos[k] = c.prev_pos[k] = glm::vec3(chest_m * glm::vec4(c.rest_local_to_chest[k], 1.0f));
+                c.pos[k] = c.prev_pos[k] = rest_at(c, k);
             }
         }
         first_run_ = false;
     }
 
-    for (size_t s = 0; s < chains_.size(); ++s) {
+    for (size_t s = 0; dt > 1.0e-5f && s < chains_.size(); ++s) {
         Chain& c = chains_[s];
         glm::vec3 target[4];
         for (int k = 0; k < 4; ++k) {
-            target[k] = glm::vec3(chest_m * glm::vec4(c.rest_local_to_chest[k], 1.0f));
+            target[k] = rest_at(c, k);
         }
 
         c.pos[0] = target[0];
@@ -182,7 +188,7 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
             const glm::vec3 vel = (c.pos[k] - c.prev_pos[k]) * damp;
             c.prev_pos[k] = c.pos[k];
             const glm::vec3 spring = (target[k] - c.pos[k]) * spring_k;
-            c.pos[k] += vel + (gravity + spring) * (time_step * time_step);
+            c.pos[k] += vel + spring * (time_step * time_step);
         }
 
         for (int iter = 0; iter < 4; ++iter) {
@@ -190,8 +196,8 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
                 const glm::vec3 delta = c.pos[k] - c.pos[k - 1];
                 const float d = glm::length(delta);
                 if (d > 1e-6f) {
-                    const float diff = (d - c.lengths[k - 1]) / d;
-                    c.pos[k] -= delta * diff;
+                    const float length = std::clamp(d, c.lengths[k - 1] * 0.84f, c.lengths[k - 1] * 1.16f);
+                    c.pos[k] -= delta * ((d - length) / d);
                 }
             }
 
@@ -225,8 +231,9 @@ void SimBones::Apply(const Skeleton& skeleton, std::vector<glm::mat4>& world, fl
             }
             const glm::vec3 dir = (k < 3) ? (c.pos[k + 1] - c.pos[k]) : (c.pos[3] - c.pos[2]);
             const glm::vec3 rest_dir = (k < 3) ? (c.rest_pos[k + 1] - c.rest_pos[k]) : (c.rest_pos[3] - c.rest_pos[2]);
-            const glm::quat swing = SafeRotationBetween(rest_dir, dir);
-            const glm::quat rot = glm::normalize(swing * chest_rot);
+            const glm::quat base = glm::normalize(glm::slerp(chest_rot, waist_rot, c.waist_share[k]));
+            const glm::quat swing = SafeRotationBetween(base * rest_dir, dir);
+            const glm::quat rot = glm::normalize(swing * base);
 
             world[static_cast<size_t>(bone)] = glm::translate(glm::mat4(1.0f), c.pos[k]) * glm::mat4_cast(rot);
         }

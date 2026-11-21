@@ -448,17 +448,21 @@ void VfxPass::RecordForward(const SceneVfxContext& context) {
     }
     FrameSlot& slot = slots_[frame];
     const bool offscreen = context.subset == kVfxOffscreen;
+    const uint64_t destroys = gpu_->ImageDestroyCount();
     if (offscreen) {
-        if (slot.effects_depth_view != context.near_far_depth_view || slot.effects_scene != context.scene_copy_view) {
+        if (slot.effects_depth_view != context.near_far_depth_view || slot.effects_scene != context.scene_copy_view ||
+            slot.effects_destroys != destroys) {
             WriteSet(slot, slot.effects, context.near_far_depth_view, gpu::Layout::ShaderReadOnly, context.scene_copy_view,
                      2 * kFogStride);
             slot.effects_depth_view = context.near_far_depth_view;
             slot.effects_scene = context.scene_copy_view;
+            slot.effects_destroys = destroys;
         }
-    } else if (slot.forward_view != context.depth_view || slot.forward_scene != context.scene_copy_view) {
+    } else if (slot.forward_view != context.depth_view || slot.forward_scene != context.scene_copy_view || slot.forward_destroys != destroys) {
         WriteSet(slot, slot.forward, context.depth_view, gpu::Layout::DepthReadOnly, context.scene_copy_view, 0);
         slot.forward_view = context.depth_view;
         slot.forward_scene = context.scene_copy_view;
+        slot.forward_destroys = destroys;
     }
     FogBlock fog;
     std::copy(std::begin(context.fog), std::end(context.fog), std::begin(fog.fog));
@@ -492,9 +496,11 @@ void VfxPass::RecordLiquidDepth(const SceneVfxContext& context) {
         return;
     }
     FrameSlot& slot = slots_[frame];
-    if (slot.depth_only_scene != context.scene_copy_view) {
+    const uint64_t destroys = gpu_->ImageDestroyCount();
+    if (slot.depth_only_scene != context.scene_copy_view || slot.depth_only_destroys != destroys) {
         WriteSet(slot, slot.depth_only, context.scene_copy_view, gpu::Layout::ShaderReadOnly, context.scene_copy_view, 0);
         slot.depth_only_scene = context.scene_copy_view;
+        slot.depth_only_destroys = destroys;
     }
     gpu::CommandList& cmd = *context.cmd;
     const gpu::BindingSetHandle sets[2] = {textures_->BindingSet(), slot.depth_only};
@@ -538,10 +544,12 @@ void VfxPass::RecordFilter(const SceneFilterContext& context) {
         return;
     }
     FrameSlot& slot = slots_[frame];
-    if (slot.filter_view != context.depth_view || slot.filter_scene != context.source) {
+    const uint64_t destroys = gpu_->ImageDestroyCount();
+    if (slot.filter_view != context.depth_view || slot.filter_scene != context.source || slot.filter_destroys != destroys) {
         WriteSet(slot, slot.filter, context.depth_view, gpu::Layout::DepthReadOnly, context.source, kFogStride);
         slot.filter_view = context.depth_view;
         slot.filter_scene = context.source;
+        slot.filter_destroys = destroys;
     }
     for (const vfx::Layer layer : {vfx::Layer::Flare, vfx::Layer::Screen}) {
         if (!wanted(layer)) {

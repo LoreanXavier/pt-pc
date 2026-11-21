@@ -25,6 +25,8 @@ leave the speaker off; the main mix stays unchanged. DS4 Bluetooth matching uses
 BT DS4 behind a virtual pad. Unsupported or failed routes retry at most every 2 s. The route follows the last-used controller,
 so unplugging and reconnecting works. `PT_CONTROLLER_SPEAKER_DEVICE=<part of a playback device name>` names a stand-in endpoint
 for software tests; DS4 USB headset endpoints are accepted only through that explicit override.
+With `--virtual-pads` the route opens only with that override and SDL's real controller backends stay off, so test runs never reach a
+real pad (a virtual DualSense once matched the real one's endpoint by name and played the tests' haptics on it).
 
 The DualSense's speaker and its headphone jack share the endpoint's first channel pair; the pad plays it on the jack unless USB
 output report 0x02 selects the speaker. The game selects the speaker only while the speaker setting is on and the game's main

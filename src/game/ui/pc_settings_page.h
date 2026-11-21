@@ -18,6 +18,18 @@ class Game;
 class UifView;
 struct MenuInput;
 
+struct PcDropdownView {
+    glm::vec2 lo{0.0f};
+    glm::vec2 hi{0.0f};
+    int cursor = 0;
+    int active = 0;
+    int scroll = 0;
+    int visible = 8;
+    float row_height = 34.0f;
+    float flash = 1.0f;
+    std::vector<std::string> items;
+};
+
 class PcSettingsPage {
 public:
     enum class Result { None, Back, Quit };
@@ -63,11 +75,16 @@ public:
     bool Confirming() const { return confirming_; }
     bool IsQuestion() const;
     bool DialogView(dialog::View& view, int language) const;
+    bool DropdownOpen() const { return dropdown_open_; }
+    bool DropdownView(PcDropdownView& out) const;
     int DialogFocus() const { return dialog_nav_.Focus(); }
     float FlashFrame() const { return flash_frame_; }
     std::string PreviewFile() const { const auto* row = CurrentRow(); return row && source_ ? source_->PreviewFile(row->id) : std::string(); }
     PcPanel Panel() const { const auto* row = CurrentRow(); return row && source_ ? source_->Panel(row->id) : PcPanel{}; }
     bool FullScreen() const { return source_ && source_->FullScreen(); }
+    bool ScreenShown() const { return source_ && source_->ScreenShown(); }
+    bool SeeThrough() const { return source_ && source_->SeeThrough(); }
+    PcScreen Screen() const { return source_ ? source_->Screen() : PcScreen{}; }
     std::string_view FullScreenHint() const { return source_ ? source_->FullScreenHint() : std::string_view(); }
     std::vector<std::string> PreviewFiles() const {
         const auto* row = CurrentRow();
@@ -134,6 +151,7 @@ private:
     void ShowTab(Game& game, int tab);
     void LayoutTabs();
     int TabAt(glm::vec2 units) const;
+    bool DonateShown() const;
     bool DonateAt(glm::vec2 units) const;
     struct ScrollBar {
         bool scrollable = false;
@@ -149,7 +167,9 @@ private:
     void Donate(Game& game);
     void Change(Game& game, int delta, bool accept);
     Result UpdateDialog(Game& game, const MenuInput& input);
+    Result UpdateDropdown(Game& game, const MenuInput& input, float dt);
     Result UpdateQuestion(Game& game, const MenuInput& input);
+    Result UpdateScreen(Game& game, const MenuInput& input, float dt);
 
     bool UpdateDialogOpen() const { return confirming_ && update_dialog_ && footer_.has_value(); }
     bool UpdateAt(glm::vec2 units) const;
@@ -195,6 +215,10 @@ private:
     int cursor_ = 0;
     int first_ = 0;
     bool confirming_ = false;
+    bool dropdown_open_ = false;
+    int dropdown_cursor_ = 0;
+    int dropdown_scroll_ = 0;
+    float dropdown_flash_ = 1000.0f;
     dialog::Nav dialog_nav_;
     mutable int language_ = 0;
     int preview_id_ = -1;
@@ -230,6 +254,7 @@ private:
     uint16_t bar_thumb_ = 0;
     mutable float donate_latched_ = 0.0f;
     mutable int donate_latch_language_ = -1;
+    mutable std::string donate_prev_text_;
     mutable bool arrow_up_hover_ = false;
     mutable bool arrow_down_hover_ = false;
     std::array<RowNodes, kMaxRows> row_nodes_{};

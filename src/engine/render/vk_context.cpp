@@ -341,11 +341,40 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
             devices.assign(1, required);
         }
     }
+#ifdef _WIN32
+    {
+        std::vector<std::array<uint8_t, 8>> luids;
+        for (VkPhysicalDevice d : devices) {
+            VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            props2.pNext = &ids;
+            vkGetPhysicalDeviceProperties2(d, &props2);
+            if (ids.deviceLUIDValid) {
+                std::array<uint8_t, 8> luid{};
+                std::memcpy(luid.data(), ids.deviceLUID, luid.size());
+                luids.push_back(luid);
+            }
+        }
+        if (!luids.empty()) {
+            for (const DxgiAdapter& a : DxgiHardwareAdapters()) {
+                std::array<uint8_t, 8> luid{};
+                std::memcpy(luid.data(), a.luid, luid.size());
+                if (std::find(luids.begin(), luids.end(), luid) == luids.end()) {
+                    LogWarn("vulkan: {} (vendor {:04x}) is a GPU Windows lists that Vulkan does not: its Vulkan driver is missing or "
+                            "broken (a clean reinstall of its driver brings it back); DirectX 12 can still use it",
+                            a.name, a.vendor_id);
+                }
+            }
+        }
+    }
+#endif
     int best_score = -1;
     for (VkPhysicalDevice candidate : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(candidate, &props);
         if (props.apiVersion < VK_API_VERSION_1_3) {
+            LogInfo("vulkan: {} is passed over: its driver offers Vulkan {}.{}, the game needs 1.3", props.deviceName,
+                    VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion));
             continue;
         }
         uint32_t family_count = 0;
@@ -375,11 +404,24 @@ bool Context::Init(SDL_Window* window, bool validation, bool want_hdr) {
     }
     LogInfo("vulkan: using {} (driver {:X})", properties.deviceName, properties.driverVersion);
 #ifdef _WIN32
-    intel_first_frame_driver = IntelDriverCrashesFirstFrame(properties.vendorID, properties.driverVersion, true);
+    WindowsDriverVersion dxgi_driver;
+    if (properties.vendorID == kIntelVendorId) {
+        VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+        VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        props2.pNext = &ids;
+        vkGetPhysicalDeviceProperties2(physical, &props2);
+        if (ids.deviceLUIDValid) {
+            dxgi_driver = DxgiDriverVersion(ids.deviceLUID);
+        }
+        LogInfo("vulkan: Intel driver {} (DXGI {})", IntelWindowsDriverName(properties.driverVersion),
+                dxgi_driver.valid ? WindowsDriverName(dxgi_driver) : std::string("has no adapter with this LUID"));
+    }
+    intel_first_frame_driver = IntelDriverCrashesFirstFrame(properties.vendorID, properties.driverVersion, true, dxgi_driver);
+    intel_driver_name = dxgi_driver.valid ? WindowsDriverName(dxgi_driver) : IntelWindowsDriverName(properties.driverVersion);
     if (intel_first_frame_driver) {
         LogWarn("vulkan: Intel driver {} is older than {}: Intel's drivers up to 31.0.101.2135 crash in vkCmdBeginRendering on the "
                 "first frame (Sentry NATIVE-28 and NATIVE-X); the player is asked to update the driver",
-                IntelWindowsDriverName(properties.driverVersion), IntelWindowsDriverName(kIntelFirstGoodDriver));
+                intel_driver_name, IntelWindowsDriverName(kIntelFirstGoodDriver));
     }
 #endif
 

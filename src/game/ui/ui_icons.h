@@ -12,7 +12,7 @@ namespace pt::game {
 constexpr const char* kPcIconAtlas = "ui:pc:button_icons";
 constexpr const char* kPcIconGlow = "ui:pc:button_glow";
 
-enum class PromptButton : uint8_t { Cross, Circle, Square, Triangle, Options, DpadUpDown, DpadLeftRight, L1, R1, Select };
+enum class PromptButton : uint8_t { Cross, Circle, Square, Triangle, Options, DpadUpDown, DpadLeftRight, L1, R1, Select, L3, R3, L2, R2 };
 
 struct Prompt {
     PromptButton button = PromptButton::Cross;

@@ -1,0 +1,140 @@
+# third person: what the hands do, from each gun's rest and at a walk: the aim up and down (quick and slow), a shot, a reload, a blow, the change of weapon. PT_BODY_MOTION=1 and
+# tools/survival_guns/motion_check.py for jumps; PT_BODY_DUMP and body_overlap.py for what goes through what
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+steleport -1.15 27
+swait 90
+sact aim+
+swait 45
+sact aim-
+swait 45
+sact aim+
+swait 8
+sact aim-
+swait 8
+sact aim+
+swait 8
+sact aim-
+swait 45
+sact aim+
+swait 30
+sact fire
+swait 30
+sact fire
+swait 30
+sact aim-
+swait 40
+sact reload
+swait 150
+sact melee
+swait 60
+skey W 1
+swait 40
+sact aim+
+swait 40
+sact aim-
+swait 30
+sact reload
+swait 120
+sact melee
+swait 50
+skey W 0
+swait 70
+sact weapon=2
+steleport -1.15 27
+swait 90
+sact aim+
+swait 45
+sact aim-
+swait 45
+sact aim+
+swait 8
+sact aim-
+swait 8
+sact aim+
+swait 8
+sact aim-
+swait 45
+sact aim+
+swait 30
+sact fire
+swait 30
+sact fire
+swait 30
+sact aim-
+swait 40
+sact reload
+swait 150
+sact melee
+swait 60
+skey W 1
+swait 40
+sact aim+
+swait 40
+sact aim-
+swait 30
+sact reload
+swait 120
+sact melee
+swait 50
+skey W 0
+swait 70
+sact weapon=3
+steleport -1.15 27
+swait 90
+sact aim+
+swait 45
+sact aim-
+swait 45
+sact aim+
+swait 8
+sact aim-
+swait 8
+sact aim+
+swait 8
+sact aim-
+swait 45
+sact aim+
+swait 30
+sact fire
+swait 30
+sact fire
+swait 30
+sact aim-
+swait 40
+sact reload
+swait 150
+sact melee
+swait 60
+skey W 1
+swait 40
+sact aim+
+swait 40
+sact aim-
+swait 30
+sact reload
+swait 120
+sact melee
+swait 50
+skey W 0
+swait 70
+sact weapon=2
+swait 60
+sact weapon=1
+swait 60
+sact weapon=0
+swait 60
+sact weapon=3
+swait 60
+slog
+squit

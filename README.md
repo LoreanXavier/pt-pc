@@ -74,6 +74,15 @@ The game checks GitHub Releases for a newer version at startup; `[network] check
 Thanks to ahm3texe for the Apple silicon port, totsu0jv for Czech translation, and yewhochen for the Linux library-loading
 and startup-focus fixes.
 
+### Antivirus warnings
+
+Some antivirus programs flag the installer or `pt.exe`. These are false positives. The files are not code signed (a
+certificate costs more every year than this free project makes), and an installer that unpacks programs and starts one
+of them is exactly what heuristic scanners watch for. On VirusTotal the release files are flagged by 1 to 3 engines out
+of about 70. Every line of the port is in this repository, so you can read it or build it yourself (see Building from
+source). If your antivirus stops the installer, save it to a folder first instead of opening it from the browser, or use
+the portable ZIP.
+
 ## Playing
 
 Mouse and WASD, right mouse button to zoom, left button, Enter or E to interact, Esc for the pause menu, Alt+Enter for

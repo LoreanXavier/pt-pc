@@ -356,6 +356,38 @@ std::vector<uint32_t> CodePoints(std::string_view text) {
 
 }
 
+UiFont* UiAssets::HandFont(int language, std::string_view characters) {
+    if (language < 0 || language >= kLanguageCount || !vfs_) return nullptr;
+    std::unique_ptr<UiFont>& slot = hand_fonts_[static_cast<size_t>(language)];
+    if (slot) return slot->ready ? slot.get() : nullptr;
+    slot = std::make_unique<UiFont>();
+    const char* family = language == kJapanese ? "Yomogi" : language == 8 ? "Long Cang" : language == 9 ? "Aref Ruqaa" : "Marck Script";
+    auto data = vfs_->ReadFile(kFontFiles[2]);
+    std::string error;
+    if (!data || !slot->font.Parse(*data, &error) || !slot->font.LoadUnicodeFont(family, characters, language == 9, &error)) {
+        LogError("ui: the hand font {} for language {}: {}", family, language, error);
+        return nullptr;
+    }
+    std::vector<std::vector<uint8_t>> mips;
+    slot->font.BuildAtlas(mips, 1, true);
+    std::vector<TextureMip> texture_mips;
+    uint32_t w = slot->font.AtlasWidth(), h = slot->font.AtlasHeight();
+    for (const auto& mip : mips) {
+        texture_mips.push_back({w, h, mip});
+        w = std::max(1u, w / 2);
+        h = std::max(1u, h / 2);
+    }
+    slot->atlas = textures_->Create(std::format("ui:font:hand:{}", language), gpu::Format::R8Unorm, texture_mips);
+    if (slot->atlas == TextureManager::kWhite) {
+        LogWarn("ui: the hand font for language {}: no video memory for its atlas", language);
+        return nullptr;
+    }
+    slot->ready = true;
+    LogInfo("ui: hand font {} for language {} ({} glyphs, atlas {}x{})", family, language, slot->font.Glyphs().size(), slot->font.AtlasWidth(),
+            slot->font.AtlasHeight());
+    return slot.get();
+}
+
 UiFont* UiAssets::FontCovering(UiFontType type, int language, std::string_view text) {
     UiFont* base = Font(type, language);
     if (!base) return nullptr;
@@ -462,6 +494,13 @@ const ui::LangFile* UiAssets::System(int language) {
         system_[language] = std::move(file);
     }
     return system_[language].get();
+}
+
+uint32_t UiAssets::MakeTexture(const std::string& name, uint32_t width, uint32_t height, std::span<const uint8_t> rgba) {
+    if (!textures_ || rgba.size() != size_t(width) * height * 4) return 0;
+    const TextureMip mip{width, height, rgba};
+    const uint32_t made = textures_->Create(name, gpu::Format::R8G8B8A8Unorm, std::span<const TextureMip>(&mip, 1));
+    return made == TextureManager::kWhite ? 0 : made;
 }
 
 uint32_t UiAssets::Texture(std::string_view path) {

@@ -663,6 +663,10 @@ std::string SteamPromptGlyphName(const Prompt& prompt, const PromptStyle& style)
         case PromptButton::Select: return "view";
         case PromptButton::L1: return "steam:bumper:L1";
         case PromptButton::R1: return "steam:bumper:R1";
+        case PromptButton::L3: return "steam:bumper:L3";
+        case PromptButton::R3: return "steam:bumper:R3";
+        case PromptButton::L2: return "steam:bumper:L2";
+        case PromptButton::R2: return "steam:bumper:R2";
         default: return {};
     }
 }
@@ -703,12 +707,22 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         case PromptButton::DpadLeftRight: original = atlas({0.5f, 0.25f}, 0.45f, 0.45f); break;
         case PromptButton::L1:
         case PromptButton::R1:
-        case PromptButton::Select: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
+        case PromptButton::Select:
+        case PromptButton::L3:
+        case PromptButton::R3:
+        case PromptButton::L2:
+        case PromptButton::R2: original = atlas({0.625f, 0.5f}, 0.72f, 0.5f); break;
     }
     if (built && prompt.button == PromptButton::Select && device != PromptDevice::Keyboard && device != PromptDevice::Steam) {
         return GeneratedGlyph(device == PromptDevice::PlayStation ? "bumper:TOUCHPAD" : device == PromptDevice::Nintendo ? "minus" : "view");
     }
-    const bool shoulder = prompt.button == PromptButton::L1 || prompt.button == PromptButton::R1;
+    if (built && (prompt.button == PromptButton::L3 || prompt.button == PromptButton::R3) && device != PromptDevice::Keyboard && device != PromptDevice::Steam) {
+        const bool right_stick = prompt.button == PromptButton::R3;
+        return GeneratedGlyph(device == PromptDevice::PlayStation ? (right_stick ? "bumper:R3" : "bumper:L3")
+                                                                  : (right_stick ? "bumper:RS" : "bumper:LS"));
+    }
+    const bool trigger = prompt.button == PromptButton::L2 || prompt.button == PromptButton::R2;
+    const bool shoulder = prompt.button == PromptButton::L1 || prompt.button == PromptButton::R1 || trigger;
     if (built && device == PromptDevice::Steam) {
         const std::string name = SteamPromptGlyphName(prompt, style);
         if (!name.empty()) {
@@ -716,9 +730,11 @@ PromptGlyph UiAssets::PromptPicture(const Prompt& prompt, const PromptStyle& sty
         }
     }
     if (built && shoulder && device != PromptDevice::Keyboard) {
-        const bool left = prompt.button == PromptButton::L1;
-        const char* name = device == PromptDevice::PlayStation ? (left ? "L1" : "R1") : device == PromptDevice::Nintendo ? (left ? "L" : "R")
-                                                                                                                      : (left ? "LB" : "RB");
+        const bool left = prompt.button == PromptButton::L1 || prompt.button == PromptButton::L2;
+        const char* name = trigger ? (device == PromptDevice::PlayStation ? (left ? "L2" : "R2") : device == PromptDevice::Nintendo ? (left ? "ZL" : "ZR")
+                                                                                                                                   : (left ? "LT" : "RT"))
+                                   : device == PromptDevice::PlayStation ? (left ? "L1" : "R1") : device == PromptDevice::Nintendo ? (left ? "L" : "R")
+                                                                                                                                   : (left ? "LB" : "RB");
         return GeneratedGlyph(std::string("bumper:") + name);
     }
     if (!built || device == PromptDevice::PlayStation) {

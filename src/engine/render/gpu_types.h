@@ -15,6 +15,8 @@ constexpr uint32_t kInvalid = 0xFFFFFFFFu;
 constexpr uint32_t kLightCastsShadow = 1u;
 constexpr uint32_t kLightNoFitting = 2u;
 constexpr uint32_t kLightStairCeiling = 4u;
+constexpr uint32_t kLightFill = 8u;
+constexpr uint32_t kLightMaskSoft = 16u;
 constexpr uint32_t kLuminanceGroups = 16384;
 constexpr uint32_t kReflectionReadback = kLuminanceGroups;
 constexpr uint32_t kLuminanceEntries = kLuminanceGroups + 2;
@@ -65,6 +67,8 @@ struct FrameData {
     Probe probes[kMaxProbes];
     glm::vec4 fog[8]{};
     glm::vec4 mirror{0.0f};
+    glm::vec4 display{0.0f};
+    glm::vec4 grade{0.0f};
 };
 
 struct DrawPush {
@@ -180,6 +184,10 @@ enum MaterialFlag : uint32_t {
     kMatAlbedoView = 1u << 23,
     kMatGBufferBase2 = 1u << 24,
     kMatMirrorLining = 1u << 25,
+    kMatGlowClip = 1u << 26,
+    kMatBlendTile = 1u << 27,
+    kMatDullSpecular = 1u << 28,
+    kMatFineSpecular = 1u << 29,
 };
 
 enum MaterialKind : uint32_t {

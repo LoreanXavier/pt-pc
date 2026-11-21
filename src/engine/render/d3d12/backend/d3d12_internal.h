@@ -193,6 +193,15 @@ struct RootLayout {
 
 class DeviceImpl;
 
+struct PassMarkers {
+    static constexpr uint32_t kLabels = 512;
+    volatile uint32_t* cpu = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
+    uint32_t serial = 0;
+    uint32_t count = 0;
+    const char* names[kLabels] = {};
+};
+
 class CommandListImpl final : public gpu::CommandList {
 public:
     CommandListImpl(DeviceImpl& device, ID3D12GraphicsCommandList* list);
@@ -235,6 +244,7 @@ public:
     void EndLabel() override;
 
     void Begin();
+    void SetMarkers(PassMarkers* markers) { markers_ = markers; }
     ID3D12GraphicsCommandList* List() const { return list_; }
     void Transition(ImageRecord& image, D3D12_RESOURCE_STATES state);
     void Transition(BufferRecord& buffer, D3D12_RESOURCE_STATES state);
@@ -253,6 +263,9 @@ private:
     ID3D12GraphicsCommandList* list_ = nullptr;
     ComPtr<ID3D12GraphicsCommandList1> list1_;
     ComPtr<ID3D12GraphicsCommandList9> list9_;
+    ComPtr<ID3D12GraphicsCommandList2> list2_;
+    PassMarkers* markers_ = nullptr;
+    std::vector<uint32_t> open_labels_;
     PipelineRecord* graphics_ = nullptr;
     PipelineRecord* compute_ = nullptr;
     ID3D12PipelineState* applied_ = nullptr;
@@ -393,6 +406,8 @@ private:
     void FillNull(SetRecord& set);
     void WriteNullView(uint32_t index, BindingType type, bool uav);
     bool NewFrame(Frame& frame, const wchar_t* name);
+    bool CreatePassMarkers();
+    void LogPassMarkers();
     uint64_t Execute(Frame& frame);
     void WaitValue(uint64_t value);
     void Collect();
@@ -428,6 +443,7 @@ private:
     bool lost_reported_ = false;
     bool hung_ = false;
     uint32_t test_remove_frame_ = 0;
+    uint32_t test_late_fence_ = 0;
     uint32_t test_frames_begun_ = 0;
     ComPtr<ID3D12Device2> device2_;
     ComPtr<ID3D12RootSignature> root_;
@@ -442,6 +458,11 @@ private:
     uint64_t submitted_ = 0;
     std::vector<Frame> frames_;
     std::vector<Frame> spare_;
+    void* marker_memory_ = nullptr;
+    ComPtr<ID3D12Heap> marker_heap_;
+    ComPtr<ID3D12Resource> marker_buffer_;
+    std::vector<PassMarkers> markers_;
+    uint32_t marker_serial_ = 0;
     std::vector<Deferred> deferred_;
     std::vector<Garbage> garbage_;
     std::mutex mutex_;

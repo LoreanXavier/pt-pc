@@ -96,7 +96,7 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
         }
         n = RtMappedNormal(n, tangent, bitangent, tangent_normal);
     }
-    vec3 albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, 2.0).rgb;
+    vec3 albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, 2.0).rgb) * RtRecordTint(r.flags);
 
     vec3 ambient = vec3(0.0);
     vec3 probe_n = vec3(-n.x, -n.z, n.y);
@@ -159,7 +159,7 @@ vec4 ShadeHit(uint record, uint primitive, vec2 bary, mat4x3 to_world, vec3 hit,
                 continue;
             }
             vec2 muv = vec2(0.5 * mc.x / mc.w + 0.5, 1.0 - (0.5 * mc.y / mc.w + 0.5));
-            mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), muv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, muv, 0.0).rgb;
+            mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), LightMaskUv(uint(l.scales.w), muv), LightMaskLod(uint(l.scales.w))).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, LightMaskUv(uint(l.scales.w), muv), LightMaskLod(uint(l.scales.w))).rgb;
         }
         float vis = 1.0;
         if (l.info.x >= 0 && RtOccluded(l, hit, l.position.xyz, spot, 1u | (0x10u << 8u))) {
@@ -205,7 +205,11 @@ vec4 TracedLayers(vec3 origin, vec3 ray, float t_end) {
         }
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
         Material m = materials[rt_records[record].material];
-        if (m.kind == KIND_CONSTANT) {
+        if (RtEffectRecord(record)) {
+            vec4 e = RtEffectLayer(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
+            sum += seen * min(vec3(32.0), e.rgb * v.exposure.x);
+            seen *= 1.0 - e.a;
+        } else if (m.kind == KIND_CONSTANT) {
             vec2 uv = HitUv(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
             vec4 t = textureLod(PT_TEX2D(m.albedo), uv, 2.0);
             vec3 c = min(vec3(32.0), m.albedo_factor.rgb * t.rgb * m.params.y * v.exposure.x);

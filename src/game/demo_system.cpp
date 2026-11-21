@@ -16,6 +16,7 @@
 #include "engine/vfx/vfx_file.h"
 #include "game/game.h"
 #include "game/game_sound.h"
+#include "game/survival/survival.h"
 
 namespace pt::game {
 namespace {
@@ -331,6 +332,35 @@ void DemoSystem::IndexStage(Stage& stage) {
     }
 }
 
+bool DemoSystem::IndexPackageDemo(std::string_view fpk_path, std::string_view demo_id, uint32_t stage_id) {
+    if (Find(demo_id)) return true;
+    game_.GetVfs().LoadPackage(std::string(fpk_path));
+    const auto package = game_.GetVfs().LoadPackage(std::string(fpk_path) + "d");
+    if (!package) {
+        LogWarn("demo: {} for {} not readable", fpk_path, demo_id);
+        return false;
+    }
+    for (const auto& entry : package->Entries()) {
+        if (!entry.path.ends_with(".fox2")) continue;
+        fox2::DataSetFile f;
+        if (!f.Load(entry.path, package->Read(entry))) continue;
+        for (const fox2::Entity& e : f.Entities()) {
+            if (e.class_name != "DemoData") continue;
+            auto info = std::make_shared<DemoInfo>();
+            if (!ReadDemoInfo(f, e, *info) || info->demo_id != demo_id) continue;
+            info->stage_id = stage_id;
+            for (const auto& [name, path] : info->model_files) string_names_[Code(name.c_str())] = name;
+            for (const auto& [name, kind] : info->setup_lights) string_names_[Code(name.c_str())] = name;
+            for (const auto& [key, path] : info->file_params) string_names_[Code(key.c_str())] = path;
+            LogInfo("demo: {} indexed from {} ({}) for stage {}", demo_id, fpk_path, entry.path, stage_id);
+            demos_[info->demo_id] = std::move(info);
+            return true;
+        }
+    }
+    LogWarn("demo: {} not found in {}", demo_id, fpk_path);
+    return false;
+}
+
 void DemoSystem::ForgetStage(const Stage& stage) {
     for (auto it = demos_.begin(); it != demos_.end();) {
         it = it->second->stage_id == stage.id ? demos_.erase(it) : std::next(it);
@@ -550,18 +580,21 @@ std::shared_ptr<const anim::SimRig> DemoSystem::PlayerSimRig() {
 void DemoSystem::SetPlayerMeshVisible(PlayingDemo& demo, uint64_t mesh, bool visible, bool functor) {
     LoadPlayerParts();
     mesh &= kStrCode64Mask;
+    if (functor) {
+        demo.player_visible = true;
+    }
+    if (demo.third_person_body) {
+        return;
+    }
     if (visible) {
         player_hidden_.erase(mesh);
     } else {
         player_hidden_.insert(mesh);
     }
-    if (functor) {
-        demo.player_visible = true;
-    }
     LogInfo("demo: {} player mesh {:#x} {}{}", demo.demo_id, mesh, visible ? "shown" : "hidden", functor ? " (mesh functor, body visible)" : " (VisibleMesh)");
 }
 
-bool DemoSystem::Play(std::string_view demo_id) {
+bool DemoSystem::Play(std::string_view demo_id, bool quiet) {
     for (const PlayingDemo& existing : playing_) {
         if (existing.demo_id == demo_id && !existing.finished) {
             LogInfo("demo: {} is already playing, Play ignored", demo_id);
@@ -576,6 +609,7 @@ bool DemoSystem::Play(std::string_view demo_id) {
     game_.NoteArchive("demo:" + std::string(demo_id));
     PlayingDemo demo;
     demo.demo_id = std::string(demo_id);
+    demo.quiet = quiet;
     demo.startup_frames = kStartupFrames;
     demo.info = found->second;
     demo.stream = LoadStream(*found->second);
@@ -659,6 +693,32 @@ void DemoSystem::SetDemoTransform(std::string_view demo_id, const glm::quat& rot
         }
     }
     pending_transforms_[std::string(demo_id)] = {rotation, translation};
+}
+
+void DemoSystem::SetDemoThirdPersonBody(std::string_view demo_id, bool on) {
+    for (PlayingDemo& demo : playing_) {
+        if (demo.demo_id == demo_id && !demo.finished) {
+            demo.third_person_body = on;
+            if (on) {
+                LoadPlayerParts();
+                demo.player_visible = true;
+            }
+        }
+    }
+}
+
+bool DemoSystem::PlayerBoneWorld(std::string_view demo_id, std::string_view bone_name, glm::mat4& out) const {
+    for (const PlayingDemo& demo : playing_) {
+        if (demo.demo_id != demo_id || demo.finished) continue;
+        for (const DemoModel& m : demo.models) {
+            if (!m.player_own || !m.skeleton || m.bone_world.empty()) continue;
+            const int idx = m.skeleton->FindName(bone_name);
+            if (idx < 0 || static_cast<size_t>(idx) >= m.bone_world.size()) continue;
+            out = m.world * m.bone_world[static_cast<size_t>(idx)];
+            return true;
+        }
+    }
+    return false;
 }
 
 void DemoSystem::ToggleLoop(std::string_view demo_id) {
@@ -756,6 +816,15 @@ double DemoSystem::PlayTime(std::string_view demo_id) const {
     return 0.0;
 }
 
+double DemoSystem::PlayFrame(std::string_view demo_id) const {
+    for (const PlayingDemo& demo : playing_) {
+        if (demo.demo_id == demo_id && !demo.finished) {
+            return demo.frame;
+        }
+    }
+    return -1.0;
+}
+
 bool DemoSystem::ControlsPlayer() const {
     for (const PlayingDemo& demo : playing_) {
         if (demo.player_taken && !demo.finished) {
@@ -766,7 +835,8 @@ bool DemoSystem::ControlsPlayer() const {
 }
 
 void DemoSystem::Notify(PlayingDemo& demo, std::string_view message) {
-    LogInfo("demo: {} message {} at frame {:.1f}", demo.demo_id, message, demo.frame);
+    LogInfo("demo: {} message {} at frame {:.1f}{}", demo.demo_id, message, demo.frame, demo.quiet ? " (quiet: not posted)" : "");
+    if (demo.quiet) return;
     game_.Messages().PostDemoMessage(demo.demo_id, message);
 }
 
@@ -1567,7 +1637,8 @@ void DemoSystem::RunFunctor(PlayingDemo& demo, const anim::StreamEvent& e, float
             effect->effect_name = e.String(kKeyEffectName);
             effect->file = e.String(kKeyEffectFile);
             effect->file_path = FilePath(demo, effect->file);
-            if (demo.Held() && effect->file_path.find("/filter/") != std::string::npos) {
+            if (demo.Held() && (effect->file_path.find("/filter/") != std::string::npos ||
+                                effect->file_path.find("fx_sh_lgthnd") != std::string::npos)) {
                 demo.effects.pop_back();
                 return;
             }
@@ -1806,7 +1877,8 @@ void DemoSystem::SimulateModel(PlayingDemo& demo, DemoModel& m) {
         return;
     }
     if (!m.sim) {
-        m.sim = std::make_shared<anim::SimPhysics>();
+        m.sim = std::make_shared<anim::SimRigid>();
+        m.sim->SetDelay(1.0f / 29.97f);
     }
     const bool suspended = std::any_of(m.sim_suspend_sections.begin(), m.sim_suspend_sections.end(), [&](const auto& section) {
         return demo.frame >= section.first && demo.frame < section.second;
@@ -2164,6 +2236,16 @@ void DemoSystem::RebuildOutputs() {
     }
 }
 
+std::vector<glm::mat4> DemoSystem::ModelsDrawn(std::string_view part) const {
+    std::vector<glm::mat4> out;
+    for (const PlayingDemo& demo : playing_) {
+        for (const DemoModel& m : demo.models) {
+            if (m.drawn && m.visible && m.mesh && m.fmdl.find(part) != std::string::npos) out.push_back(m.world);
+        }
+    }
+    return out;
+}
+
 void DemoSystem::CollectDraws(std::vector<DrawItem>& out) const {
     for (const PlayingDemo& demo : playing_) {
         for (const DemoModel& m : demo.models) {
@@ -2175,10 +2257,15 @@ void DemoSystem::CollectDraws(std::vector<DrawItem>& out) const {
             item.transform = m.world;
             item.source = (std::hash<std::string>{}(demo.demo_id) * 31u) ^ std::hash<std::string>{}(m.name) ^ 0x44454D4Full;
             if (m.player_own) {
-                if (!demo.player_visible) {
+                if (!demo.player_visible && !demo.third_person_body) {
                     continue;
                 }
-                item.hidden_meshes = HiddenMeshes(*m.mesh, player_hidden_);
+                if (demo.third_person_body && game_.SurvivalActive()) {
+                    if (const GpuMesh* fitted = game_.Survival()->FittedBodyReady()) {
+                        item.mesh = fitted;
+                    }
+                }
+                item.hidden_meshes = HiddenMeshes(*item.mesh, demo.third_person_body ? player_default_hidden_ : player_hidden_);
             } else if (!m.hidden_meshes.empty()) {
                 item.hidden_meshes = HiddenMeshes(*m.mesh, m.hidden_meshes);
             }
@@ -2186,6 +2273,15 @@ void DemoSystem::CollectDraws(std::vector<DrawItem>& out) const {
                 AssignSkin(item, std::span<const glm::mat4>(m.skin));
             }
             out.push_back(item);
+            if (m.player_own && demo.third_person_body && game_.SurvivalActive()) {
+                if (const GpuMesh* shirt = game_.Survival()->FittedShirtReady()) {
+                    DrawItem shirt_item = item;
+                    shirt_item.mesh = shirt;
+                    shirt_item.hidden_meshes = HiddenMeshes(*shirt, player_default_hidden_);
+                    shirt_item.tint = glm::vec4(0.62f, 0.62f, 0.63f, 1.0f);
+                    out.push_back(shirt_item);
+                }
+            }
         }
     }
 }

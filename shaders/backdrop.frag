@@ -16,6 +16,15 @@ float Hash(float n) {
     return fract(sin(n * 12.9898) * 43758.5453);
 }
 
+vec3 BackdropHighlights(vec3 encoded) {
+    vec3 light = pow(max(encoded, vec3(0.0)), vec3(2.2));
+    float m = max(light.r, max(light.g, light.b));
+    float gain = min(2.0 * frame.display.z, max(0.8 * frame.display.y, 1.0));
+    float s = smoothstep(0.55, 1.0, m);
+    light *= 1.0 + (gain - 1.0) * s * s;
+    return pow(light, vec3(1.0 / 2.2));
+}
+
 float Covered(ivec2 p, ivec2 size) {
     return ImgFetch(IMG_DEPTH, clamp(p, ivec2(0), size - 1)).x > 1.0e-6 ? 1.0 : 0.0;
 }
@@ -66,6 +75,10 @@ void main() {
         bg.b = texture(PT_TEX2D(tex), clamp(uv - vec2(split, 0.0), 0.0, 1.0)).b;
     }
     bg = clamp(bg, 0.0, 1.0) * pass.f1.rgb * (1.0 - clamp(pass.f0.y, 0.0, 1.0));
-    vec3 c = clamp(scene + bg * (1.0 - covered) * clamp(pass.f0.x, 0.0, 1.0), 0.0, 1.0);
+    if (HdrOutput()) {
+        bg = BackdropHighlights(bg);
+    }
+    vec3 c = scene + bg * (1.0 - covered) * clamp(pass.f0.x, 0.0, 1.0);
+    c = HdrOutput() ? max(c, vec3(0.0)) : clamp(c, 0.0, 1.0);
     out_color = vec4(c, Luma601(c));
 }

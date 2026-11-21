@@ -86,7 +86,8 @@ std::optional<std::vector<uint8_t>> Base64(std::string_view text) {
 
 class GltfReader {
 public:
-    GltfReader(const std::string& asset_path, const FmdlModel* original) : asset_path_(asset_path), original_(original) {}
+    GltfReader(const std::string& asset_path, const FmdlModel* original, std::string_view only_node)
+        : asset_path_(asset_path), original_(original), only_node_(only_node) {}
 
     bool Read(std::span<const uint8_t> data, FmdlModel& out, std::string& error) {
         std::string_view json_text;
@@ -337,6 +338,15 @@ private:
                     const std::string normal = Image(static_cast<int>(t->Number("index", -1)), "nrm");
                     if (!normal.empty()) material.textures.emplace_back("NormalMap_Tex_NRM", normal);
                 }
+                if (extras && extras->IsObject()) {
+                    if (const json::Value* s = extras->Find("pt_specular"); s && s->IsNumber()) {
+                        const std::string srm = Image(static_cast<int>(s->number), "srm");
+                        if (!srm.empty()) material.textures.emplace_back("SpecularMap_Tex_LIN", srm);
+                    }
+                    if (const json::Value* index = extras->Find("pt_material_index"); index && index->IsNumber()) {
+                        material.vectors.emplace_back("MatParamIndex_0", glm::vec4(static_cast<float>(index->number), 0.0f, 0.0f, 0.0f));
+                    }
+                }
             }
             for (const auto& [name, path] : material.textures) {
                 if (name.starts_with("Base_Tex") && material.base_color.empty()) material.base_color = path;
@@ -446,17 +456,18 @@ private:
             }
         }
         for (int root : roots) {
-            if (!Node(root, glm::mat4(1.0f), out, error, 0)) return false;
+            if (!Node(root, glm::mat4(1.0f), out, error, 0, only_node_.empty())) return false;
         }
         return true;
     }
 
-    bool Node(int index, const glm::mat4& parent, FmdlModel& out, std::string& error, int depth) {
+    bool Node(int index, const glm::mat4& parent, FmdlModel& out, std::string& error, int depth, bool wanted) {
         const json::Value* nodes = doc_.Find("nodes");
         const json::Value* node = nodes ? nodes->At(static_cast<size_t>(index)) : nullptr;
         if (!node || depth > 64) return true;
         const glm::mat4 world = parent * LocalMatrix(*node);
-        if (const json::Value* mesh = node->Find("mesh")) {
+        wanted = wanted || node->String("name") == only_node_;
+        if (const json::Value* mesh = wanted ? node->Find("mesh") : nullptr) {
             const json::Value* skin = node->Find("skin");
             node_extras_ = node->Find("extras");
             const int skin_index = skin ? static_cast<int>(skin->number) : -1;
@@ -466,7 +477,7 @@ private:
         }
         if (const json::Value* children = node->Find("children")) {
             for (const json::Value& c : children->array) {
-                if (!Node(static_cast<int>(c.number), world, out, error, depth + 1)) return false;
+                if (!Node(static_cast<int>(c.number), world, out, error, depth + 1, wanted)) return false;
             }
         }
         return true;
@@ -658,6 +669,7 @@ private:
 
     std::string asset_path_;
     const FmdlModel* original_;
+    std::string only_node_;
     json::Value doc_;
     std::vector<uint8_t> glb_bin_;
     std::vector<std::vector<uint8_t>> buffers_;
@@ -673,11 +685,11 @@ private:
 }
 
 bool LoadGltfModel(std::span<const uint8_t> data, const std::string& asset_path, const FmdlModel* original, FmdlModel& out,
-                   std::string* error) {
+                   std::string* error, std::string_view only_node) {
     out = FmdlModel{};
     out.mesh.name = asset_path;
     std::string why;
-    GltfReader reader(asset_path, original);
+    GltfReader reader(asset_path, original, only_node);
     if (!reader.Read(data, out, why)) {
         if (error) *error = why;
         out = FmdlModel{};

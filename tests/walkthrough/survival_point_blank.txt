@@ -1,0 +1,28 @@
+# a round fired with a body on the player (SurvivalNight::HitEnemy): the old box took no round from inside it. A doll comes up 0.3 m ahead,
+# held still, and the handgun brings it down
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+sact freeze
+swait 20
+sact weapon=1
+swait 30
+sact spawn=0@0.3,0
+swait 130
+sact fire
+swait 20
+sact fire
+swait 20
+sact fire
+swait 20
+sact fire
+swait 20
+sact fire
+swait 60
+slog

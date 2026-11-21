@@ -204,6 +204,11 @@ void PadThread() {
 }
 
 void Start(const StartOptions& options) {
+    if (options.virtual_only) {
+        for (const char* hint : {SDL_HINT_JOYSTICK_HIDAPI, SDL_HINT_JOYSTICK_RAWINPUT, SDL_HINT_XINPUT_ENABLED, SDL_HINT_JOYSTICK_DIRECTINPUT, SDL_HINT_JOYSTICK_GAMEINPUT, SDL_HINT_JOYSTICK_WGI}) {
+            SDL_SetHintWithPriority(hint, "0", SDL_HINT_OVERRIDE);
+        }
+    }
 #ifdef _WIN32
     const bool background = options.background;
 #else

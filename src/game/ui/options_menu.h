@@ -11,7 +11,9 @@
 #include "engine/platform/input.h"
 #include "engine/ui/uia.h"
 #include "game/ui/archive_view.h"
+#include "game/ui/armory_view.h"
 #include "game/ui/dialog_view.h"
+#include "game/ui/night_hub_view.h"
 #include "game/ui/pc_settings_page.h"
 #include "game/ui/uia_player.h"
 #include "game/ui/ui_icons.h"
@@ -41,13 +43,20 @@ struct MenuInput {
     bool donate = false;
     bool update = false;
     bool street_return = false;
+    bool crosshair = false;
+    bool survival_promo = false;
     uint32_t held_dirs = 0;
     uint32_t music = 0;
     bool pointer_valid = false;
     glm::vec2 pointer{0.0f};
     bool click = false;
+    bool pointer_held = false;
     bool right_click = false;
     float wheel = 0.0f;
+    bool armory_tab = false;
+    bool armory_replay = false;
+    bool armory_apply_all = false;
+    glm::vec2 right_stick{0.0f};
 };
 
 inline constexpr uint32_t kMenuMusicBack = kMusicPressBack;
@@ -66,6 +75,7 @@ public:
     void Show(Game& game, bool first_boot, Page page = Page::Original);
     void Close();
     void SetPcSource(PcSettingsSource* source) { pc_source_ = source; }
+    bool OpenSurvivalNightFromDeath() { return pc_source_ && pc_source_->OpenSurvivalNightFromDeath(); }
     Page CurrentPage() const { return page_; }
     const PcSettingsPage& PcPage() const { return pc_; }
     PcSettingsPage& PcPageForScript() { return pc_; }
@@ -74,6 +84,7 @@ public:
     void AdvancePresentation(float dt);
 
     State CurrentState() const { return state_; }
+    float ShownAlpha() const;
     bool IsOpen() const { return state_ != State::Closed; }
     bool FirstBoot() const { return first_boot_; }
     bool PictureFullScreen() const { return state_ == State::Active && page_ == Page::Pc && pc_.FullScreen(); }
@@ -97,6 +108,8 @@ private:
 
     void ApplyStatic();
     void ApplyPages();
+    void DrawScreen(ui::UiBatch& batch, const UiCanvas& canvas);
+    void DrawBrain(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 center, float height);
     void SwitchPage(Game& game, Page page);
     void UpdateOriginal(Game& game, const MenuInput& input, float dt);
     void OriginalClick(Game& game, glm::vec2 units, MenuInput& input);
@@ -135,6 +148,10 @@ private:
     uint16_t street_label_ = 0;
     uint16_t street_icon_ = 0;
     uint16_t street_glow_ = 0;
+    uint16_t crosshair_label_ = 0;
+    uint16_t crosshair_icon_ = 0;
+    uint16_t crosshair_glow_ = 0;
+    bool crosshair_shown_ = false;
     uint16_t quit_icon_ = 0;
     uint16_t quit_glow_ = 0;
     bool street_shown_ = false;
@@ -145,11 +162,28 @@ private:
     void UpdateAsk(Game& game, const MenuInput& input, float dt);
     uint16_t entry_icon_ = 0;
     uint16_t entry_glow_ = 0;
-    enum class Button { None, PcSettings, Back, Quit, StreetReturn };
+    enum class Button { None, PcSettings, Back, Quit, StreetReturn, Crosshair, SurvivalPromo, SurvivalPromoClose };
+    void OpenCrosshair(Game& game);
+    void OpenSurvivalPromo(Game& game);
+    void DrawSurvivalToast(ui::UiBatch& batch, const UiCanvas& canvas);
+    void DrawPcDropdown(ui::UiBatch& batch, const UiCanvas& canvas, const PcDropdownView& dd);
     Button ButtonAt(glm::vec2 units) const;
     uint16_t entry_bar_ = 0;
     uint16_t back_bar_ = 0;
     uint16_t quit_bar_ = 0;
+    uint16_t street_bar_ = 0;
+    uint16_t crosshair_bar_ = 0;
+    uint16_t promo_title_ = 0;
+    uint16_t promo_line_ = 0;
+    uint16_t promo_action_ = 0;
+    uint16_t promo_icon_ = 0;
+    uint16_t promo_glow_ = 0;
+    uint16_t promo_bar_ = 0;
+    float bar_half_ = 10.0f;
+    bool survival_promo_shown_ = false;
+    bool survival_promo_seen_ = false;
+    bool survival_locked_confirming_ = false;
+    float promo_toast_t_ = 0.0f;
     Button hovered_ = Button::None;
     float hover_frame_ = 0.0f;
     struct PromptNodes {
@@ -182,11 +216,15 @@ private:
     float zoom_elapsed_ = 0.0f;
     decltype(ui::UifMaterial::textures) fragment_brain_textures_;
     decltype(ui::UifMaterial::textures) clean_brain_textures_;
-    bool close_pending_ = false;
     bool resume_ = false;
     bool resume_sent_ = false;
     float clock_ = 0.0f;
     float pillar_alpha_ = 0.0f;
+    ArmoryView armory_view_;
+    NightHubView night_hub_view_;
+    bool see_through_ = false;
+    void DrawCrosshairPreview(ui::UiBatch& batch, const UiCanvas& canvas, const CrosshairStyle& style);
+    float preview_clock_ = 0.0f;
 };
 
 }

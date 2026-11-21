@@ -327,18 +327,30 @@ const ModelEntry* ModelCache::Get(const std::string& path, FmdlModel* parsed) {
 
 const ModelEntry* ModelCache::GetSubset(const std::string& path, const std::string& key, const std::function<bool(const Vertex&)>& keep,
                                         const std::function<void(Vertex&)>& transform) {
+    const MaterialKeep by_vertex = [&keep](const Vertex& v, const FmdlMaterial&) { return keep(v); };
+    MaterialTransform moved;
+    if (transform) moved = [&transform](Vertex& v, const FmdlMaterial&) { transform(v); };
+    return Load(path, key, &by_vertex, nullptr, transform ? &moved : nullptr);
+}
+
+const ModelEntry* ModelCache::GetSubsetByMaterial(const std::string& path, const std::string& key, const MaterialKeep& keep,
+                                                  const MaterialTransform& transform) {
     return Load(path, key, &keep, nullptr, transform ? &transform : nullptr);
 }
 
-const ModelEntry* ModelCache::Load(const std::string& path, const std::string& key, const std::function<bool(const Vertex&)>* keep,
-                                   FmdlModel* parsed, const std::function<void(Vertex&)>* transform) {
+const ModelEntry* ModelCache::GetRebuilt(const std::string& path, const std::string& key, const std::function<void(MeshData&)>& rebuild) {
+    return Load(path, key, nullptr, nullptr, nullptr, &rebuild);
+}
+
+const ModelEntry* ModelCache::Load(const std::string& path, const std::string& key, const MaterialKeep* keep, FmdlModel* parsed,
+                                   const MaterialTransform* transform, const std::function<void(MeshData&)>* rebuild) {
     auto it = entries_.find(key);
     if (it != entries_.end()) {
         if (stage_scope_ == 0) it->second.pinned = true;
         return it->second.mesh ? &it->second : nullptr;
     }
     ModelEntry entry;
-    entry.pinned = stage_scope_ == 0 || keep || transform;
+    entry.pinned = stage_scope_ == 0 || keep || transform || rebuild;
     const TextureManager::ModelScope texture_scope(textures_);
     struct LoadingTextures {
         ModelCache& cache;
@@ -355,15 +367,17 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
             return nullptr;
         }
     }
+    const FmdlMaterial none;
     if (keep) {
         std::vector<uint32_t> indices;
         for (SubMesh& sub : model.mesh.submeshes) {
+            const FmdlMaterial& material = sub.material < model.materials.size() ? model.materials[sub.material] : none;
             const uint32_t first = static_cast<uint32_t>(indices.size());
             for (uint32_t i = 0; i + 2 < sub.index_count; i += 3) {
                 const uint32_t* tri = model.mesh.indices.data() + sub.first_index + i;
                 bool all = true;
                 for (int k = 0; k < 3 && all; ++k) {
-                    all = (*keep)(model.mesh.vertices[static_cast<size_t>(static_cast<int64_t>(tri[k]) + sub.vertex_offset)]);
+                    all = (*keep)(model.mesh.vertices[static_cast<size_t>(static_cast<int64_t>(tri[k]) + sub.vertex_offset)], material);
                 }
                 if (all) indices.insert(indices.end(), tri, tri + 3);
             }
@@ -375,11 +389,45 @@ const ModelEntry* ModelCache::Load(const std::string& path, const std::string& k
     if (transform && !model.mesh.vertices.empty()) {
         model.mesh.bounds_min = glm::vec3(1e30f);
         model.mesh.bounds_max = glm::vec3(-1e30f);
-        for (Vertex& v : model.mesh.vertices) {
-            (*transform)(v);
+        std::vector<int32_t> material_of(model.mesh.vertices.size(), -1);
+        for (const SubMesh& sub : model.mesh.submeshes) {
+            for (uint32_t i = 0; i < sub.index_count; ++i) {
+                const size_t v = static_cast<size_t>(static_cast<int64_t>(model.mesh.indices[sub.first_index + i]) + sub.vertex_offset);
+                if (v < material_of.size() && material_of[v] < 0) material_of[v] = static_cast<int32_t>(sub.material);
+            }
+        }
+        for (size_t i = 0; i < model.mesh.vertices.size(); ++i) {
+            Vertex& v = model.mesh.vertices[i];
+            const int32_t m = material_of[i];
+            (*transform)(v, m >= 0 && static_cast<size_t>(m) < model.materials.size() ? model.materials[static_cast<size_t>(m)] : none);
             model.mesh.bounds_min = glm::min(model.mesh.bounds_min, v.position);
             model.mesh.bounds_max = glm::max(model.mesh.bounds_max, v.position);
         }
+    }
+    if (rebuild) {
+        const size_t submeshes = model.mesh.submeshes.size();
+        (*rebuild)(model.mesh);
+        if (model.mesh.submeshes.size() != submeshes) {
+            LogWarn("model cache: {} rebuilt with {} submeshes for its {}", key, model.mesh.submeshes.size(), submeshes);
+            ++failed_;
+            entries_.emplace(key, std::move(entry));
+            return nullptr;
+        }
+        model.mesh.bounds_min = glm::vec3(1e30f);
+        model.mesh.bounds_max = glm::vec3(-1e30f);
+        for (const Vertex& v : model.mesh.vertices) {
+            model.mesh.bounds_min = glm::min(model.mesh.bounds_min, v.position);
+            model.mesh.bounds_max = glm::max(model.mesh.bounds_max, v.position);
+        }
+    }
+    {
+        std::vector<std::string> tex_paths;
+        for (const FmdlMaterial& m : model.materials) {
+            for (const auto& [slot, tpath] : m.textures) {
+                if (!tpath.empty()) tex_paths.push_back(tpath);
+            }
+        }
+        if (tex_paths.size() >= 2) textures_.PreloadModImages(vfs_.Textures(), tex_paths);
     }
     std::vector<int32_t> alpha_tested[2] = {std::vector<int32_t>(model.materials.size(), -1), std::vector<int32_t>(model.materials.size(), -1)};
     for (const FmdlMaterial& m : model.materials) {

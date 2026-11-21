@@ -225,6 +225,13 @@ DeviceImpl::~DeviceImpl() {
     deferred_.clear();
     frames_.clear();
     spare_.clear();
+    markers_.clear();
+    marker_buffer_.Reset();
+    marker_heap_.Reset();
+    if (marker_memory_) {
+        VirtualFree(marker_memory_, 0, MEM_RELEASE);
+        marker_memory_ = nullptr;
+    }
     Collect();
     for (Garbage& g : garbage_) {
         if (g.allocation) {
@@ -342,6 +349,9 @@ bool DeviceImpl::Init(std::string& error) {
     if (const char* remove = std::getenv("PT_D3D12_TEST_REMOVE"); remove && std::atoi(remove) > 0) {
         test_remove_frame_ = static_cast<uint32_t>(std::atoi(remove));
     }
+    if (const char* late = std::getenv("PT_D3D12_TEST_LATE_FENCE"); late && std::atoi(late) > 0) {
+        test_late_fence_ = static_cast<uint32_t>(std::atoi(late));
+    }
     if (!views_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, options_.view_descriptors, true, L"pt views") ||
         !samplers_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, options_.sampler_descriptors, true, L"pt samplers") ||
         !rtvs_.Create(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 4096, false, L"pt rtv") ||
@@ -369,9 +379,17 @@ bool DeviceImpl::Init(std::string& error) {
             return false;
         }
     }
+    CreatePassMarkers();
     LogInfo("d3d12 backend: {} ({}), shader model 6.6, binding tier {}, ray tracing tier {:#x}, depth bounds {}, dynamic depth bias {}, GPU upload heap {}, {} MB",
             info_.adapter, RuntimeDescription(), static_cast<int>(options.ResourceBindingTier), static_cast<int>(options5.RaytracingTier),
             info_.depth_bounds ? "yes" : "no", info_.dynamic_depth_bias ? "yes" : "no", gpu_upload_ ? "yes" : "no", info_.dedicated_video_memory >> 20);
+    {
+        LARGE_INTEGER umd{};
+        if (SUCCEEDED(bridge_.Adapter()->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+            LogInfo("d3d12 backend: driver {}.{}.{}.{}, vendor {:04x} device {:04x}", HIWORD(umd.HighPart), LOWORD(umd.HighPart), HIWORD(umd.LowPart), LOWORD(umd.LowPart), info_.vendor_id,
+                    info_.device_id);
+        }
+    }
     LogInfo("d3d12 backend: CPU-written shader inputs use {}; GPU-written CPU readbacks stay in system memory",
             gpu_upload_ ? "GPU upload heaps" : "staged video-memory buffers");
     return true;
@@ -537,6 +555,84 @@ void DeviceImpl::ReportCounters() {
     counters_start_ns_ = now;
 }
 
+bool DeviceImpl::CreatePassMarkers() {
+    if (const char* off = std::getenv("PT_D3D12_MARKERS"); off && off[0] == '0') {
+        LogInfo("d3d12 backend: pass markers off (PT_D3D12_MARKERS=0)");
+        return false;
+    }
+    ComPtr<ID3D12Device3> device3;
+    if (FAILED(bridge_.Get()->QueryInterface(IID_PPV_ARGS(&device3)))) {
+        LogInfo("d3d12 backend: no pass markers: the device has no ID3D12Device3");
+        return false;
+    }
+    const size_t slot_bytes = PassMarkers::kLabels * 2 * sizeof(uint32_t);
+    const size_t bytes = (slot_bytes * frames_.size() + 0xFFFF) & ~static_cast<size_t>(0xFFFF);
+    marker_memory_ = VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    HRESULT hr = marker_memory_ ? device3->OpenExistingHeapFromAddress(marker_memory_, IID_PPV_ARGS(&marker_heap_)) : E_OUTOFMEMORY;
+    if (SUCCEEDED(hr)) {
+        const D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(bytes, D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER);
+        hr = bridge_.Get()->CreatePlacedResource(marker_heap_.Get(), 0, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(&marker_buffer_));
+    }
+    if (FAILED(hr)) {
+        LogInfo("d3d12 backend: no pass markers: a heap over the process's memory could not be made ({})", Hr(hr));
+        marker_buffer_.Reset();
+        marker_heap_.Reset();
+        if (marker_memory_) {
+            VirtualFree(marker_memory_, 0, MEM_RELEASE);
+            marker_memory_ = nullptr;
+        }
+        return false;
+    }
+    marker_buffer_->SetName(L"pt pass markers");
+    markers_.resize(frames_.size());
+    for (size_t i = 0; i < markers_.size(); ++i) {
+        markers_[i].cpu = reinterpret_cast<volatile uint32_t*>(static_cast<uint8_t*>(marker_memory_) + i * slot_bytes);
+        markers_[i].gpu = marker_buffer_->GetGPUVirtualAddress() + i * slot_bytes;
+    }
+    LogInfo("d3d12 backend: pass markers on (up to {} labels in each of the {} frame lists; PT_D3D12_MARKERS=0 turns them off)",
+            PassMarkers::kLabels, markers_.size());
+    return true;
+}
+
+void DeviceImpl::LogPassMarkers() {
+    std::vector<const PassMarkers*> order;
+    for (const PassMarkers& m : markers_) {
+        if (m.serial) {
+            order.push_back(&m);
+        }
+    }
+    std::sort(order.begin(), order.end(), [](const PassMarkers* a, const PassMarkers* b) { return a->serial > b->serial; });
+    for (const PassMarkers* m : order) {
+        uint32_t begun = 0;
+        uint32_t ended = 0;
+        uint32_t open = 0;
+        std::string open_names;
+        const char* last_ended = nullptr;
+        for (uint32_t i = 0; i < m->count; ++i) {
+            const bool b = m->cpu[2 * i] == m->serial;
+            const bool e = m->cpu[2 * i + 1] == m->serial;
+            begun += b ? 1 : 0;
+            ended += e ? 1 : 0;
+            if (e) {
+                last_ended = m->names[i];
+            }
+            if (b && !e && ++open <= 8) {
+                open_names += open_names.empty() ? "" : ", ";
+                open_names += m->names[i] ? m->names[i] : "?";
+            }
+        }
+        if (m->count && ended == m->count) {
+            LogError("d3d12 backend: pass markers of frame {}: all {} passes finished", m->serial, m->count);
+            continue;
+        }
+        LogError("d3d12 backend: pass markers of frame {}: {} of {} passes begun, {} finished; begun and not finished: {}{}; the last "
+                 "finished: {}",
+                 m->serial, begun, m->count, ended, open_names.empty() ? "none" : open_names,
+                 open > 8 ? std::format(" and {} more", open - 8) : std::string(), last_ended ? last_ended : "none");
+    }
+}
+
 bool DeviceImpl::NewFrame(Frame& frame, const wchar_t* name) {
     if (FAILED(bridge_.Get()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&frame.allocator))) ||
         FAILED(bridge_.Get()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frame.allocator.Get(), nullptr, IID_PPV_ARGS(&frame.list)))) {
@@ -576,14 +672,35 @@ void DeviceImpl::WaitValue(uint64_t value) {
         return;
     }
     const auto wait_started = std::chrono::steady_clock::now();
-    fence_->SetEventOnCompletion(value, event_);
-    const DWORD waited = WaitForSingleObject(event_, 10000);
+    DWORD waited = WAIT_TIMEOUT;
+    bool test_late = false;
+    for (;;) {
+        const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_started).count();
+        if (spent >= 10000) {
+            waited = WAIT_TIMEOUT;
+            break;
+        }
+        ResetEvent(event_);
+        fence_->SetEventOnCompletion(value, event_);
+        if (test_late_fence_ && --test_late_fence_ == 0) {
+            LogWarn("d3d12: test: the wait for fence value {} ends as one that ran out (PT_D3D12_TEST_LATE_FENCE)", value);
+            test_late = true;
+            waited = WAIT_TIMEOUT;
+            break;
+        }
+        waited = WaitForSingleObject(event_, static_cast<DWORD>(10000 - spent));
+        if (waited != WAIT_OBJECT_0 || fence_->GetCompletedValue() >= value) {
+            break;
+        }
+    }
     ++counters_.fence_waits;
     counters_.fence_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_started).count();
-    if (waited != WAIT_OBJECT_0 && fence_->GetCompletedValue() < value) {
+    if (fence_->GetCompletedValue() < value) {
         std::string reason;
         if (!bridge_.Removed(&reason)) {
-            LogError("d3d12 backend: the GPU did not reach fence value {} within 10 s (completed {})", value, fence_->GetCompletedValue());
+            if (!test_late) {
+                LogError("d3d12 backend: the GPU did not reach fence value {} within 10 s (completed {})", value, fence_->GetCompletedValue());
+            }
             for (int i = 0; i < 100 && !bridge_.Removed(&reason) && fence_->GetCompletedValue() < value; ++i) {
                 Sleep(100);
             }
@@ -730,6 +847,7 @@ void DeviceImpl::DeviceLost(const char* where) {
         lost_reported_ = true;
         LogError("d3d12 backend: device lost at {}: {}", where, reason);
         bridge_.LogDred();
+        LogPassMarkers();
     }
     if (!rendering_) {
         return;
@@ -816,6 +934,25 @@ CommandList* DeviceImpl::BeginFrame(uint32_t slot) {
     f.allocator->Reset();
     f.list->Reset(f.allocator.Get(), nullptr);
     f.recorder->Begin();
+    if (!markers_.empty()) {
+        PassMarkers& m = markers_[slot % markers_.size()];
+        static const uint32_t test_markers = [] {
+            const char* v = std::getenv("PT_D3D12_TEST_MARKERS");
+            return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+        }();
+        if (test_markers && m.serial == test_markers) {
+            std::string labels;
+            for (uint32_t i = 0; i < m.count; ++i) {
+                labels += std::format("{}{} {}/{}", i ? ", " : "", m.names[i] ? m.names[i] : "?", m.cpu[2 * i] == m.serial ? "begun" : "-",
+                                      m.cpu[2 * i + 1] == m.serial ? "ended" : "-");
+            }
+            LogInfo("d3d12 backend: test pass markers of frame {} ({} labels): {}", m.serial, m.count, labels);
+            LogPassMarkers();
+        }
+        m.serial = ++marker_serial_;
+        m.count = 0;
+        f.recorder->SetMarkers(&m);
+    }
     if (active_->Alive()) {
         active_->FrameStart(frame_id_ + 1);
         active_->Marker(pt::d3d12::LatencyMarker::SimulationEnd, frame_id_ + 1);
@@ -905,6 +1042,7 @@ bool DeviceImpl::CreateSwapchain(HWND__* window, uint32_t width, uint32_t height
                                                                : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     d.max_nits = hdr_peak_nits;
     d.max_frame_average_nits = hdr_peak_nits * 0.5f;
+    bridge_.LogPresentEnvironment(window);
     if (wanted_owner_ != FrameGenOwner::None) {
         if (CreateOwnerSwapchain(d, error)) {
             swapchain_format_ = format;
@@ -1081,6 +1219,7 @@ void DeviceImpl::DestroyImage(ImageResource& image) {
     if (!rec) {
         return;
     }
+    NoteImageDestroyed();
     rtvs_.Free(rec->rtv, 1);
     dsvs_.Free(rec->dsv, 1);
     dsvs_.Free(rec->dsv_read_only, 1);

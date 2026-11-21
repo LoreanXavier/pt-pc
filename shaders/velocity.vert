@@ -46,6 +46,6 @@ void main() {
     world.xyz += WaveOffset(draw.ids.y, in_uv0);
     gl_Position = v.view_projection * world;
     out_uv0 = in_uv0;
-    out_current = gl_Position;
+    out_current = HdrOutput() ? frame.views[draw.ids.z].inv_view * world : gl_Position;
     out_previous = frame.views[draw.ids.z].view_projection * (skin[floatBitsToUint(draw.aux[0].x)] * vec4(previous, 1.0) + vec4(WaveOffset(draw.ids.y, in_uv0), 0.0));
 }

@@ -137,49 +137,35 @@ void Draw(ui::UiBatch& batch, const UiCanvas& canvas, UiAssets& assets, const ui
     DrawPromptText(batch, canvas, assets, *font, view.text, prompts, kTextSize, {kPanel.lo.x + kInset, kTextTop}, {kPanel.hi.x - kInset, kTextBottom},
                    ui::TextAlign::Center, ui::TextAlign::Center, glm::vec4(1.0f, 1.0f, 1.0f, fade), true, 6.0f);
 
-    const ui::UifNode* bar = model ? model->FindById(kBarNode) : nullptr;
     auto highlight = [&](const Cell& plate, float alpha) {
-        if (!bar || bar->type != ui::UifNodeType::Mesh || bar->positions.empty()) {
-            solid(plate.lo, plate.hi, glm::vec4(1.0f, 1.0f, 1.0f, 0.22f * alpha));
-            return;
-        }
-        glm::vec2 lo(std::numeric_limits<float>::max());
-        glm::vec2 hi(std::numeric_limits<float>::lowest());
-        for (const glm::vec2& p : bar->positions) {
-            lo = glm::min(lo, p);
-            hi = glm::max(hi, p);
-        }
-        const glm::vec2 span = glm::max(hi - lo, glm::vec2(1e-4f));
-        std::array<uint32_t, 4> textures{TextureManager::kWhite, TextureManager::kWhite, TextureManager::kWhite, TextureManager::kWhite};
-        for (int slot = 0; slot < 4; ++slot) {
-            const int t = bar->material.textures[slot];
-            if (t >= 0 && t < static_cast<int>(model->Textures().size())) {
-                textures[slot] = assets.Texture(model->Textures()[t]);
-                textures[slot] |= assets.TextureAddressBits(textures[slot]);
-            }
-        }
-        const glm::vec2 grow(18.0f, 8.0f);
-        const glm::vec2 a = plate.lo - grow, b = plate.hi + grow;
-        std::vector<ui::UiVertex> vertices;
-        for (const uint16_t i : bar->indices) {
-            if (i >= bar->positions.size() || i >= bar->uvs.size()) continue;
-            const glm::vec2 n = (bar->positions[i] - lo) / span;
-            const glm::vec2 at(a.x + (b.x - a.x) * n.x, b.y - (b.y - a.y) * n.y);
-            vertices.push_back({canvas.ToTarget(at), bar->uvs[i], glm::vec4(1.0f, 1.0f, 1.0f, alpha) * bar->color});
-        }
-        batch.Draw(vertices, ui::UiDrawParams::FromMaterial(textures, bar->material.params), ui::UiShade::Material,
-                   bar->Additive() ? ui::UiBlend::Additive : ui::UiBlend::Alpha);
+        const glm::vec2 lo = plate.lo + glm::vec2(3.0f);
+        const glm::vec2 hi = plate.hi - glm::vec2(3.0f);
+        const float w = hi.x - lo.x;
+        const float x0 = lo.x, x1 = lo.x + w * 0.22f, x2 = hi.x - w * 0.22f, x3 = hi.x;
+        const glm::vec4 edge(1.0f, 1.0f, 1.0f, 0.08f * alpha);
+        const glm::vec4 core(1.0f, 1.0f, 1.0f, 0.34f * alpha);
+        auto strip = [&](float a, float b, const glm::vec4& ca, const glm::vec4& cb) {
+            const std::vector<ui::UiVertex> v = {
+                {canvas.ToTarget({a, lo.y}), {0, 0}, ca}, {canvas.ToTarget({b, lo.y}), {0, 0}, cb}, {canvas.ToTarget({b, hi.y}), {0, 0}, cb},
+                {canvas.ToTarget({a, lo.y}), {0, 0}, ca}, {canvas.ToTarget({b, hi.y}), {0, 0}, cb}, {canvas.ToTarget({a, hi.y}), {0, 0}, ca},
+            };
+            batch.Draw(v, plain, ui::UiShade::Solid, ui::UiBlend::Alpha);
+        };
+        strip(x0, x1, edge, core);
+        strip(x1, x2, core, core);
+        strip(x2, x3, core, edge);
+        (void)model;
     };
 
     const int count = static_cast<int>(view.choices.size());
     for (int i = 0; i < count; ++i) {
         const Cell plate = Plate(i, count, view.language);
         const bool focused = i == view.focus;
-        solid(plate.lo, plate.hi, glm::vec4(1.0f, 1.0f, 1.0f, focused ? 0.1f : 0.04f));
+        solid(plate.lo, plate.hi, glm::vec4(1.0f, 1.0f, 1.0f, focused ? 0.12f : 0.04f));
         if (focused) highlight(plate, std::clamp(view.flash, 0.0f, 1.0f) * fade);
         frame(plate, focused ? 3.0f : 2.0f, glm::vec4(1.0f, 1.0f, 1.0f, focused ? 0.95f : 0.35f));
         const std::string label = focused ? "{accept} " + view.choices[static_cast<size_t>(i)] : view.choices[static_cast<size_t>(i)];
-        DrawPromptText(batch, canvas, assets, *font, label, prompts, kLabelSize, plate.lo + glm::vec2(16.0f, 4.0f), plate.hi - glm::vec2(16.0f, 4.0f),
+        DrawPromptText(batch, canvas, assets, *font, label, prompts, kLabelSize, plate.lo + glm::vec2(16.0f, 0.0f), plate.hi - glm::vec2(16.0f, 0.0f),
                        ui::TextAlign::Center, ui::TextAlign::Center, glm::vec4(1.0f, 1.0f, 1.0f, (focused ? 1.0f : 0.65f) * fade), true);
     }
     if (!view.back_label.empty()) {

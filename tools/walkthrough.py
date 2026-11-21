@@ -715,9 +715,11 @@ SCENARIOS = {
     },
     "archive": {
         # the Archive (Extras, gameplay.md 14.7): a cutscene opened from its row plays in the theater's own session and the menu comes
-        # back on that row, then a model shows in the theater's viewer and is left; the player's session is unchanged and play goes on
+        # back on that row, then a model shows in the theater's viewer and is left; the player's session is unchanged and play goes on.
+        # --no-release-locks: the release game opens the museum only after a finished game (archive_unused tests that lock)
         "start_floor": "f005",
         "frames": 14000,
+        "args": ["--no-release-locks"],
         "route": ["start", "walk", "archive", "exit", "walk"],
         "expect": [
             r"expect ok .*: PC settings cursor on pc_archive_cutscenes",
@@ -908,6 +910,7 @@ SCENARIOS = {
         "pad": True,
         "start_floor": "f005",
         "frames": 8000,
+        "args": ["--no-release-locks"],
         "route": ["start", "walk", "archive_pad"],
         "expect": [
             r"archive: theater opens lisa_stand",
@@ -1875,6 +1878,316 @@ SCENARIOS = {
             r"input script: \d+ expectations, 0 failed",
         ],
     },
+    # the survival night (Game+ tier 4) in the street walk, played by PT_SURVIVAL_AUTO: its first wave cleared, the second begun
+    "survival_night": {
+        "start_floor": "f010",
+        "frames": 5200,
+        "route": ["survival_night"],
+        "env": {"PT_SURVIVAL_AUTO": "1", "PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"street: walk started",
+            r"survival: the first person arm made from the player's model",
+            r"survival: started",
+            r"survival: wave 1 \(",
+            r"survival: doll rises",
+            r"survival: doll down",
+            r"survival: wave 1 cleared",
+            r"survival: wave 2 \(",
+        ],
+    },
+    # the survival night's death and retry: the auto player never shoots, the first wave brings it down, the fall plays and fire
+    # starts the night again from its countdown
+    "survival_death": {
+        "start_floor": "f010",
+        "frames": 5200,
+        "route": ["survival_death"],
+        "env": {"PT_SURVIVAL_AUTO": "1", "PT_SURVIVAL_PASSIVE": "1", "PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: started \(best wave 0, difficulty 1, from the first wave\)",
+            r"survival: wave 1 \(",
+            r"survival: player hit for 14",
+            r"survival: the player fell on wave 1",
+            r"survival: retry \(difficulty 1\)",
+            r"survival: waking on the street via gc_p00_020",
+            r"survival: wave 1 \(",
+        ],
+    },
+    # the loop browser's survival night: picked at the nightmare difficulty, it starts in the start room on f000 (the player standing
+    # up from the floor); its door opens onto the street, the walk starts on the house's porch with its door shutting and the night
+    # begins
+    "survival_browser": {
+        "start_floor": "f010",
+        "frames": 5000,
+        "route": ["survival_browser"],
+        "env": {"PT_SURVIVAL_AUTO": "1"},
+        "expect": [
+            r"loop browser: the survival night \(difficulty 3\)",
+            r"loop browser: the night's start room, its door opens onto the street",
+            r"loop browser: the start room's door opens onto the street",
+            r"loop browser: out of the start room onto the street",
+            r"street: the house's door closing behind the player",
+            r"street: walk started",
+            r"survival: started \(best wave 0, difficulty 3, from the first wave\)",
+            r"street: the house's door shut behind the player",
+            r"survival: wave 1 \(",
+        ],
+    },
+    # the night's radio offer by the mouse: a click on the first card before the cards have come in takes nothing, the pointer
+    # lights a card, a click on the third takes that one (GameUi::UpdateSurvivalOffer)
+    "survival_offer_pointer": {
+        "start_floor": "f010",
+        "frames": 5200,
+        "route": ["survival_offer_pointer"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: started",
+            r"survival: the radio offers ",
+            r"survival: the offer's card 3 taken with the pointer",
+            r"survival: took pc_boon_",
+            r"survival: the card's click let go",
+            r"survival: round fired",
+        ],
+        "forbid": [(r"survival: the offer's card 3 taken", r"survival: the card's click let go", r"survival: round fired")],
+    },
+    # the dark's count: past the grace on wave 9 it begins, the light stops it, run out it brings Lisa
+    "survival_dark": {
+        "start_floor": "f010",
+        "frames": 7000,
+        "route": ["survival_dark"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_SURVIVAL_EVENTS": "0"},
+        "expect": [
+            r"survival: wave 9 \(",
+            r"survival: the dark's count begins at 8 on wave 9",
+            r"survival: the dark's count stopped at",
+            r"survival: the dark's count begins at 8 on wave 9",
+            r"survival: the dark's count ran out on wave 9",
+            r"survival: Lisa caught the player on wave 9",
+        ],
+    },
+    # the night's end screen out of Lisa's catch in each language (python tools/walkthrough.py --shots DIR survival_end_tur ...): the
+    # survival_dark route, its pictures every 25 frames through the catch and the screen after it
+    **{f"survival_end_{code}": {
+        "optional": True,
+        "start_floor": "f010",
+        "frames": 7000,
+        "route": ["survival_dark"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_SURVIVAL_EVENTS": "0", "PT_SYSTEM_LANGUAGE": tag},
+        "expect": [
+            r"survival: the dark's count ran out on wave 9",
+            r"survival: Lisa caught the player on wave 9",
+            r"survival: the player fell on wave 9 \(.*, cause 6, out of the catch\)",
+        ],
+    } for code, tag in [('fra', 'fr-FR'), ('deu', 'de-DE'), ('spa', 'es-ES'), ('jpn', 'ja-JP'), ('ita', 'it-IT'), ('por', 'pt-PT'), ('tur', 'tr-TR'), ('zhs', 'zh-CN'), ('ara', 'ar-SA'), ('rus', 'ru-RU'), ('ukr', 'uk-UA'), ('ces', 'cs-CZ'), ('pol', 'pl-PL')]},
+    # the radio's supply on wave 12: the lamp named, the boxes taken
+    "survival_supply": {
+        "start_floor": "f010",
+        "frames": 5400,
+        "route": ["survival_supply"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_SURVIVAL_EVENTS": "0"},
+        "expect": [
+            r"survival: the radio names the lamp at",
+            r"survival: wave 12 \(",
+            r"survival: the lamp's supply reached",
+        ],
+    },
+    # third person: the handgun stays in the right hand through a sprint and its stop (no draw again when the run ends)
+    "survival_third_run": {
+        "start_floor": "f010",
+        "frames": 2400,
+        "route": ["survival_third_run"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: started",
+            r"third person: on",
+        ],
+    },
+    # third person: the crosshair held on a doll's head 7 m off and to the side, the handgun's rounds land under it (on the head)
+    "survival_third_aim": {
+        "start_floor": "f010",
+        "frames": 2600,
+        "route": ["survival_third_aim"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: started",
+            r"third person: on",
+            r"survival: third person shot lands 0\.[0-4]\d deg off the crosshair \(the head, ",
+            r"survival: doll down",
+        ],
+        "forbid": [(r"survival: act aimat", r"survival: doll down", r"survival: third person shot lands (?!0\.[0-4]\d deg off the crosshair \(the head)")],
+    },
+    # third person: the offer stops the walk, Shift tapped at a walk, the shotgun let down from the top of the view (pictures)
+    "survival_third_moves": {
+        "start_floor": "f010",
+        "frames": 3400,
+        "args": ["--virtual-pads"],
+        "route": ["survival_third_moves"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"third person: on",
+            r"survival: the radio offers ",
+            r"survival: took pc_boon_",
+            r"survival: sprint \(",
+        ],
+    },
+    # third person: W + Shift on and off over and over with every weapon; measured by tools/survival_guns/motion_check.py
+    "survival_third_transitions": {
+        "start_floor": "f010",
+        "frames": 6500,
+        "args": ["--virtual-pads"],
+        "route": ["survival_third_transitions"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_BODY_MOTION": "1"},
+        "expect": [
+            r"third person: on",
+            r"survival: act weapon=0",
+            r"input script seq frame",
+        ],
+    },
+    # third person: A and D over and over, alone, with W, with W and Shift, overlapping; measured by tools/survival_guns/motion_check.py
+    "survival_third_strafe": {
+        "start_floor": "f010",
+        "frames": 4000,
+        "args": ["--virtual-pads"],
+        "route": ["survival_third_strafe"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_BODY_MOTION": "1"},
+        "expect": [
+            r"third person: on",
+            r"survival: sprint \(",
+            r"input script seq frame",
+        ],
+    },
+    # third person: the aim, a shot, a reload, a blow and the change of weapon at rest and at a walk; measured the same
+    "survival_third_actions": {
+        "start_floor": "f010",
+        "frames": 6500,
+        "args": ["--virtual-pads"],
+        "route": ["survival_third_actions"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_BODY_MOTION": "1"},
+        "expect": [
+            r"third person: on",
+            r"survival: act weapon=3",
+            r"input script seq frame",
+        ],
+    },
+    # third person: the offer coming on a running and a walking body, paced as a window (measured, pictures on every tick)
+    "survival_third_offer_stop": {
+        "start_floor": "f010",
+        "frames": 6000,
+        "args": ["--virtual-pads", "--display-rate", "170"],
+        "route": ["survival_third_offer_stop"],
+        "env": {"PT_GAMEPLUS_TIER": "4", "PT_BODY_MOTION": "1"},
+        "expect": [
+            r"third person: on",
+            r"survival: the radio offers ",
+            r"survival: took pc_boon_",
+            r"survival: the radio offers ",
+            r"survival: took pc_boon_",
+        ],
+    },
+    # a real mouse button on a card of the radio's offer, held as a click is: no round fired until it is let go and pressed again
+    "survival_offer_click": {
+        "start_floor": "f010",
+        "frames": 2600,
+        "args": ["--virtual-pads"],
+        "route": ["survival_offer_click"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: the radio offers ",
+            r"survival: the offer's card 3 taken with the pointer",
+            r"survival: took pc_boon_",
+            r"input script seq frame",
+            r"survival: round fired",
+        ],
+        "forbid": [(r"survival: the offer's card 3 taken", r"input script seq frame", r"survival: round fired")],
+    },
+    # the radio's offer taken by the keyboard's 2 (the mouse is the cards' under the offer, and the keys were read with the look alone)
+    "survival_offer_keys": {
+        "start_floor": "f010",
+        "frames": 2600,
+        "args": ["--virtual-pads"],
+        "route": ["survival_offer_keys"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: the radio offers ",
+            r"survival: took pc_boon_\w+ \(rank \d+, card 2\)",
+        ],
+        "forbid": [(r"survival: the radio offers ", r"zzz never", r"taken with the pointer|: unknown name")],
+    },
+    # third person: a long gun taken off the road, carried through a run and its stop, weapons changed (pictures)
+    "survival_third_draw": {
+        "start_floor": "f010",
+        "frames": 2600,
+        "args": ["--virtual-pads"],
+        "route": ["survival_third_draw"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"third person: on",
+            r"survival: sprint \(",
+        ],
+    },
+    # a round fired with a body on the player lands (the old box took none from inside it)
+    "survival_point_blank": {
+        "start_floor": "f010",
+        "frames": 5200,
+        "route": ["survival_point_blank"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"survival: started",
+            r"survival: doll rises",
+            r"survival: doll down",
+        ],
+    },
+    # the menu takes input from its first frames: a second Esc closes it, F10 right after Esc reaches the PC page
+    "menu_setin_input": {
+        "start_floor": "f010",
+        "frames": 900,
+        "args": ["--virtual-pads"],
+        "route": ["menu_setin_input"],
+        "expect": [
+            r"ui: option menu opened \(pause\)",
+            r"ui: option menu closed",
+            r"ui: option menu opened \(pause\)",
+            r"ui: option menu page PC settings",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
+    # the night's loop browser entry (Game::NightUnlocked): four finishes (Game+ tier 4, not forced) do not show it; the run played at
+    # tier 4 unlocks it the moment its last loop's door opens onto the night, before the street, and pt.ini keeps it at once
+    "survival_unlock": {
+        "optional": True,
+        "gameplus": True,
+        "start_floor": "f120",
+        "frames": 40000,
+        "save": True,
+        "route": ["f120", "start", "f160", "survival_unlock_mark", "exit", "survival_unlock_after"],
+        "expect": [
+            r"game\+: finish 4 counted",
+            r"expect ok frame \d+: survival night locked",
+            r"loop browser: the survival night's entry unlocks \(the last loop's door opens onto the night\)",
+            r"ending: Game\+ tier 4: the exit door opens onto the street night",
+            r"loop browser: the survival night's unlock written to pt\.ini",
+            r"ending: Game\+ tier 4 finished, no credits",
+            r"survival: started",
+            r"expect ok frame \d+: survival night unlocked, kept",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
+    # a run at Game+ tier 4 reaching the ending (the loop browser's): the ending notes its tier, the street question's walk is the
+    # survival night's, and taking it starts the night
+    "survival_offer": {
+        "start_floor": "f010",
+        "frames": 7200,
+        "route": ["survival_offer"],
+        "env": {"PT_GAMEPLUS_TIER": "4"},
+        "expect": [
+            r"controller: step 28 -> 33",
+            r"street: credits finished, walk offered",
+            r"expect ok .*: PC settings cursor on pc_street_survival",
+            r"street: offer answered: walk the street",
+            r"street: walk started",
+            r"survival: started",
+            r"input script: \d+ expectations, 0 failed",
+        ],
+    },
     # the street question of the end of the credits (soffer): the page, its rows and the cursor; --shots keeps the bar's place
     "street_offer": {
         "start_floor": "f010",
@@ -2347,6 +2660,14 @@ class LiveSplitStub:
         self.server.close()
 
 
+def updates_itself(exe) -> bool:
+    """an install (pt-install-manifest.txt) or a portable copy (pt-files.json) with its pt-updater beside the game: the release
+    package's layouts, where an offered version is asked about at the start (docs/updates.md, "In-game update")"""
+    folder = Path(exe).resolve().parent
+    updater = (folder / "pt-updater.exe").is_file() or (folder / "pt-updater").is_file()
+    return updater and ((folder / "pt-install-manifest.txt").is_file() or (folder / "pt-files.json").is_file())
+
+
 def run(name, scenario, exe, game, demo_rate, keep, shots, pad=False, pt_args=(), vr=False):
     work = Path(tempfile.mkdtemp(prefix=f"pt_walk_{name}_"))
     livesplit = LiveSplitStub() if scenario.get("livesplit") else None
@@ -2357,7 +2678,12 @@ def run(name, scenario, exe, game, demo_rate, keep, shots, pad=False, pt_args=()
         shot_dir.mkdir(parents=True, exist_ok=True)
     pad = pad or scenario.get("pad", False)
     header = "" if scenario.get("pad") or not pad else "700 pattach 0 ps5\n700 pbot 0\n"
-    route.write_text(header + load_route(scenario["route"], shot_dir), encoding="utf-8")
+    # a scenario that offers a newer version (--fake-update) run in a copy that updates itself answers the start's question first
+    routes = list(scenario["route"])
+    asked = "--fake-update" in scenario.get("args", []) and updates_itself(exe)
+    if asked:
+        routes.insert(0, "update_question_no")
+    route.write_text(header + load_route(routes, shot_dir), encoding="utf-8")
     # a scenario with "save" gets a save store of its own in the work folder (Reset progress needs one)
     save = ["--save-dir", str(work / "save")] if scenario.get("save") else ["--no-save"]
     if scenario.get("save"):
@@ -2412,7 +2738,13 @@ def run(name, scenario, exe, game, demo_rate, keep, shots, pad=False, pt_args=()
     elapsed = time.time() - started
     position = 0
     results = []
-    for pattern in scenario["expect"]:
+    # such a copy asks instead of showing the update notice (main.cpp, the release check's answer): the question and its Not now in
+    # place of the notice's milestones
+    expect = list(scenario["expect"])
+    if asked:
+        expect = [r"update: asking at the start to update to", r"update: the player chose Not now at the start's question",
+                  *(pattern for pattern in expect if "pc_update_available" not in pattern)]
+    for pattern in expect:
         regex = re.compile(pattern)
         found = None
         for i in range(position, len(log)):

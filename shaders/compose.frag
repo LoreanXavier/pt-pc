@@ -44,6 +44,23 @@ vec3 TppShoulder(vec3 x) {
     float a = pass.f0.x;
     float t = pass.f0.y;
     float c = pass.f0.z;
+    float k = frame.display.z;
+    if (HdrOutput() && frame.grade.y > 0.5) {
+        float m = max(x.r, max(x.g, x.b));
+        if (m <= t) {
+            return x;
+        }
+        float s = m;
+        if (k > 1.001) {
+            float d = m - t;
+            s += (k - 1.0) * d * d / (d + 1.0);
+        }
+        return x * ((t + c - 1.0 / (a * (s - t + c))) / m);
+    }
+    if (HdrOutput() && k > 1.001) {
+        vec3 d = max(x - vec3(t), vec3(0.0));
+        x += (k - 1.0) * d * d / (d + vec3(1.0));
+    }
     vec3 curve = t + c - 1.0 / (a * (max(x, vec3(t)) - t + c));
     return mix(curve, x, vec3(lessThanEqual(x, vec3(t))));
 }

@@ -55,8 +55,9 @@ bool SoundSystem::OpenDevice(bool surround_output) {
     }
     auto output = std::make_unique<AudioOutput>();
     SoundEngine* engine = engine_.get();
-    if (!output->Open(kOutputRate, surround_output,
-                      [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); })) {
+    if (!output->Open(
+            kOutputRate, surround_output, [engine](float* out, uint32_t frames, uint32_t channels) { engine->Render(out, frames, channels); },
+            [engine](float* bed, uint32_t frames, AudioObjectMix& mix) { engine->RenderObjects(bed, frames, mix); })) {
         LogWarn("audio: no playback device, offline rendering only");
         return false;
     }
@@ -285,6 +286,17 @@ PlayingId SoundSystem::PlayStreamAs(std::vector<uint8_t> wem_riff, std::string_v
     return playing;
 }
 
+PlayingId SoundSystem::PlayMediaAs(std::shared_ptr<const Media> media, uint32_t donor_event_id, GameObjectId object) {
+    if (!engine_ || !media) {
+        return 0;
+    }
+    const PlayingId playing = engine_->PostEventClip(donor_event_id, object, std::move(media));
+    if (!playing) {
+        LogError("audio: donor event {:08X} not loaded", donor_event_id);
+    }
+    return playing;
+}
+
 std::shared_ptr<const Media> SoundSystem::FindMedia(uint32_t media_id) const {
     return engine_ ? engine_->Banks().FindMedia(media_id) : nullptr;
 }
@@ -337,6 +349,15 @@ void SoundSystem::RenderOfflineChannels(float* interleaved, uint32_t frames, uin
         return;
     }
     engine_->Render(interleaved, frames, channels);
+}
+
+void SoundSystem::RenderOfflineObjects(float* bed, uint32_t frames, AudioObjectMix& mix) {
+    if (!engine_ || output_) {
+        std::memset(bed, 0, sizeof(float) * frames * 8);
+        mix.count = 0;
+        return;
+    }
+    engine_->RenderObjects(bed, frames, mix);
 }
 
 bool SoundSystem::LoadSubtitles(std::string_view language) {

@@ -58,6 +58,10 @@ void GameController::ChangeGameStep(std::string_view name) {
     } else if (name == "GotoGameOver") {
         SetStep(16);
     } else if (name == "GotoEnding") {
+        if (current_ >= 21 && current_ <= 31) {
+            LogInfo("controller: GotoEnding ignored at step {}, the ending's steps run", current_);
+            return;
+        }
         SetStep(21);
     } else if (name == "FinishEndingRestartGame") {
         if (current_ == 28 && !game_.BrowseSaveSuppressed()) game_.EnableGamePlus();
@@ -72,6 +76,7 @@ void GameController::FinishEnding() {
     if (game_.LoopReloadPending()) {
         return;
     }
+    if (current_ == 28) game_.NoteEndingTier();
     if (current_ == 28 && !game_.BrowseSaveSuppressed()) {
         game_.NoteGameFinished();
         game_.EnableGamePlus();
@@ -236,7 +241,7 @@ void GameController::RunStep(int step) {
         return;
     case 12:
         Lock(true);
-        if (g.BrowseEntryPending()) {
+        if (g.BrowseEntryPending() && !g.NightDoorPending()) {
             g.Messages().PostDemoMessage("gc_p00_020", "hideOcho");
             SkippedOpeningDoor(g);
             LogInfo("controller: loop browser skips the opening demo");
@@ -370,6 +375,10 @@ void GameController::RunStep(int step) {
         }
         if (g.StreetPending() && g.StartStreetWalk()) {
             return;
+        }
+        if (g.Floor().IsCurrentFloorName("ending") && !g.BrowseSaveSuppressed() && g.GamePlusTier() >= Game::kTierSurvival) {
+            g.UnlockNight("a run of Game+ tier 4 reached its ending");
+            if (!g.Speedrun().Enabled() && g.FinishIntoNight()) return;
         }
         SetStep(28);
         return;

@@ -3,6 +3,7 @@
 #ifdef _WIN32
 
 #include <cstdlib>
+#include <wrl/client.h>
 #include <cstring>
 #include <format>
 
@@ -16,6 +17,19 @@ using CreateFactory2 = HRESULT(WINAPI*)(UINT, REFIID, void**);
 
 std::string HResult(HRESULT hr) {
     return std::format("{:#010x}", static_cast<uint32_t>(hr));
+}
+
+const char* DxgiName(HRESULT hr) {
+    switch (static_cast<uint32_t>(hr)) {
+        case 0x887a0005: return "DXGI_ERROR_DEVICE_REMOVED";
+        case 0x887a0006: return "DXGI_ERROR_DEVICE_HUNG";
+        case 0x887a0007: return "DXGI_ERROR_DEVICE_RESET";
+        case 0x887a0020: return "DXGI_ERROR_DRIVER_INTERNAL_ERROR";
+        case 0x887a0001: return "DXGI_ERROR_INVALID_CALL";
+        case 0x887a0026: return "DXGI_ERROR_ACCESS_LOST";
+        case 0x887a002b: return "DXGI_ERROR_ACCESS_DENIED";
+        default: return nullptr;
+    }
 }
 
 }
@@ -72,11 +86,13 @@ bool Device::Create(const DeviceOptions& options, std::string& error) {
                     "d3d12SDKLayers.dll next to the Agility SDK's D3D12Core.dll): {}", HResult(dhr));
         }
     }
-    const bool dred = options.dred || std::getenv("PT_D3D12_DRED") != nullptr;
-    if (dred && get_debug) {
+    const char* dred_env = std::getenv("PT_D3D12_DRED");
+    const bool dred_off = dred_env && dred_env[0] == '0';
+    dred_breadcrumbs_ = !dred_off && (options.dred || dred_env != nullptr);
+    if (!dred_off && get_debug) {
         ComPtr<ID3D12DeviceRemovedExtendedDataSettings> settings;
         if (SUCCEEDED(get_debug(IID_PPV_ARGS(&settings)))) {
-            settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            settings->SetAutoBreadcrumbsEnablement(dred_breadcrumbs_ ? D3D12_DRED_ENABLEMENT_FORCED_ON : D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED);
             settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
             dred_ = true;
         } else {
@@ -116,7 +132,7 @@ bool Device::Create(const DeviceOptions& options, std::string& error) {
             }
             DXGI_ADAPTER_DESC1 d{};
             candidate->GetDesc1(&d);
-            if ((d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ||
+            if ((d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || d.VendorId == 0x1414 ||
                 FAILED(create_device(candidate.Get(), options.feature_level, __uuidof(ID3D12Device), nullptr))) {
                 continue;
             }
@@ -185,7 +201,7 @@ bool Device::Create(const DeviceOptions& options, std::string& error) {
         tearing_ = tearing != FALSE;
     }
     LogInfo("d3d12: device on {} (LUID {:08x}:{:08x}), tearing {}{}", adapter_name_, static_cast<uint32_t>(id.HighPart), id.LowPart,
-            tearing_ ? "supported" : "unsupported", dred_ ? ", DRED on" : "");
+            tearing_ ? "supported" : "unsupported", !dred_ ? "" : dred_breadcrumbs_ ? ", DRED on" : ", DRED page faults on");
     return true;
 }
 
@@ -271,6 +287,42 @@ bool Device::ShaderModel(D3D_SHADER_MODEL wanted) const {
     return SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof(model))) && model.HighestShaderModel >= wanted;
 }
 
+void Device::LogPresentEnvironment(HWND window) {
+    if (logged_environment_window_ == window) {
+        return;
+    }
+    logged_environment_window_ = window;
+    bool elevated = false;
+    HANDLE token = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION e{};
+        DWORD size = 0;
+        if (GetTokenInformation(token, TokenElevation, &e, sizeof(e), &size)) {
+            elevated = e.TokenIsElevated != 0;
+        }
+        CloseHandle(token);
+    }
+    DWORD hags = 0;
+    DWORD hags_size = sizeof(hags);
+    const bool hags_known = RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers", L"HwSchMode",
+                                         RRF_RT_REG_DWORD, nullptr, &hags, &hags_size) == ERROR_SUCCESS;
+    const HMONITOR monitor = window ? MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) : nullptr;
+    int outputs = 0;
+    bool window_on_adapter = false;
+    ComPtr<IDXGIOutput> output;
+    for (UINT i = 0; adapter_ && SUCCEEDED(adapter_->EnumOutputs(i, &output)); ++i) {
+        DXGI_OUTPUT_DESC od{};
+        if (SUCCEEDED(output->GetDesc(&od)) && od.Monitor == monitor) {
+            window_on_adapter = true;
+        }
+        ++outputs;
+        output.Reset();
+    }
+    LogInfo("d3d12: presenting environment: process {}, session {}, hardware scheduling {}, the adapter has {} output(s) and the window's monitor is {} of them",
+            elevated ? "elevated" : "not elevated", GetSystemMetrics(SM_REMOTESESSION) ? "remote" : "local",
+            !hags_known ? "unknown" : hags == 2 ? "on" : "off", outputs, window_on_adapter ? "one" : "not one");
+}
+
 bool Device::Removed(std::string* reason) const {
     if (!device_) {
         return false;
@@ -280,7 +332,8 @@ bool Device::Removed(std::string* reason) const {
         return false;
     }
     if (reason) {
-        *reason = "the DirectX 12 device was removed (" + HResult(hr) + ")";
+        const char* name = DxgiName(hr);
+        *reason = "the DirectX 12 device was removed (" + HResult(hr) + (name ? std::string(", ") + name : std::string()) + ")";
     }
     return true;
 }
@@ -333,10 +386,24 @@ bool Device::WaitFence(ID3D12Fence* fence, uint64_t value, uint32_t timeout_ms) 
     if (!fence || fence->GetCompletedValue() >= value) {
         return true;
     }
-    if (FAILED(fence->SetEventOnCompletion(value, event_))) {
-        return false;
+    const ULONGLONG started = GetTickCount64();
+    for (;;) {
+        const ULONGLONG spent = GetTickCount64() - started;
+        if (spent >= timeout_ms) {
+            return fence->GetCompletedValue() >= value;
+        }
+        ResetEvent(event_);
+        if (FAILED(fence->SetEventOnCompletion(value, event_))) {
+            return false;
+        }
+        const DWORD waited = WaitForSingleObject(event_, static_cast<DWORD>(timeout_ms - spent));
+        if (fence->GetCompletedValue() >= value) {
+            return true;
+        }
+        if (waited != WAIT_OBJECT_0) {
+            return false;
+        }
     }
-    return WaitForSingleObject(event_, timeout_ms) == WAIT_OBJECT_0 || fence->GetCompletedValue() >= value;
 }
 
 bool Device::WaitIdle(uint32_t timeout_ms) {

@@ -1,0 +1,18 @@
+# the menu takes input from its first frames (OptionsMenu::Update): a second Esc while it comes in closes it at once, F10 right after Esc
+# goes to the PC page. The original holds all input through the setin's full second
+sstep 15
+swait 60
+sktap Escape 2
+swait 6
+sexpect menu 1
+sktap Escape 2
+swait 30
+sexpect menu 0
+swait 30
+sktap Escape 2
+swait 6
+sktap F10 2
+swait 40
+sexpect menu 1
+sexpect page 1
+slog

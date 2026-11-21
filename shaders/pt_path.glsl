@@ -77,7 +77,7 @@ bool PtLightEval(Light l, vec3 p, vec3 N, vec3 V, PtMaterial s, float cutoff, ou
             return false;
         }
         vec2 uv = vec2(0.5 * c.x / c.w + 0.5, 1.0 - (0.5 * c.y / c.w + 0.5));
-        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), uv, 0.0).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, uv, 0.0).rgb;
+        mask = l.info.w > 0 ? textureLod(PT_TEX2D(uint(l.info.w - 1)), LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb : ImgLod(uint(l.info.y), SMP_LINEAR_WRAP, LightMaskUv(uint(l.scales.w), uv), LightMaskLod(uint(l.scales.w))).rgb;
     }
     vec3 R = reflect(-V, N);
     vec3 to_ray = R - L;
@@ -247,7 +247,7 @@ bool PtOccluded(Light l, vec3 origin, vec3 target, vec3 receiver_normal, inout u
 bool g_pt_fill_unshadowed = false;
 
 bool PtFillUnshadowed(uint light) {
-    return g_pt_fill_unshadowed && rt_light_state[light].w < 0.5;
+    return (g_pt_fill_unshadowed && rt_light_state[light].w < 0.5) || (uint(frame.lights[light].scales.w) & 8u) != 0u;
 }
 
 vec3 PtNextEventN(vec3 p, vec3 N, vec3 V, PtMaterial s, vec3 origin, uint light_count, float cutoff, uint samples, inout uint rng) {
@@ -373,9 +373,9 @@ vec3 PtSpecularAlbedo(vec3 N, vec3 V, PtMaterial s) {
     return s.specular * mat0.rgb * F;
 }
 
-PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
+PtMaterial PtHitMaterial(Material m, vec2 uv, float lod, vec3 tint) {
     PtMaterial s;
-    s.albedo = (m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, lod).rgb;
+    s.albedo = ((m.flags & MAT_CONSTANT_COLOR) != 0u ? m.albedo_factor.rgb : textureLod(PT_TEX2D(m.albedo), uv, lod).rgb) * tint;
     vec4 srm = (m.flags & MAT_NORMAL_WAVE) != 0u ? vec4(m.extra.x, m.extra.y, 0.0, 0.0) : textureLod(PT_TEX2D(m.specular), uv, lod);
     s.specular = srm.r;
     s.roughness = srm.g;
@@ -386,6 +386,8 @@ PtMaterial PtHitMaterial(Material m, vec2 uv, float lod) {
 }
 
 bool g_pt_mirror_view = false;
+bool g_pt_first_effects = false;
+bool g_pt_layer_effects = false;
 
 bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3 radiance, inout vec3 throughput, inout uint rng, out vec3 glass_point,
             out vec3 glass_normal) {
@@ -402,6 +404,9 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
                 if (g_pt_mirror_view && (rt_records[record].flags & 1024u) != 0u) {
                     continue;
                 }
+                if (!g_pt_layer_effects && RtEffectRecord(record)) {
+                    continue;
+                }
                 rayQueryConfirmIntersectionEXT(rq);
             }
         }
@@ -410,6 +415,19 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
         }
         float t = rayQueryGetIntersectionTEXT(rq, true);
         uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        if (RtEffectRecord(record)) {
+            vec4 e = RtEffectLayer(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true));
+            radiance += throughput * min(vec3(emissive_cap), e.rgb);
+            throughput *= 1.0 - e.a;
+            if (dot(throughput, throughput) < 1.0e-8) {
+                return false;
+            }
+            t_start = t + 1.0e-3;
+            if (!(t_start < t_end)) {
+                return false;
+            }
+            continue;
+        }
         RtSurfaceHit hs = RtFullSurface(record, rayQueryGetIntersectionPrimitiveIndexEXT(rq, true), rayQueryGetIntersectionBarycentricsEXT(rq, true),
                                         rayQueryGetIntersectionObjectToWorldEXT(rq, true), dir);
         Material m = materials[hs.material];
@@ -486,7 +504,7 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         }
 #if defined(PT_D3D12) && defined(PT_INDIRECT_RENDER_SIZE)
         uint record = 0u;
-        RtSurfaceHit hs = RtSurfaceHit(vec3(0.0), vec2(0.0), 0u);
+        RtSurfaceHit hs = RtSurfaceHit(vec3(0.0), vec2(0.0), 0u, vec3(1.0));
         bool hit_front = false;
         if (hit) {
             record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -497,7 +515,11 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
 #endif
         vec3 glass_point;
         vec3 glass_normal;
-        if (PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng, glass_point, glass_normal)) {
+        g_pt_layer_effects = g_pt_first_effects && bounce == 0u;
+        bool layer_glass = PtLayers(origin, dir, hit ? t + max(1.0e-3, 2.0e-4 * t) : t, PtEmissiveCap(bounce, cutoff), radiance, throughput, rng,
+                                    glass_point, glass_normal);
+        g_pt_layer_effects = false;
+        if (layer_glass) {
             origin = glass_point + glass_normal * 0.002;
             dir = reflect(dir, glass_normal);
             continue;
@@ -528,7 +550,7 @@ vec3 PtTracePath(vec3 origin, vec3 dir, vec3 throughput, uint bounces, float rea
         if (!front || m.kind != KIND_DEFERRED) {
             break;
         }
-        PtMaterial s = PtHitMaterial(m, hs.uv, lod);
+        PtMaterial s = PtHitMaterial(m, hs.uv, lod, hs.tint);
         if (mirror_lining) {
             s.albedo = mix(s.albedo, vec3(1.0), 0.035);
         }

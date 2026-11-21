@@ -1,0 +1,12 @@
+# the survival night (Game+ tier 4, docs/street-city.md) from the loop browser's street entry, played by PT_SURVIVAL_AUTO: the
+# first wave rises, falls and is cleared, the second starts
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 900
+sshot {shots}/survival_wave1.png
+swait 1500
+sshot {shots}/survival_wave2.png

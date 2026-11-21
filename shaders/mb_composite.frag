@@ -14,6 +14,11 @@ layout(location = 0) out vec4 out_color;
 
 void main() {
     out_color = Img(pass.ids.x, SMP_LINEAR_CLAMP, pass.f0.zw * in_uv + pass.f0.xy);
+    if (pass.f1.z > 0.0) {
+        vec3 sharp = pow(max(ImgFetch(pass.ids.y, ivec2(gl_FragCoord.xy)).rgb, vec3(0.0)), vec3(pass.f1.z));
+        out_color = vec4(pow(max(mix(sharp, out_color.rgb, Saturate(out_color.a)), vec3(0.0)), vec3(1.0 / pass.f1.z)), 1.0);
+        return;
+    }
     if (pass.f1.y > 0.0) {
         out_color.rgb = pow(max(out_color.rgb, vec3(0.0)), vec3(pass.f1.y));
     }

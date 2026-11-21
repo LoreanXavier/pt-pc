@@ -1,0 +1,524 @@
+# third person: W + Shift on and off over and over with each weapon (owner, 8 November: the animations change at once and catch). Long runs
+# let go, runs let go on their way in, walks and stops let go on their way out; PT_BODY_MOTION=1 and tools/survival_guns/motion_check.py measure it
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact quiet
+sact unhurt
+sthird 1
+sact weapon=1
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+sact weapon=2
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+sact weapon=3
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+sact weapon=4
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+sact weapon=5
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+sact weapon=0
+steleport -1.15 27
+swait 70
+skey W 1
+skey Left_Shift 1
+swait 70
+skey W 0
+skey Left_Shift 0
+swait 60
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 25
+skey W 0
+skey Left_Shift 0
+swait 20
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 12
+skey W 0
+skey Left_Shift 0
+swait 12
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 8
+skey W 0
+skey Left_Shift 0
+swait 8
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 35
+skey W 0
+skey Left_Shift 0
+swait 10
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+skey Left_Shift 1
+swait 6
+skey W 0
+skey Left_Shift 0
+swait 25
+skey W 1
+swait 45
+skey W 0
+swait 60
+skey W 1
+swait 40
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey Left_Shift 1
+swait 12
+skey Left_Shift 0
+swait 25
+skey W 0
+swait 40
+slog

@@ -1,7 +1,7 @@
 # The PC settings with a pad alone: cross on the option screen opens them on their first tab (Display), the d-pad moves the cursor
 # and changes the setting under it (v-sync), cross changes it too; R1 and L1 switch tabs (Upscaling: the upscaler enables Quality and
 # its quality changes), up from the first row puts the cursor on the tab strip where left and right switch tabs and down returns to
-# the rows; the Share/View button (after the page's first half second) is the footer's Donate on Patreon (headless: logged); circle and
+# the rows; the Share/View button (after the page's first half second) is the footer's Support on Patreon (headless: logged); circle and
 # OPTIONS return to the option screen, the PC settings come back on the last tab while the menu stays open and on the first tab once
 # it was closed, and OPTIONS there closes the menu.
 # pt.exe --headless --virtual-pads --audio-offline --no-save --start-floor f010 --frames 3000 --input-script tests/pad/pc_settings.txt

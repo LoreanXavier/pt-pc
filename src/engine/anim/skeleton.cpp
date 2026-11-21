@@ -137,6 +137,38 @@ void ComputeSkin(const Skeleton& skeleton, const std::vector<glm::mat4>& world, 
     }
 }
 
+void ComputeScaledSkin(const Skeleton& skeleton, const Pose& pose, const std::vector<glm::vec3>& scale, std::vector<glm::mat4>& skin) {
+    const size_t n = skeleton.Size();
+    std::vector<glm::mat4> rigid(n, glm::mat4(1.0f));
+    std::vector<uint8_t> state(n, 0);
+    auto scale_of = [&](size_t i) { return i < scale.size() ? scale[i] : glm::vec3(1.0f); };
+    auto solve = [&](auto&& self, size_t i) -> void {
+        if (state[i] == 2) {
+            return;
+        }
+        state[i] = 1;
+        const glm::quat rotation = i < pose.rotation.size() ? pose.rotation[i] : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        const glm::vec3 offset = i < pose.offset.size() ? pose.offset[i] : glm::vec3(0.0f);
+        const int16_t parent = skeleton.parents[i];
+        glm::vec3 from_parent = skeleton.bind_local[i] + offset;
+        if (parent >= 0 && static_cast<size_t>(parent) < n && state[static_cast<size_t>(parent)] != 1) {
+            self(self, static_cast<size_t>(parent));
+            from_parent *= scale_of(static_cast<size_t>(parent));
+            rigid[i] = rigid[static_cast<size_t>(parent)] * glm::translate(glm::mat4(1.0f), from_parent) * glm::mat4_cast(rotation);
+        } else {
+            rigid[i] = glm::translate(glm::mat4(1.0f), from_parent) * glm::mat4_cast(rotation);
+        }
+        state[i] = 2;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        solve(solve, i);
+    }
+    skin.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        skin[i] = rigid[i] * glm::scale(glm::mat4(1.0f), scale_of(i)) * glm::translate(glm::mat4(1.0f), -skeleton.bind_world[i]);
+    }
+}
+
 void BlendPose(const Pose& from, const Pose& to, float weight, Pose& out) {
     const size_t n = std::min(from.Size(), to.Size());
     Pose result;

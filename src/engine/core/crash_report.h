@@ -14,6 +14,7 @@ std::filesystem::path WriteCrashDump(const char* reason, void* exception_pointer
 std::filesystem::path WriteCrashDumpFor(const char* reason, void* exception_pointers, unsigned long thread_id);
 
 void SetCrashNote(const std::string& note);
+void SetThirdPartyNote(const std::string& tools);
 
 [[noreturn]] void FatalError(const std::string& reason, bool show_message, int code = 3);
 

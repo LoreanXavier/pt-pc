@@ -2379,4 +2379,111 @@ inline std::string SelfTestUnicodePaths(const fs::path& root) {
     }
     return failures;
 }
+
+struct UninstallResult {
+    int removed_files = 0;
+    int failed_files = 0;
+    bool removed_root = false;
+};
+
+inline UninstallResult UninstallInstallFiles(const fs::path& destination, bool remove_data) {
+    const fs::path root = FolderPath(destination);
+    const ExistingInstall existing = InspectInstall(root);
+    if (!existing.found) {
+        throw std::runtime_error("This folder does not contain an installation of P.T. PC Port.");
+    }
+    std::set<std::string> targets;
+    for (const auto& f : existing.files) targets.insert(f.path);
+    for (const auto& p : existing.package_files) targets.insert(p.path);
+    for (const auto& u : UnlockFiles(root)) targets.insert(u);
+    targets.insert(kManifestName);
+    targets.insert(kGameExe);
+    targets.insert("pt-updater.exe");
+    targets.insert("install-notes.txt");
+    targets.insert("install-extraction.log");
+
+    UninstallResult out;
+    std::error_code ec;
+    for (const std::string& rel : targets) {
+        fs::path file;
+        try {
+            file = Contained(root, rel);
+        } catch (...) {
+            continue;
+        }
+        if (!fs::exists(file, ec)) continue;
+        if (fs::remove(file, ec)) {
+            ++out.removed_files;
+        } else {
+            ++out.failed_files;
+        }
+    }
+    if (remove_data) {
+        fs::remove_all(root / "data", ec);
+        fs::remove_all(root / "mods", ec);
+    }
+    std::vector<fs::path> dirs;
+    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_directory(ec)) dirs.push_back(it->path());
+    }
+    std::sort(dirs.begin(), dirs.end(), [](const fs::path& a, const fs::path& b) {
+        return a.native().size() > b.native().size();
+    });
+    for (const fs::path& dir : dirs) {
+        if (fs::is_empty(dir, ec)) fs::remove(dir, ec);
+    }
+    if (fs::is_empty(root, ec) && fs::remove(root, ec)) {
+        out.removed_root = true;
+    }
+    return out;
+}
+
+inline std::string SelfTestUninstall(const fs::path& root) {
+    std::string failures;
+    auto write = [](const fs::path& file, const std::string& bytes) {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << bytes;
+    };
+    const fs::path keep_dest = root / "keep-data";
+    write(keep_dest / kGameExe, "game");
+    write(keep_dest / "shaders" / "a.spv", "spv");
+    write(keep_dest / "data" / "pt.ini", "settings");
+    write(keep_dest / "data" / "save.bin", "save");
+    WriteManifest(keep_dest, "1.1.0", {{kGameExe, std::string(64, 'a')}, {"shaders/a.spv", std::string(64, 'b')}});
+    try {
+        const UninstallResult r = UninstallInstallFiles(keep_dest, false);
+        if (r.removed_files < 3 || r.failed_files != 0 || r.removed_root) failures += " uninstall-keep-counts";
+        if (fs::exists(keep_dest / kGameExe) || fs::exists(keep_dest / "shaders") || fs::exists(keep_dest / kManifestName))
+            failures += " uninstall-keep-leftovers";
+        if (!fs::exists(keep_dest / "data" / "pt.ini") || !fs::exists(keep_dest / "data" / "save.bin"))
+            failures += " uninstall-data-lost";
+    } catch (const std::exception& e) {
+        failures += std::string(" uninstall-keep:") + e.what();
+    }
+
+    const fs::path full_dest = root / "remove-all";
+    write(full_dest / kGameExe, "game");
+    write(full_dest / "data" / "pt.ini", "settings");
+    WriteManifest(full_dest, "1.1.0", {{kGameExe, std::string(64, 'a')}});
+    try {
+        const UninstallResult r = UninstallInstallFiles(full_dest, true);
+        if (!r.removed_root || fs::exists(full_dest)) failures += " uninstall-full-root";
+    } catch (const std::exception& e) {
+        failures += std::string(" uninstall-full:") + e.what();
+    }
+
+    const fs::path empty_dir = root / "not-an-install";
+    fs::create_directories(empty_dir);
+    bool refused = false;
+    try {
+        UninstallInstallFiles(empty_dir, false);
+    } catch (...) {
+        refused = true;
+    }
+    if (!refused) failures += " uninstall-non-install-accepted";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    return failures;
+}
 }

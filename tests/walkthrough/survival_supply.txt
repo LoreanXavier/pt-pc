@@ -1,0 +1,20 @@
+# the radio's supply (SurvivalNight::StartSupply): the boxes under a lamp far off, marked; taken, the mark goes
+sstep 15
+swait 30
+sloop 17
+sstep 31
+swait 400
+ssurvival
+swait 300
+sact hold
+sact unhurt
+sact freeze
+sact wave=12
+swait 30
+sact clear
+swait 200
+sshot {shots}/survival_supply.png
+swait 4
+sact tosupply
+swait 240
+slog

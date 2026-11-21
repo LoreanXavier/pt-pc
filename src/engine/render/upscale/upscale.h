@@ -25,6 +25,24 @@ class FrameGeneration;
 enum class UpscalerKind : int { Off = 0, Fsr = 1, Dlss = 2, Xess = 3, Spatial = 4, Fsr4 = 5, MetalFx = 6, Count = 7 };
 enum class DlssModel : int { Auto = 0, K = 1, L = 2, M = 3, Count = 4 };
 enum class FrameGenKind : int { Off = 0, Fsr = 1, Dlss = 2, Metalfx = 3, Xess = 4, Count = 5 };
+constexpr bool UpscalerOnPlatform(UpscalerKind kind) {
+#if defined(__APPLE__)
+    return kind == UpscalerKind::Off || kind == UpscalerKind::MetalFx;
+#elif defined(_WIN32)
+    return kind != UpscalerKind::MetalFx;
+#else
+    return kind == UpscalerKind::Off || kind == UpscalerKind::Fsr || kind == UpscalerKind::Dlss || kind == UpscalerKind::Spatial;
+#endif
+}
+constexpr bool FrameGenOnPlatform(FrameGenKind kind) {
+#if defined(__APPLE__)
+    return kind == FrameGenKind::Off || kind == FrameGenKind::Metalfx;
+#elif defined(_WIN32)
+    return kind != FrameGenKind::Metalfx;
+#else
+    return kind == FrameGenKind::Off;
+#endif
+}
 enum class UpscaleQuality : int { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4, Custom = 5, Count = 6 };
 
 struct UpscaleSettings {

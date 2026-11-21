@@ -3,6 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -162,11 +163,15 @@ void GimmickAnimation::StopSounds(GimmickType type) {
 }
 
 void GimmickAnimation::EnsureModel(Record& record, const Gimmick& gimmick) {
-    if (record.model == gimmick.model_file && record.parts == gimmick.parts_path) {
+    EnsureModelPaths(record, gimmick.model_file, gimmick.parts_path);
+}
+
+void GimmickAnimation::EnsureModelPaths(Record& record, const std::string& model, const std::string& parts) {
+    if (record.model == model && record.parts == parts) {
         return;
     }
-    record.model = gimmick.model_file;
-    record.parts = gimmick.parts_path;
+    record.model = model;
+    record.parts = parts;
     record.skeleton.reset();
     record.connect_points.clear();
     record.has_pose = false;
@@ -187,6 +192,8 @@ void GimmickAnimation::EnsureModel(Record& record, const Gimmick& gimmick) {
     record.pose.Reset(skeleton->Size());
     record.rig.reset();
     record.help_bones.reset();
+    record.sim_rig.reset();
+    record.sim.reset();
     record.rig_binding = anim::RigBinding{};
     record.rig_pose_valid = record.rig_from_valid = false;
     if (!record.parts.empty()) {
@@ -194,6 +201,10 @@ void GimmickAnimation::EnsureModel(Record& record, const Gimmick& gimmick) {
             fox2::DataSetFile file;
             if (file.Load(record.parts, *parts)) {
                 for (const fox2::Entity& e : file.Entities()) {
+                    if (e.class_name == "SimDescription" && file.GetBool(e, "isActive", 0, true)) {
+                        record.sim_rig = LoadSim(file.GetString(e, "simFile"));
+                        continue;
+                    }
                     if (e.class_name != "ModelDescription") {
                         continue;
                     }
@@ -272,6 +283,28 @@ std::shared_ptr<const anim::HelpBones> GimmickAnimation::LoadHelpBones(const std
     }
     help_bones_.emplace(path, help);
     return help;
+}
+
+std::shared_ptr<const anim::SimRig> GimmickAnimation::LoadSim(const std::string& path) {
+    if (path.empty() || !anim::SimPhysicsEnabled()) {
+        return nullptr;
+    }
+    if (auto it = sims_.find(path); it != sims_.end()) {
+        return it->second;
+    }
+    std::shared_ptr<anim::SimRig> rig;
+    if (auto bytes = game_.GetVfs().ReadFile(path)) {
+        rig = std::make_shared<anim::SimRig>();
+        std::string error;
+        if (!rig->Load(path, *bytes, &error)) {
+            LogWarn("gimmick anim: simulation {} unusable ({})", path, error);
+            rig.reset();
+        }
+    } else {
+        LogWarn("gimmick anim: simulation {} not found", path);
+    }
+    sims_.emplace(path, rig);
+    return rig;
 }
 
 std::shared_ptr<const anim::Rig> GimmickAnimation::LoadRig(const std::string& path) {
@@ -390,6 +423,149 @@ void GimmickAnimation::FireEvents(Record& record, const Gimmick& gimmick, double
     }
 }
 
+const anim::Skeleton* GimmickAnimation::RetargetSkeleton(const std::string& model) {
+    std::shared_ptr<const anim::Skeleton>& target = retarget_skeletons_[model];
+    if (!target) {
+        auto skeleton = std::make_shared<anim::Skeleton>();
+        auto bytes = game_.GetVfs().ReadFile(model);
+        if (!bytes || !anim::ReadFmdlSkeleton(*bytes, *skeleton)) {
+            LogWarn("gimmick anim: {} has no skeleton to pose", model);
+        }
+        target = skeleton;
+    }
+    return target->Empty() ? nullptr : target.get();
+}
+
+bool GimmickAnimation::PoseModel(const std::string& model, std::vector<glm::mat4>& skin, const ShapeFn& shape) {
+    const anim::Skeleton* target = RetargetSkeleton(model);
+    if (!target) return false;
+    anim::Pose pose;
+    pose.Reset(target->Size());
+    std::vector<glm::vec3> scale(target->Size(), glm::vec3(1.0f));
+    if (shape) shape(*target, pose, scale);
+    anim::ComputeScaledSkin(*target, pose, scale, skin);
+    return true;
+}
+
+bool GimmickAnimation::RetargetActor(uint32_t id, const std::string& model, std::vector<glm::mat4>& skin, const ShapeFn& shape) {
+    auto it = actors_.find(id);
+    if (it == actors_.end() || !it->second.has_pose || !it->second.skeleton) {
+        return false;
+    }
+    const Record& r = it->second;
+    const anim::Skeleton* target = RetargetSkeleton(model);
+    if (!target) {
+        return false;
+    }
+    std::vector<int>& map = retarget_maps_[r.model + "|" + model];
+    if (map.size() != target->Size()) {
+        map.assign(target->Size(), -1);
+        size_t found = 0;
+        for (size_t i = 0; i < target->Size(); ++i) {
+            map[i] = r.skeleton->FindName(target->names[i]);
+            found += map[i] >= 0 ? 1 : 0;
+        }
+        LogInfo("gimmick anim: {} posed by {}'s motions, {} of {} bones by name", model, r.model, found, target->Size());
+    }
+    float size = 1.0f;
+    const int target_foot = target->FindName("SKL_032_LFOOT"), source_foot = r.skeleton->FindName("SKL_032_LFOOT");
+    if (target_foot >= 0 && source_foot >= 0 && std::abs(r.skeleton->bind_world[static_cast<size_t>(source_foot)].y) > 1e-3f) {
+        size = target->bind_world[static_cast<size_t>(target_foot)].y / r.skeleton->bind_world[static_cast<size_t>(source_foot)].y;
+    }
+    anim::Pose pose;
+    pose.Reset(target->Size());
+    for (size_t i = 0; i < target->Size(); ++i) {
+        const int j = map[i];
+        if (j < 0 || static_cast<size_t>(j) >= r.pose.Size()) {
+            continue;
+        }
+        pose.rotation[i] = r.pose.rotation[static_cast<size_t>(j)];
+        pose.offset[i] = r.pose.offset[static_cast<size_t>(j)] * size;
+    }
+    std::vector<glm::vec3> scale(target->Size(), glm::vec3(1.0f));
+    if (shape) shape(*target, pose, scale);
+    anim::ComputeScaledSkin(*target, pose, scale, skin);
+    return true;
+}
+
+bool GimmickAnimation::PoseActor(uint32_t id, const std::string& model, const std::string& parts, std::string_view key, double frame,
+                                 float blend_frames, std::vector<glm::mat4>& skin) {
+    EnsureArchive();
+    Record& r = actors_[id];
+    EnsureModelPaths(r, model, parts);
+    const anim::GaniMotion* motion = r.skeleton ? Motion(key) : nullptr;
+    if (!motion) {
+        return false;
+    }
+    if (r.motion != key) {
+        r.from = r.pose;
+        r.rig_from = r.rig_pose;
+        r.rig_from_valid = r.rig_pose_valid;
+        r.blend = r.has_pose ? 0.0f : 1.0f;
+        r.blend_frames = std::max(1.0f, blend_frames);
+        r.motion = std::string(key);
+        r.gani = motion;
+        r.played_frames = frame;
+    }
+    if (r.blend < 1.0f) {
+        r.blend = std::min(1.0f, r.blend + static_cast<float>(std::max(0.0, frame - r.played_frames)) / r.blend_frames);
+    }
+    r.played_frames = frame;
+    const bool blending = r.blend < 1.0f;
+    if (!motion->RigDriven()) {
+        anim::Pose target;
+        SampleMotion(r, *motion, frame, target);
+        r.pose = std::move(target);
+        r.rig_pose_valid = false;
+        if (blending) {
+            anim::BlendPose(r.from, r.pose, r.blend, r.pose);
+        }
+    } else if (r.rig && r.rig_binding.Valid()) {
+        SampleRig(r, frame, blending);
+    } else {
+        return false;
+    }
+    r.has_pose = true;
+    anim::ComputeBoneWorld(*r.skeleton, r.pose, r.world);
+    if (r.help_bones) {
+        r.help_bones->Apply(*r.skeleton, r.world);
+    }
+    anim::ComputeSkin(*r.skeleton, r.world, r.skin);
+    skin = r.skin;
+    return true;
+}
+
+void GimmickAnimation::ReleaseActor(uint32_t id) {
+    actors_.erase(id);
+}
+
+void GimmickAnimation::ReleaseActors() {
+    actors_.clear();
+}
+
+float GimmickAnimation::ActorRootSpeed(uint32_t id) const {
+    const auto it = actors_.find(id);
+    if (it == actors_.end()) {
+        return 0.0f;
+    }
+    const Record& r = it->second;
+    if (!r.rig || !r.gani || !r.gani->RigDriven() || r.gani->frames == 0) {
+        return 0.0f;
+    }
+    constexpr int kSamples = 240;
+    anim::RigPose pose;
+    double path = 0.0;
+    glm::vec3 last(0.0f);
+    for (int i = 0; i <= kSamples; ++i) {
+        anim::SampleRigPose(*r.rig, *r.gani, static_cast<double>(r.gani->frames) * i / kSamples, pose, false);
+        const glm::vec3 at = anim::RigRootTranslation(*r.rig, pose);
+        if (i > 0) path += glm::length(glm::vec2(at.x - last.x, at.z - last.z));
+        last = at;
+    }
+    const double seconds = r.gani->frames / FramesPerSecond(r.gani);
+    return seconds > 0.0 ? static_cast<float>(path / seconds) : 0.0f;
+}
+
 void GimmickAnimation::ResetSession() {
     for (size_t i = 0; i < records_.size(); ++i) {
         StopSounds(static_cast<GimmickType>(i));
@@ -455,6 +631,21 @@ void GimmickAnimation::Update(float dt) {
         anim::ComputeBoneWorld(*r.skeleton, r.pose, r.world);
         if (r.help_bones && r.has_pose) {
             r.help_bones->Apply(*r.skeleton, r.world);
+        }
+        if (r.sim_rig && r.has_pose) {
+            if (!r.sim) {
+                r.sim = std::make_shared<anim::SimRigid>();
+                static const float delay = [] {
+                    const char* env = std::getenv("PT_SIM_DELAY");
+                    return env ? static_cast<float>(std::atof(env)) : 1.0f / 29.97f;
+                }();
+                r.sim->SetDelay(delay);
+            }
+            if (g.enabled && g.active && g.shown) {
+                r.sim->Step(*r.sim_rig, *r.skeleton, r.world, g.world, dt);
+            } else {
+                r.sim->Reset();
+            }
         }
         anim::ComputeSkin(*r.skeleton, r.world, r.skin);
     }

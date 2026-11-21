@@ -1,0 +1,17 @@
+# a run at Game+ tier 4 (the tier forced here) reaching the ending (the loop browser's): after the credits and the port's credits
+# page the street question's walk is the survival night's; taken, the walk starts and the night with it once the scenery is ready
+sstep 15
+swait 30
+sloop 16
+sbrowsed
+swait 4400
+sexpect menu 1
+sexpect page 1
+sexpect pcrow pc_street_survival
+sshot {shots}/survival_offer.png
+swait 30
+sui menukey accept
+swait 700
+sexpect menu 0
+sshot {shots}/survival_offer_night.png
+slog

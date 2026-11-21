@@ -160,7 +160,7 @@ void Temporal(bool glossy, ivec2 half_pixel, ivec2 size, float z_here, vec3 worl
     }
     count = min(count + 1.0, max(max_frames, 1.0));
     float alpha = 1.0 / count;
-    float l = Luma709(raw.rgb);
+    float l = Luma709(raw.rgb) * frame.views[pass.ids.x].exposure.x;
     vec3 color = mix(history, raw.rgb, alpha);
     vec2 m = mix(moments, vec2(l, l * l), alpha);
     StoreColor(glossy, written, half_pixel, vec4(color, count));
@@ -196,7 +196,7 @@ float Variance(bool glossy, ivec2 half_pixel, ivec2 size, float z, vec3 n) {
                 continue;
             }
             float w = exp(-abs(zk - z) / (0.02 * z + 0.005)) * pow(max(dot(n, nk), 0.0), 64.0);
-            float l = Luma709(c.rgb);
+            float l = Luma709(c.rgb) * frame.views[pass.ids.x].exposure.x;
             sum += w * vec2(l, l * l);
             weight_sum += w;
         }
@@ -243,7 +243,7 @@ vec4 Atrous(bool glossy, int from, ivec2 half_pixel, ivec2 size, int step, float
         }
     }
     float l_center = Luma709(center.rgb);
-    float sigma = pass.f0.z * sqrt(max(glossy ? variance_here.y : variance_here.x, 0.0)) + 1.0e-4;
+    float sigma = pass.f0.z * sqrt(max(glossy ? variance_here.y : variance_here.x, 0.0)) / max(frame.views[pass.ids.x].exposure.x, 1.0e-12) + 1.0e-4;
     const float kernel[3] = float[3](0.375, 0.25, 0.0625);
     vec3 sum = vec3(0.0);
     float weight_sum = 0.0;

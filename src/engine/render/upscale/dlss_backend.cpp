@@ -53,6 +53,17 @@ std::filesystem::path FindRuntime(const char* name) {
     const std::filesystem::path path = ExecutableDir() / name;
     return std::filesystem::exists(path, ec) ? path : std::filesystem::path();
 }
+
+unsigned long InitNgxSafely(VkInstance instance, VkPhysicalDevice physical, VkDevice device, const wchar_t* data_path,
+                            const NVSDK_NGX_FeatureCommonInfo* common, NVSDK_NGX_Result& result) {
+    __try {
+        result = NVSDK_NGX_VULKAN_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, data_path, instance, physical,
+                                                      device, vkGetInstanceProcAddr, vkGetDeviceProcAddr, common, NVSDK_NGX_Version_API);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+}
 #else
 constexpr const char* kDlssRuntime = "libnvidia-ngx-dlss.so.*";
 constexpr const char* kRayReconstructionRuntime = "libnvidia-ngx-dlssd.so.*";
@@ -198,9 +209,24 @@ public:
         }
 #endif
         const NVSDK_NGX_FeatureCommonInfo common = FeatureInfo();
-        NVSDK_NGX_Result result = NVSDK_NGX_VULKAN_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(),
-                                                                       ctx_.instance, ctx_.physical, ctx_.device, vkGetInstanceProcAddr,
-                                                                       vkGetDeviceProcAddr, &common, NVSDK_NGX_Version_API);
+        if (init_fault_) {
+            reason = std::format("the NVIDIA driver faulted while DLSS started ({:#x}); DLSS is off until the game starts again", init_fault_);
+            return false;
+        }
+        NVSDK_NGX_Result result = NVSDK_NGX_Result_Fail;
+#ifdef _WIN32
+        init_fault_ = InitNgxSafely(ctx_.instance, ctx_.physical, ctx_.device, DataPath().c_str(), &common, result);
+        if (init_fault_) {
+            reason = std::format("the NVIDIA driver faulted while DLSS started ({:#x}); DLSS is off until the game starts again", init_fault_);
+            LogError("dlss: the NVIDIA driver faulted inside NVSDK_NGX_VULKAN_Init_with_ProjectID (exception {:#x}); DLSS stays off for "
+                     "this session, the other upscalers work", init_fault_);
+            return false;
+        }
+#else
+        result = NVSDK_NGX_VULKAN_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath().c_str(), ctx_.instance,
+                                                      ctx_.physical, ctx_.device, vkGetInstanceProcAddr, vkGetDeviceProcAddr, &common,
+                                                      NVSDK_NGX_Version_API);
+#endif
         if (NVSDK_NGX_FAILED(result)) {
             reason = "NGX did not initialise (driver without DLSS support?)";
             LogWarn("dlss: NVSDK_NGX_VULKAN_Init_with_ProjectID failed ({:#x})", static_cast<uint32_t>(result));
@@ -503,6 +529,7 @@ private:
 
     vk::Context& ctx_;
     bool initialized_ = false;
+    unsigned long init_fault_ = 0;
     NVSDK_NGX_Parameter* params_ = nullptr;
     NVSDK_NGX_Handle* feature_ = nullptr;
     bool ray_reconstruction_ = false;

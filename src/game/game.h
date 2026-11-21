@@ -22,6 +22,8 @@
 #include "engine/render/model_cache.h"
 #include "engine/render/scene_renderer.h"
 #include "engine/script/mod_lua.h"
+#include "game/run_stride.h"
+#include "game/ui/crosshair.h"
 #include "game/blur_sway.h"
 #include "game/demo_system.h"
 #include "game/floor_level.h"
@@ -39,6 +41,8 @@
 #include "game/speedrun.h"
 #include "game/script_host.h"
 #include "game/stage_manager.h"
+#include "game/survival/survival.h"
+#include "game/survival/street_house.h"
 #include "game/trap_system.h"
 
 namespace pt::audio {
@@ -66,6 +70,8 @@ public:
     virtual uint32_t PlayStream(std::vector<uint8_t>, const glm::vec3*) { return 0; }
     virtual uint32_t PlayStreamAs(std::vector<uint8_t>, std::string_view, const glm::vec3&) { return 0; }
     virtual uint32_t PlayMedia(std::shared_ptr<const audio::Media>, const glm::vec3*) { return 0; }
+    virtual uint32_t PlayMediaAs(std::shared_ptr<const audio::Media>, uint32_t, const glm::vec3&) { return 0; }
+    virtual std::shared_ptr<const audio::Media> FindMedia(uint32_t) const { return nullptr; }
     virtual uint32_t PostEventMedia(std::string_view, std::vector<uint32_t>, const glm::vec3*) { return 0; }
     virtual void SeekPlayingId(uint32_t, float) {}
     virtual void StopPlayingId(uint32_t, float) {}
@@ -156,17 +162,32 @@ public:
     bool FreeView() const { return detached_view_; }
     void SetThirdPerson(bool on);
     bool ThirdPerson() const { return third_person_; }
+    void SetThirdOrbit(const glm::vec4& orbit) { third_orbit_ = orbit; }
     bool ThirdPersonCameraActive() const { return third_person_ && third_person_primed_ && !detached_view_; }
     Camera ViewCamera(bool fov_offset = true) const;
+    Camera ViewCameraBase(bool fov_offset) const;
     void SetFovOffset(int degrees) { fov_offset_ = static_cast<float>(degrees); }
+    void SetHouseSprint(bool on) {
+        house_sprint_ = on;
+        if (!on && !street_walk_) ResetStreetSprint();
+    }
+    bool HouseSprintEnabled() const { return house_sprint_; }
     float FovOffsetNow() const;
     Camera PlayerViewCamera() const;
     float ThirdPersonWeight() const { return third_person_weight_; }
+    float ThirdPersonBodyShare() const;
+    bool ThirdPersonShown() const { return third_person_shown_; }
     Camera ThirdPersonTurn(const Camera& before, const Camera& after) const;
+    glm::mat4 ThirdPersonBodyTurn(const Camera& before, const Camera& after) const;
     Camera PeepholeTurn(const Camera& turned) const;
+    void SetHandyLensRadiance(const glm::vec3& radiance) { handy_lens_radiance_ = radiance; }
     bool HandyLens(glm::vec3& out) const {
         out = handy_lens_;
         return handy_lens_valid_;
+    }
+    void HandyBeam(glm::vec3& origin, glm::vec3& direction) const {
+        origin = handy_origin_;
+        direction = handy_direction_;
     }
     void RequestPhotoMode(int mode) { photo_request_ = mode == 0 ? 3 : mode; }
     int TakePhotoModeRequest() { const int r = photo_request_; photo_request_ = 0; return r; }
@@ -195,6 +216,9 @@ public:
     const std::optional<std::pair<glm::vec3, glm::vec3>>& HandyPoseOverride() const { return handy_pose_override_; }
     float HandyPickupHold() const { return handy_hold_; }
     float HandyDemoPose() const { return handy_demo_; }
+    glm::vec2 HandyBreath() const { return {handy_breath_time_, handy_breath_weight_}; }
+    float HandyMaskRoll() const { return handy_mask_roll_; }
+    glm::vec2 HandyPickupMaskRoll() const { return {handy_pickup_roll_, handy_pickup_weight_}; }
     const HandyReflection& HandyReflectionState() const { return handy_reflection_; }
     void SetHandyReflectionReadback(const glm::vec3& colour) {
         handy_reflection_.readback = colour;
@@ -204,6 +228,7 @@ public:
 
     Vfs& GetVfs() { return vfs_; }
     ModelCache& Models() { return models_; }
+    int32_t HandyLensMaterial() const { return handy_lens_material_; }
     StageManager& Stages() { return stages_; }
     const CollisionWorld& Collision() const { return collision_; }
     const CollisionWorld& LineCollision() const { return line_collision_; }
@@ -278,6 +303,10 @@ public:
     void RequestSave();
     void RequestOptionsSave();
     bool BrowseLoop(int index);
+    bool BrowseSurvival();
+    bool NightDoorPending() const { return browse_night_door_; }
+    bool OpenNightDoor();
+    bool OpenNightExit();
     bool LoopReloadPending() const { return loop_reload_pending_; }
     bool ApplyBrowseReload();
     void OnBrowseFloorEntered();
@@ -297,10 +326,12 @@ public:
     void UpdateStreetWalk(float dt);
     bool StreetWalkActive() const { return street_walk_; }
     void ToggleStreetFlashlight();
+    void ToggleStreetFlashlightImmediate();
     bool StreetPending() const { return street_pending_; }
     bool OfferStreetWalk();
     bool StreetOfferPending() const { return street_offer_ == StreetOffer::Asking; }
     void RequestMenuClose() { menu_close_request_ = true; }
+    void RequestSurvivalHub() { survival_hub_request_ = true; }
     void AnswerStreetOffer(bool walk);
     void UpdateStreetOffer();
     void StartPortCredits();
@@ -309,8 +340,54 @@ public:
     bool PortCreditsActive() const { return port_credits_time_ >= 0.0f; }
     float PortCreditsTime() const { return port_credits_time_; }
     bool TakeMenuCloseRequest() { return std::exchange(menu_close_request_, false); }
+    bool TakeSurvivalHubRequest() { return std::exchange(survival_hub_request_, false); }
     void LeaveStreetWalk();
     void EndStreetWalk();
+    void UpdateStreetSprint(float dt, const InputState& input);
+    void ResetStreetSprint();
+    float StreetRunWeight() const;
+    static constexpr int kTierSurvival = 4;
+    bool NightUnlocked() const;
+    bool NightUnlockKept() const { return night_unlocked_; }
+    void SetNightUnlocked(bool on) { night_unlocked_ = on; }
+    void UnlockNight(std::string_view why);
+    bool SurvivalAvailable() const { return NightUnlocked(); }
+    bool SurvivalWithWalk() const { return (ending_tier_ >= 0 ? ending_tier_ : GamePlusTier()) >= kTierSurvival && NightUnlocked(); }
+    void NoteEndingTier() { ending_tier_ = GamePlusTier(); }
+    void RequestSurvival() { survival_requested_ = true; }
+    void SetSurvivalStart(SurvivalStart start) { survival_start_ = start; }
+    void SetSurvivalProfile(const std::string& text) { survival_profile_.Load(text); }
+    SurvivalProfile& SurvivalProfileData() { return survival_profile_; }
+    const SurvivalProfile& SurvivalProfileData() const { return survival_profile_; }
+    void MarkSurvivalProfile() { survival_profile_dirty_ = true; }
+    std::optional<std::string> TakeSurvivalProfile() {
+        if (!std::exchange(survival_profile_dirty_, false)) return std::nullopt;
+        return survival_profile_.Save();
+    }
+    void StartSurvival();
+    void StopSurvival();
+    bool SurvivalActive() const { return survival_ && survival_->Active(); }
+    const SurvivalNight* Survival() const { return survival_.get(); }
+    SurvivalNight* EnsureSurvival();
+    bool SurvivalChoosing() const { return SurvivalActive() && survival_->Choosing(); }
+    void ChooseSurvivalOffer(int index) {
+        if (SurvivalActive()) survival_->ChooseOffer(index);
+    }
+    void SurvivalAgentInput(InputState& input) {
+        if (SurvivalActive()) survival_->AgentInput(input);
+    }
+    void SurvivalAct(const std::string& action) {
+        if (survival_ && survival_->Active()) survival_->Act(action);
+    }
+    const StreetHouse* House() const { return street_walk_ ? house_.get() : nullptr; }
+    bool FinishIntoNight();
+    void SetSurvivalBest(int wave) { survival_best_ = wave; }
+    void SetSurvivalDifficulty(int difficulty) { survival_difficulty_ = difficulty; }
+    int SurvivalDifficultyLevel() const { return survival_difficulty_; }
+    void SetCrosshair(const CrosshairStyle& style) { crosshair_ = style; }
+    const CrosshairStyle& Crosshair() const { return crosshair_; }
+    bool SurvivalPlayed() const { return survival_best_ > 0 || SurvivalActive(); }
+    int TakeSurvivalRecord();
     void SetBrowseUnlocks(uint32_t reached, bool finished) { browse_reached_ = reached; game_finished_ = finished; }
     uint32_t BrowseReached() const { return browse_reached_; }
     bool BrowseUnlocked(int index) const {
@@ -445,6 +522,15 @@ private:
     bool handy_hold_pending_ = false;
     bool handy_hold_release_ = false;
     float handy_demo_ = 0.0f;
+    float handy_breath_time_ = 0.0f;
+    float handy_breath_weight_ = 0.0f;
+    glm::vec3 handy_breath_feet_{0.0f};
+    float handy_mask_roll_ = 0.0f;
+    float handy_mask_roll_held_ = 0.0f;
+    int handy_mask_clip_ = -1;
+    float handy_pickup_roll_ = 0.0f;
+    float handy_pickup_weight_ = 0.0f;
+    double handy_pickup_frame_ = -1.0;
     HandyReflection handy_reflection_;
     void OnStageLoaded(Stage& stage);
     void OnStageUnloading(Stage& stage);
@@ -460,11 +546,14 @@ private:
     glm::vec3 ThirdPersonHead() const;
     glm::vec3 ThirdPersonPosition(float yaw, float pitch) const;
     bool show_body_ = false;
+    bool reach_snap_ = true;
     bool detached_view_ = false;
     bool third_person_ = false;
     float fov_offset_ = 0.0f;
     bool third_person_shown_ = false;
     float third_person_weight_ = 0.0f;
+    glm::vec4 third_orbit_ = ThirdOrbitFromEnvironment();
+    static glm::vec4 ThirdOrbitFromEnvironment();
     float third_person_distance_ = 0.0f;
     float third_person_shoulder_ = 0.0f;
     float third_person_lift_ = 0.0f;
@@ -506,6 +595,8 @@ private:
     std::vector<glm::mat4> player_skin_;
     std::unique_ptr<GpuMesh> handy_lens_mesh_;
     int32_t handy_lens_material_ = -1;
+    glm::vec3 handy_lens_radiance_{0.0f};
+    MaterialGpu handy_lens_gpu_{};
     bool handy_model_readable_ = false;
     uint64_t handy_model_probe_frame_ = 0;
     Player player_;
@@ -567,14 +658,38 @@ private:
     int browse_loop_ = -1;
     bool street_walk_ = false;
     bool street_pending_ = false;
+    bool house_sprint_ = false;
+    bool street_sprinting_ = false;
+    float street_speed_ = 1.0f;
+    float street_bob_phase_ = 0.0f;
+    run_stride::SteadyEye run_eye_;
+    float street_bob_weight_ = 0.0f;
+    int street_bob_steps_ = 0;
     enum class StreetOffer { None, Asking, Walk, Restart };
     StreetOffer street_offer_ = StreetOffer::None;
     bool menu_close_request_ = false;
+    bool survival_hub_request_ = false;
     float port_credits_time_ = -1.0f;
     bool port_credits_skip_ = false;
     glm::vec3 street_safe_feet_{0.0f};
     float street_safe_wait_ = 0.0f;
     uint32_t street_rain_ = 0;
+    std::unique_ptr<SurvivalNight> survival_;
+    bool survival_requested_ = false;
+    std::unique_ptr<StreetHouse> house_;
+    int ending_tier_ = -1;
+    bool night_unlocked_ = false;
+    int survival_best_ = 0;
+    int survival_difficulty_ = 1;
+    CrosshairStyle crosshair_;
+    bool browse_survival_ = false;
+    bool browse_night_door_ = false;
+    float night_door_wait_ = -1.0f;
+    float night_exit_wait_ = -1.0f;
+    int survival_record_ = 0;
+    SurvivalStart survival_start_ = SurvivalStart::Fresh;
+    SurvivalProfile survival_profile_;
+    bool survival_profile_dirty_ = false;
     uint32_t browse_reached_ = 0;
     bool game_finished_ = false;
     uint32_t browse_unlock_generation_ = 0;

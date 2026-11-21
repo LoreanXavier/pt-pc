@@ -21,11 +21,24 @@ void main() {
     vec4 previous = pass.m * vec4(world, 1.0);
     vec2 d = (uv - (previous.xy / previous.w * 0.5 + 0.5)) * pass.f0.xy;
     float d2 = dot(d, d);
-    float len = Saturate(sqrt(d2));
-    if (pass.f0.z > 0.0) {
-        len = min(len, pass.f0.z);
-    }
+    float limit = pass.f0.z > 0.0 ? min(pass.f0.z, 1.0) : 1.0;
+    float len = min(Saturate(sqrt(d2)), limit);
     vec2 velocity = len == 0.0 ? vec2(0.0) : d * (len * inversesqrt(d2));
+    if (pass.f0.w > 0.5) {
+        velocity = vec2(0.0);
+    }
     vec4 object = ImgFetch(pass.ids.x, ivec2(gl_FragCoord.xy));
+    if (pass.f1.y > 1.0) {
+        vec2 moved = MbLoad(object.zw) * pass.f1.y;
+        float moved2 = dot(moved, moved);
+        if (moved2 > limit * limit) {
+            moved *= limit * inversesqrt(moved2);
+        }
+        object.zw = MbStore(moved);
+    }
+    if (HdrOutput()) {
+        out_color = vec4(0.0, 0.0, mix(velocity, object.zw, pass.f1.x > 0.5 ? 0.0 : object.x));
+        return;
+    }
     out_color = vec4(0.0, 0.0, object.x * (object.zw - (0.5 * velocity + 0.5)) + 0.5 * velocity + 0.5);
 }

@@ -198,12 +198,15 @@ void Player::ResetLocomotion() {
     idle_timer_ = 0.0f;
     stick_heading_ = body_yaw_;
     motion_ = MotionFrame{1.0f, body_yaw_, false};
+    stop_share_ = 0.0f;
     frame_time_ = 1.0;
     frame_offset_ = drawn_offset_ = glm::vec3(0.0f);
     frame_dt_ = 0.0f;
     frame_gravity_ = false;
     body_.Reset(kClipStand);
     draw_sync_ = true;
+    stick_soft_ = stick_soft_speed_ = glm::vec2(0.0f);
+    stick_eased_ = false;
 }
 
 void Player::HandCameraBack(const glm::vec3& position, float yaw_value, float pitch_value, bool anchor_after_move) {
@@ -246,7 +249,8 @@ glm::mat4 Player::BodyTransform() const {
 }
 
 glm::mat4 Player::DrawnBodyTransform() const {
-    return glm::translate(glm::mat4(1.0f), drawn_offset_) * BodyTransform();
+    const glm::mat4 body = glm::translate(glm::mat4(1.0f), drawn_offset_) * BodyTransform();
+    return draw_pose_ && draw_turn_ != 0.0f ? glm::rotate(body, draw_turn_, glm::vec3(0.0f, 1.0f, 0.0f)) : body;
 }
 
 glm::vec3 Player::WorldToBody(const glm::vec3& world) const {
@@ -287,9 +291,37 @@ float Player::SpeedRate(float heading_delta, float magnitude, bool blur) const {
     return mn + t * (mx - mn);
 }
 
-void Player::UpdateLocomotion(const InputState& input) {
+namespace {
+void Spring(float& value, float& speed, float target, float omega, float dt) {
+    const float x = omega * dt;
+    const float k = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
+    const float off = value - target;
+    const float carried = (speed + omega * off) * dt;
+    speed = (speed - omega * carried) * k;
+    value = target + (off + carried) * k;
+}
+}
+
+void Player::UpdateLocomotion(const InputState& input, float dt) {
     const bool left_locked = LeftStickLocked();
     glm::vec2 stick = left_locked ? glm::vec2(0.0f) : input.left_stick;
+    if (stride_blend_ && !input.left_stick_from_pad && !left_locked) {
+        if (glm::length(stick) > 1.0f) stick = glm::normalize(stick);
+        if (stick != glm::vec2(0.0f) && stick_soft_ == glm::vec2(0.0f)) {
+            stick_soft_ = stick;
+            stick_soft_speed_ = glm::vec2(0.0f);
+        } else {
+            const float omega = stick == glm::vec2(0.0f) ? 30.0f : 15.0f;
+            Spring(stick_soft_.x, stick_soft_speed_.x, stick.x, omega, dt);
+            Spring(stick_soft_.y, stick_soft_speed_.y, stick.y, omega, dt);
+            if (stick == glm::vec2(0.0f) && glm::length(stick_soft_) < 0.1f) stick_soft_ = stick_soft_speed_ = glm::vec2(0.0f);
+        }
+        stick = stick_soft_;
+        stick_eased_ = true;
+    } else {
+        stick_soft_ = stick_soft_speed_ = glm::vec2(0.0f);
+        stick_eased_ = false;
+    }
     if (input.left_stick_from_pad) {
         stick = glm::vec2(PadAxis(stick.x), -PadAxis(-stick.y));
     }
@@ -315,7 +347,7 @@ void Player::LocomotionFrame(const PlayerFrameContext& context) {
     StepStandWalk(m, LeftStickLocked());
     const float delta = Wrap(stick_heading_ - body_yaw_);
     const int direction = WalkDirection(delta);
-    motion_.rate = standing_ ? 1.0f : SpeedRate(delta, m, context.full_screen_blur);
+    motion_.rate = standing_ ? 1.0f : SpeedRate(delta, m, context.full_screen_blur) * sprint_rate;
     motion_.heading = stick_heading_;
     motion_.steered = m >= 0.1f && !LeftStickLocked();
     const PlayerBody::Kind kind = body_.ClipKind();
@@ -582,6 +614,17 @@ void Player::UpdateBody(float dt, const CollisionWorld& world) {
     glm::vec3 offset = RotateYaw(body_yaw_, glm::vec3(advance.root.x, 0.0f, advance.root.y));
     if (motion_.steered) {
         offset = glm::vec3(std::sin(motion_.heading), 0.0f, std::cos(motion_.heading)) * advance.distance;
+        if (stride_blend_ && stick_eased_) offset *= std::min(1.0f, stick_magnitude_ * 2.0f);
+    }
+    offset *= sprint_stride;
+    if (motion_.steered || sprint_stride == 1.0f) {
+        stop_carry_ = dt > 0.0f && sprint_stride != 1.0f ? offset / dt : glm::vec3(0.0f);
+        stop_share_ = sprint_stride != 1.0f ? 1.0f : 0.0f;
+    } else if (stop_share_ > 0.0f && dt > 0.0f) {
+        constexpr float kOriginalPerSecond = 29.97f;
+        stop_share_ *= std::exp(-dt * kOriginalPerSecond * 0.4f);
+        if (stop_share_ < 0.01f) stop_share_ = 0.0f;
+        offset = glm::mix(offset, stop_carry_ * dt, stop_share_);
     }
     static const bool per_tick = [] {
         const char* v = std::getenv("PT_CONTROLLER_TICK");
@@ -645,7 +688,7 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
         body_yaw_ = Wrap(body_yaw_ + Wrap(body_yaw_target_ - body_yaw_) * follow);
     }
     UpdateLook(dt, input, context);
-    UpdateLocomotion(input);
+    UpdateLocomotion(input, tick_dt);
     frame_step_ = static_cast<double>(dt) / kOriginalFrame;
     frame_time_ += frame_step_;
     frame_pressed_ = (frame_time_ >= 1.0 - 1e-4 ? 0u : frame_pressed_) | input.pressed;
@@ -674,7 +717,11 @@ void Player::Update(float tick_dt, const InputState& input, const CollisionWorld
 
 void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     constexpr float kStepAngle = 0.4363323f;
-    constexpr float kFastStepAngle = 0.7853982f;
+    constexpr float kLead = 0.8726646f;
+    constexpr float kStepReach = 0.7853982f;
+    constexpr float kLegTwist = 0.6981317f;
+    constexpr float kWrungAngle = 1.0471976f;
+    constexpr float kQuickStepSeconds = 0.2f;
     constexpr float kMaxTwist = 1.3089969f;
     constexpr float kSettleAngle = 0.1047198f;
     constexpr float kSettleDistance = 0.04f;
@@ -682,7 +729,6 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     constexpr float kStepDistance = 0.12f;
     constexpr float kStopStepDistance = 0.4f;
     constexpr float kStepSeconds = 0.28f;
-    constexpr float kFastStepSeconds = 0.2f;
     constexpr float kFollowSeconds = 0.2f;
     constexpr float kReleaseSeconds = 0.15f;
     constexpr float kStepLift = 0.07f;
@@ -695,13 +741,38 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         follow_kind_ = body_.ClipKind();
         follow_clip_ = body_.Clip();
         draw_offset_ = glm::vec3(0.0f);
+        lunge_offset_ = glm::vec3(0.0f);
         last_body_yaw_ = body_yaw_;
         feet_[0] = feet_[1] = FootState{};
         turn_still_ = 0.0f;
         plant_ = PlayerBody::FootPlant{};
+        draw_turn_ = draw_turn_speed_ = 0.0f;
+        stride_way_ = stride_way_speed_ = glm::vec2(0.0f);
+        hips_yaw_ = body_yaw_;
+        hips_rate_ = hips_lag_ = 0.0f;
+        drawn_body_.hips_lag = 0.0f;
         draw_sync_ = false;
     }
     const glm::vec3 offset_before = draw_offset_;
+    const bool drawn_stride = true;
+    if (drawn_stride) {
+        const float seconds = dt;
+        const float delta = Wrap(stick_heading_ - (body_yaw_ - hips_lag_));
+        const float going = standing_ ? 0.0f : std::min(1.0f, stick_magnitude_);
+        const glm::vec2 way = glm::vec2(std::sin(delta), std::cos(delta)) * going;
+        const float running = std::clamp((drawn_body_.run - 0.5f) / 0.4f, 0.0f, 1.0f);
+        const float turn = way.y > 0.0f ? running * running * (3.0f - 2.0f * running) * std::atan2(way.x, way.y) : 0.0f;
+        Spring(draw_turn_, draw_turn_speed_, turn, 7.0f, seconds);
+        const float c = std::cos(draw_turn_), s = std::sin(draw_turn_);
+        const glm::vec2 own(way.x * c - way.y * s, way.x * s + way.y * c);
+        Spring(stride_way_.x, stride_way_speed_.x, own.x, 16.0f, seconds);
+        Spring(stride_way_.y, stride_way_speed_.y, own.y, 16.0f, seconds);
+        drawn_body_.SetStride(true, stride_way_);
+    } else {
+        draw_turn_ = draw_turn_speed_ = 0.0f;
+        stride_way_ = stride_way_speed_ = glm::vec2(0.0f);
+        drawn_body_.SetStride(false, glm::vec2(0.0f));
+    }
     const PlayerBody::Kind kind = body_.ClipKind();
     const int clip = body_.Clip();
     const bool changed = kind != follow_kind_ || clip != follow_clip_;
@@ -713,6 +784,9 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             drawn_body_.Play(kind, clip);
             draw_stopping_ = false;
         }
+    } else if (changed && drawn_stride && kind == PlayerBody::Kind::Node && clip != kClipStand && drawn_body_.ClipKind() == PlayerBody::Kind::Node &&
+               drawn_body_.Clip() != kClipStand) {
+        drawn_body_.Steer(clip);
     } else if (changed) {
         drawn_body_.Play(kind, clip);
         if (kind == PlayerBody::Kind::Stop) {
@@ -722,7 +796,7 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     }
     const float before = drawn_body_.Frame();
     drawn_body_.Advance(dt * kMotionFps * (draw_stopping_ ? 1.0f : motion_.rate), dt * kMotionFps, true);
-    glm::vec3 offset = draw_offset_;
+    glm::vec3 offset = draw_offset_ - lunge_offset_;
     if (draw_stopping_) {
         const BodyClip& stop = PlayerLocomotionData().stops[static_cast<size_t>(stop_clip_)];
         if (kind != PlayerBody::Kind::Stop) {
@@ -738,6 +812,8 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         const float back = kOffsetReturn * std::max(dt, 0.0f);
         offset = length > back ? offset * ((length - back) / length) : glm::vec3(0.0f);
     }
+    lunge_offset_ = RotateYaw(body_yaw_, glm::vec3(0.0f, 0.0f, lunge_));
+    offset += lunge_offset_;
     if (const float length = glm::length(offset); length > 1.0e-4f) {
         const glm::vec3 direction = offset / length;
         RayHit hit;
@@ -753,20 +829,28 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     const bool have_feet = drawn_body_.FootTargets(clip_model);
     const glm::mat4 pose = PoseTransform();
     const glm::mat4 to_model = glm::inverse(pose);
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
     const float turned = Wrap(body_yaw_ - last_body_yaw_);
     last_body_yaw_ = body_yaw_;
-    const bool planting = have_feet && !walking;
+    const float pose_yaw = std::atan2(pose[2].x, pose[2].z);
+    const float lead = std::clamp(Wrap(hips_yaw_ + std::clamp(Wrap(body_yaw_target_ - hips_yaw_), -kStepReach, kStepReach) - body_yaw_), -kLead, kLead);
+    const auto smooth = [](float v) {
+        v = std::clamp(v, 0.0f, 1.0f);
+        return v * v * (3.0f - 2.0f * v);
+    };
+    const auto place = [&](int side, float twist) { return glm::vec3(pose * glm::vec4(glm::angleAxis(twist, up) * clip_model[side], 1.0f)); };
+    const bool planting = have_feet && !walking && stop_share_ < 0.12f;
     turn_still_ = planting && std::abs(turned) < 1.0e-4f && glm::length(offset - offset_before) < 1.0e-5f ? turn_still_ + dt : 0.0f;
     float off[2] = {0.0f, 0.0f};
+    float need[2] = {0.0f, 0.0f};
     for (int side = 0; side < 2; ++side) {
         FootState& foot = feet_[side];
-        const glm::vec3 clip_world = have_feet ? glm::vec3(pose * glm::vec4(clip_model[side], 1.0f)) : glm::vec3(0.0f);
         const bool down = clip_model[side].y < kPlantHeight;
         if (!planting) {
             if (foot.state == Foot::Locked && have_feet) {
                 foot.state = Foot::Stepping;
                 foot.from = foot.floor;
-                foot.from_twist = Wrap(foot.yaw - body_yaw_);
+                foot.from_yaw = foot.yaw;
                 foot.time = 0.0f;
                 foot.length = kReleaseSeconds;
                 foot.arc = false;
@@ -775,13 +859,21 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             }
         } else if (foot.state == Foot::Free && down) {
             foot.state = Foot::Locked;
-            foot.floor = clip_world;
-            foot.yaw = body_yaw_;
+            foot.floor = place(side, 0.0f);
+            foot.yaw = pose_yaw;
+            if (glm::mat4 ankle(1.0f); drawn_body_.BoneModel(side == 0 ? "SKL_032_LFOOT" : "SKL_042_RFOOT", ankle)) {
+                const glm::vec3 there(pose * glm::vec4(glm::vec3(ankle[3]), 1.0f));
+                foot.floor.x = there.x;
+                foot.floor.z = there.z;
+                foot.yaw = pose_yaw - hips_lag_ + drawn_body_.FootTwist(side);
+            }
         }
         if (foot.state == Foot::Locked) {
-            const glm::vec2 apart(foot.floor.x - clip_world.x, foot.floor.z - clip_world.z);
-            const float twist = Wrap(foot.yaw - body_yaw_);
-            off[side] = std::max(glm::length(apart) / (draw_stopping_ ? kStopStepDistance : kStepDistance), std::abs(twist) / kStepAngle);
+            const glm::vec3 there = place(side, lead);
+            const glm::vec2 apart(foot.floor.x - there.x, foot.floor.z - there.z);
+            const float twist = Wrap(foot.yaw - pose_yaw);
+            need[side] = std::abs(Wrap(foot.yaw - pose_yaw - lead));
+            off[side] = std::max(glm::length(apart) / (draw_stopping_ ? kStopStepDistance : kStepDistance), need[side] / kStepAngle);
             if (turn_still_ >= kSettleSeconds && (glm::length(apart) > kSettleDistance || std::abs(twist) > kSettleAngle)) {
                 off[side] = std::max(off[side], 0.999f);
             }
@@ -793,15 +885,16 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
     const int worse = off[0] >= off[1] ? 0 : 1;
     for (int pick : {worse, 1 - worse}) {
         FootState& foot = feet_[pick];
-        const bool other_steps = feet_[1 - pick].state == Foot::Stepping;
+        const FootState& other = feet_[1 - pick];
+        const bool other_steps = other.state == Foot::Stepping && other.time < 0.5f * other.length;
         const bool lifted = off[pick] >= 2.0f;
-        if (foot.state == Foot::Locked && (lifted || (off[pick] >= 0.999f && !other_steps))) {
-            const float twist = Wrap(foot.yaw - body_yaw_);
+        const bool wrung = std::abs(Wrap(foot.yaw - pose_yaw)) > kWrungAngle;
+        if (foot.state == Foot::Locked && (lifted || (off[pick] >= 0.999f && (!other_steps || wrung)))) {
             foot.state = Foot::Stepping;
             foot.from = foot.floor;
-            foot.from_twist = twist;
+            foot.from_yaw = foot.yaw;
             foot.time = 0.0f;
-            foot.length = lifted ? kFollowSeconds : std::abs(twist) > kFastStepAngle ? kFastStepSeconds : kStepSeconds;
+            foot.length = lifted ? kFollowSeconds : glm::mix(kStepSeconds, kQuickStepSeconds, smooth((need[pick] - kStepAngle) / kStepAngle));
             foot.arc = !lifted;
         }
     }
@@ -812,9 +905,10 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         }
         const glm::vec3 clip_world(pose * glm::vec4(clip_model[side], 1.0f));
         if (foot.state == Foot::Locked) {
-            float twist = Wrap(foot.yaw - body_yaw_);
+            if (const float from_hips = Wrap(foot.yaw - hips_yaw_); std::abs(from_hips) > kLegTwist) foot.yaw = Wrap(hips_yaw_ + std::copysign(kLegTwist, from_hips));
+            float twist = Wrap(foot.yaw - pose_yaw);
             if (std::abs(twist) > kMaxTwist) {
-                foot.yaw = body_yaw_ + std::copysign(kMaxTwist, twist);
+                foot.yaw = pose_yaw + std::copysign(kMaxTwist, twist);
                 twist = std::copysign(kMaxTwist, twist);
             }
             plant.active[side] = true;
@@ -824,16 +918,79 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             foot.time += dt;
             const float s = std::clamp(foot.time / std::max(foot.length, 1.0e-3f), 0.0f, 1.0f);
             const float eased = s * s * (3.0f - 2.0f * s);
-            glm::vec3 at = glm::mix(foot.from, clip_world, eased);
-            at.y = clip_world.y + (foot.arc ? kStepLift * std::sin(3.14159265f * s) : 0.0f);
+            const float to_twist = planting ? lead : 0.0f;
+            const glm::vec3 to = place(side, to_twist);
+            glm::vec3 at = glm::mix(foot.from, to, eased);
+            if (foot.arc) {
+                const glm::vec3 pivot(pose[3]);
+                const glm::vec2 a(foot.from.x - pivot.x, foot.from.z - pivot.z), b(to.x - pivot.x, to.z - pivot.z);
+                if (glm::length(a) > 0.02f && glm::length(b) > 0.02f) {
+                    const float angle = std::atan2(a.x, a.y) + Wrap(std::atan2(b.x, b.y) - std::atan2(a.x, a.y)) * eased;
+                    const float radius = glm::mix(glm::length(a), glm::length(b), eased);
+                    at.x = pivot.x + std::sin(angle) * radius;
+                    at.z = pivot.z + std::cos(angle) * radius;
+                }
+            }
+            const float arc = std::sin(3.14159265f * s);
+            at.y = clip_world.y + (foot.arc ? kStepLift * arc * arc : 0.0f);
+            const float yaw = foot.from_yaw + Wrap(pose_yaw + to_twist - foot.from_yaw) * eased;
             plant.active[side] = true;
             plant.target[side] = glm::vec3(to_model * glm::vec4(at, 1.0f));
-            plant.yaw[side] = foot.from_twist * (1.0f - eased);
+            plant.yaw[side] = Wrap(yaw - pose_yaw);
             if (s >= 1.0f) {
-                foot.state = Foot::Free;
-                plant.active[side] = false;
+                if (planting && clip_model[side].y < kPlantHeight) {
+                    foot.state = Foot::Locked;
+                    foot.floor = at;
+                    foot.yaw = pose_yaw + to_twist;
+                } else {
+                    foot.state = Foot::Free;
+                    plant.active[side] = false;
+                }
             }
         }
+    }
+    for (int side = 0; side < 2; ++side) {
+        drawn_body_.hold_feet[side] = !have_feet ? 0 : planting ? (feet_[side].state == Foot::Locked ? 1 : 0) : feet_[side].state == Foot::Free ? 2 : 0;
+    }
+    drawn_body_.aim_knees = have_feet;
+    {
+        constexpr float kHipsOverFeet = 0.45f;
+        constexpr float kSpineTwist = 0.87f;
+        float hips_target = pose_yaw;
+        if (planting) {
+            float sx = 0.0f, sz = 0.0f;
+            for (int side = 0; side < 2; ++side) {
+                const float yaw = plant.active[side] ? pose_yaw + plant.yaw[side] : hips_yaw_;
+                sx += std::sin(yaw);
+                sz += std::cos(yaw);
+            }
+            const float feet = std::atan2(sx, sz);
+            hips_target = feet + std::clamp(Wrap(pose_yaw - feet), -kHipsOverFeet, kHipsOverFeet);
+        } else if (!standing_) {
+            const float way = Wrap(stick_heading_ - pose_yaw);
+            const float walk = std::clamp((std::cos(way) + 0.4226f) / 0.9226f, 0.0f, 1.0f);
+            const float run = std::clamp((std::cos(way) - 0.25f) / 0.5f, 0.0f, 1.0f);
+            const float share = glm::mix(walk * walk * (3.0f - 2.0f * walk), 0.8f * run * run * (3.0f - 2.0f * run),
+                                         std::clamp((drawn_body_.run - 0.3f) / 0.4f, 0.0f, 1.0f));
+            hips_target = pose_yaw + std::clamp(way, -kSpineTwist, kSpineTwist) * share * std::min(1.0f, stick_magnitude_) * (1.0f - 0.5f * std::clamp(drawn_body_.aim, 0.0f, 1.0f));
+        }
+        if (dt > 0.0f) {
+            const float running = std::clamp((drawn_body_.run - 0.3f) / 0.4f, 0.0f, 1.0f);
+            const float omega = planting ? 13.0f : glm::mix(16.0f, 22.0f, running);
+            const float limit = planting ? 6.0f : glm::mix(11.0f, 16.0f, running);
+            float value = 0.0f;
+            Spring(value, hips_rate_, Wrap(hips_target - hips_yaw_), omega, dt);
+            hips_rate_ = std::clamp(hips_rate_, -limit, limit);
+            hips_yaw_ = Wrap(hips_yaw_ + std::clamp(value, -limit * dt, limit * dt));
+        }
+        float lag = Wrap(pose_yaw - hips_yaw_);
+        if (std::abs(lag) > kSpineTwist) {
+            lag = std::copysign(kSpineTwist, lag);
+            hips_yaw_ = Wrap(pose_yaw - lag);
+            if (dt > 0.0f) hips_rate_ = turned / dt;
+        }
+        hips_lag_ = lag;
+        drawn_body_.hips_lag = lag;
     }
     plant_ = plant;
     drawn_body_.SetFootPlant(plant);

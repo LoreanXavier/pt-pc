@@ -108,11 +108,11 @@ void main() {
             light = Clamp(PtTracePath(origin, d_one, path_weight_one, bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel_one));
         }
         if (diffuse_one) {
-            imageStore(rt_gi_raw, half_pixel, vec4(min(light / (1.0 - p_spec), vec3(64.0)), travel_one));
+            imageStore(rt_gi_raw, half_pixel, vec4(LightCap(light / (1.0 - p_spec), 64.0), travel_one));
             imageStore(rt_glossy_raw, half_pixel, vec4(0.0, 0.0, 0.0, specular_worth ? 0.0 : -1.0));
         } else {
             imageStore(rt_gi_raw, half_pixel, vec4(0.0, 0.0, 0.0, travel_one));
-            imageStore(rt_glossy_raw, half_pixel, vec4(min(light / p_spec, vec3(64.0)), travel_one));
+            imageStore(rt_glossy_raw, half_pixel, vec4(LightCap(light / p_spec, 64.0), travel_one));
         }
         return;
     }
@@ -133,7 +133,7 @@ void main() {
                 d_one = normalize(d_one - 2.0 * dot(d_one, ng) * ng);
             }
             vec3 light = Clamp(PtTracePath(origin, d_one, vec3(1.0), bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel_one));
-            imageStore(rt_gi_raw, half_pixel, vec4(min(light / (1.0 - p_spec), vec3(64.0)), travel_one));
+            imageStore(rt_gi_raw, half_pixel, vec4(LightCap(light / (1.0 - p_spec), 64.0), travel_one));
             imageStore(rt_glossy_raw, half_pixel, vec4(0.0, 0.0, 0.0, specular_worth ? 0.0 : -1.0));
             return;
         }
@@ -147,7 +147,7 @@ void main() {
             light = Clamp(PtTracePath(origin, d_one, w_one / max(level_one, vec3(1.0e-4)), bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel_one));
         }
         imageStore(rt_gi_raw, half_pixel, vec4(0.0, 0.0, 0.0, travel_one));
-        imageStore(rt_glossy_raw, half_pixel, vec4(min(light / p_spec, vec3(64.0)), travel_one));
+        imageStore(rt_glossy_raw, half_pixel, vec4(LightCap(light / p_spec, 64.0), travel_one));
         return;
     }
 #endif
@@ -160,7 +160,7 @@ void main() {
     }
     float travel;
     vec3 diffuse = Clamp(PtTracePath(origin, dir, vec3(1.0), bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel));
-    imageStore(rt_gi_raw, half_pixel, vec4(min(diffuse, vec3(64.0)), travel));
+    imageStore(rt_gi_raw, half_pixel, vec4(LightCap(diffuse, 64.0), travel));
     vec4 mat0 = Img(RES_MATERIAL, SMP_POINT_CLAMP, vec2(s.material_u, 0.25));
     vec3 level = s.specular * mat0.rgb;
     if (Luma709(PtSpecularAlbedo(n, V, s)) < 0.002 || Luma709(level) < 1.0e-4) {
@@ -176,5 +176,5 @@ void main() {
         }
         specular = Clamp(PtTracePath(origin, dir, weight / max(level, vec3(1.0e-4)), bounces, pass.f0.x, pass.f0.z, pass.ids.y, Cutoff(), rng, travel));
     }
-    imageStore(rt_glossy_raw, half_pixel, vec4(min(specular, vec3(64.0)), travel));
+    imageStore(rt_glossy_raw, half_pixel, vec4(LightCap(specular, 64.0), travel));
 }

@@ -24,5 +24,5 @@ void main() {
     vec2 d = (in_current.xy / in_current.w - in_previous.xy / in_previous.w) * 0.5 * vec2(1920.0 / 128.0, 1080.0 / 128.0);
     float len = sqrt(dot(d, d));
     vec2 v = len > 0.0 ? d * (Saturate(len) / len) : vec2(0.0);
-    out_color = vec4(1.0, 0.0, 0.5 * v + 0.5);
+    out_color = vec4(1.0, 0.0, MbStore(v));
 }

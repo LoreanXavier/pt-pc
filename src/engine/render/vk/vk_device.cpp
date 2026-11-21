@@ -51,6 +51,9 @@ bool Device::CreateImage(const ImageDesc& desc, ImageResource& out) {
 }
 
 void Device::DestroyImage(ImageResource& image) {
+    if (image.image || image.view) {
+        NoteImageDestroyed();
+    }
     ctx_.DestroyImage(image);
 }
 

@@ -29,11 +29,15 @@ struct StageData;
 struct DemoLight;
 
 void HandyLightPose(const Camera& camera, const glm::vec3& aim_point, float pickup_hold, float demo_pose, glm::vec3& position,
-                    glm::vec3& direction, glm::vec3* right_out = nullptr, glm::vec3* up_out = nullptr);
+                    glm::vec3& direction, glm::vec3* right_out = nullptr, glm::vec3* up_out = nullptr, glm::vec2 breath = glm::vec2(0.0f));
+
+glm::vec3 HandyMaskUp(const Camera& camera, const glm::vec3& direction, float clip_roll_degrees, glm::vec2 pickup = glm::vec2(0.0f));
 
 struct TickBlend {
     float t = 1.0f;
     glm::vec3 handy_aim{0.0f};
+    float handy_mask_roll = 0.0f;
+    glm::vec2 handy_pickup_roll{0.0f};
     Camera handy_camera;
     glm::vec3 handy_lens{0.0f};
     bool handy_lens_valid = false;

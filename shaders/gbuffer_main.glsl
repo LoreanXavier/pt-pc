@@ -24,7 +24,32 @@ layout(location = 2) out vec4 out_material;
 
 float g_mip_bias = 0.0;
 
+bool g_tile = false;
+vec2 g_tile_dx = vec2(0.0);
+vec2 g_tile_dy = vec2(0.0);
+const float kTileEdge = 0.16;
+const float kTileSpan = 0.68;
+const float kTileBlend = 0.14;
+
+vec4 TileTex(uint index, vec2 p) {
+    vec2 f = fract(p);
+    vec2 past = f + mix(mix(vec2(0.0), vec2(-1.0), greaterThan(f, vec2(1.0 - kTileBlend))), vec2(1.0), lessThan(f, vec2(kTileBlend)));
+    vec2 w = 0.5 * (1.0 - smoothstep(vec2(0.0), vec2(kTileBlend), min(f, 1.0 - f)));
+    vec2 a = kTileEdge + kTileSpan * f;
+    vec2 b = kTileEdge + kTileSpan * past;
+    vec4 mean = textureLod(PT_TEX2D(index), vec2(0.5), 12.0);
+    vec4 aa = textureGrad(PT_TEX2D(index), a, g_tile_dx, g_tile_dy) - mean;
+    vec4 ba = textureGrad(PT_TEX2D(index), vec2(b.x, a.y), g_tile_dx, g_tile_dy) - mean;
+    vec4 ab = textureGrad(PT_TEX2D(index), vec2(a.x, b.y), g_tile_dx, g_tile_dy) - mean;
+    vec4 bb = textureGrad(PT_TEX2D(index), b, g_tile_dx, g_tile_dy) - mean;
+    float w00 = (1.0 - w.x) * (1.0 - w.y), w10 = w.x * (1.0 - w.y), w01 = (1.0 - w.x) * w.y, w11 = w.x * w.y;
+    return mean + (aa * w00 + ba * w10 + ab * w01 + bb * w11) * inversesqrt(w00 * w00 + w10 * w10 + w01 * w01 + w11 * w11);
+}
+
 vec4 Tex(uint index, vec2 uv) {
+    if (g_tile) {
+        return TileTex(index, uv);
+    }
     return texture(PT_TEX2D(index), uv, g_mip_bias);
 }
 
@@ -80,6 +105,10 @@ void main() {
     Material m = materials[creature ? uint(in_color.r + 0.5) : draw.ids.y];
     uint debug_mode = draw.ids.z & 0xFFu;
     vec2 uv = creature ? CreatureUv(in_color.gb) : in_uv0;
+    g_tile_dx = dFdx(in_uv0) * kTileSpan * 1.6;
+    g_tile_dy = dFdy(in_uv0) * kTileSpan * 1.6;
+    g_tile = (m.flags & MAT_BLEND_TILE) != 0u;
+    if ((m.flags & MAT_FINE_SPECULAR) != 0u) g_mip_bias = max(g_mip_bias, 0.25);
     vec4 base = Tex(m.albedo, uv);
     if ((m.flags & MAT_CONSTANT_COLOR) != 0u) {
         base = vec4(m.albedo_factor.rgb, 1.0);
@@ -111,7 +140,7 @@ void main() {
         if ((m.flags & MAT_SUB_NORMAL) != 0u) {
             bool layer = (m.flags & MAT_LAYER) != 0u;
             vec4 mask = layer ? Tex(m.aux2, in_uv2) : Tex(m.aux2, uv);
-            vec4 sn = Tex(m.aux1, uv * m.extra.yz);
+            vec4 sn = g_tile ? textureGrad(PT_TEX2D(m.aux1), uv * kTileSpan * m.extra.yz, g_tile_dx * m.extra.yz, g_tile_dy * m.extra.yz) : Tex(m.aux1, uv * m.extra.yz);
             float k = m.extra.x * (layer ? mask.y : mask.x);
             nts = normalize(vec3(nxy.x + k * (2.0 * sn.w - 1.0), nxy.y + k * (2.0 * sn.y - 1.0), nz));
         }
@@ -124,7 +153,11 @@ void main() {
         srm = vec4(1.0, 0.6430664, 0.0, 0.0);
     }
     float roughness = srm.g;
-    float specular = srm.r;
+    if (g_tile || (m.flags & MAT_FINE_SPECULAR) != 0u) {
+        vec3 dx = dFdx(n), dy = dFdy(n);
+        roughness = sqrt(roughness * roughness + min(2.0 * (dot(dx, dx) + dot(dy, dy)), 0.3));
+    }
+    float specular = (m.flags & MAT_DULL_SPECULAR) != 0u ? srm.r * 0.03 : srm.r;
     float reflection = srm.b;
     float index = m.indices.x;
     uint multi = (m.flags >> 12u) & 3u;

@@ -509,6 +509,12 @@ bool SceneRenderer::SetupUpscaler(gpu::Extent2D output) {
     if (up_.warp_test) {
         up_.jitter_pixels = glm::vec2(0.0f);
     }
+    static const glm::vec2 jitter_scale = [] {
+        glm::vec2 s(1.0f);
+        if (const char* v = std::getenv("PT_UPSCALE_JITTER_SCALE")) std::sscanf(v, "%f %f", &s.x, &s.y);
+        return s;
+    }();
+    up_.jitter_pixels *= jitter_scale;
     up_.jitter_ndc = 2.0f * up_.jitter_pixels / glm::vec2(static_cast<float>(render.width), static_cast<float>(render.height));
     up_.mip_bias = up_.backend ? up_.backend->MipBias(static_cast<float>(render.width) / static_cast<float>(output.width)) : 0.0f;
     if (const char* bias = std::getenv("PT_UPSCALE_MIP_BIAS")) {
@@ -584,7 +590,11 @@ void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& 
         }
         return v;
     }();
-    push.f0 = glm::vec4(kReactiveScale, 0.9f, flashlight_reactive.x, flashlight_reactive.y);
+    static const float reactive_scale = [] {
+        const char* e = std::getenv("PT_REACTIVE_SCALE");
+        return e ? static_cast<float>(std::atof(e)) : kReactiveScale;
+    }();
+    push.f0 = glm::vec4(reactive_scale, 0.9f, flashlight_reactive.x, flashlight_reactive.y);
     static const bool reactive_all = std::getenv("PT_REACTIVE_ALL") != nullptr;
     push.ids.x = reactive_all || reactive_frame_ ? 1u : 0u;
     push.f1 = glm::vec4(0.0f, 0.0f, 0.0f, -2.0f);
@@ -625,7 +635,8 @@ void SceneRenderer::RecordUpscaleInputs(gpu::CommandList& cmd, const ViewSetup& 
             break;
         }
     }
-    handy_demod_ = demod_on && handy != gpu::kInvalid && handy_factor_.Valid() && !up_.ray_reconstruction && !up_.native_neural_only;
+    const bool street_beam = handy != gpu::kInvalid && light_sources_[handy]->mask_soft;
+    handy_demod_ = demod_on && handy != gpu::kInvalid && !street_beam && handy_factor_.Valid() && !up_.ray_reconstruction && !up_.native_neural_only;
     if (handy_demod_) {
         cmd.UseTargets({{&hdr_, gpu::Layout::ShaderReadOnly},
                          {&diffuse_, gpu::Layout::ShaderReadOnly},
@@ -755,7 +766,12 @@ void SceneRenderer::RecordUpscalePrepare(float dt) {
     d.output = Wrap(on_vulkan, upscaled_);
     d.render = gpu::vk::Native(extent_);
     d.display = gpu::vk::Native(output_extent_);
-    d.jitter = up_.jitter_pixels;
+    static const glm::vec2 told = [] {
+        glm::vec2 s(1.0f);
+        if (const char* e = std::getenv("PT_UPSCALER_JITTER")) std::sscanf(e, "%f %f", &s.x, &s.y);
+        return s;
+    }();
+    d.jitter = up_.jitter_pixels * told;
     d.motion_scale = glm::vec2(static_cast<float>(extent_.width), static_cast<float>(extent_.height));
     d.pre_exposure = std::max(exposure_, 1.0e-12f);
     d.sharpness = upscale.sharpness;
@@ -811,7 +827,8 @@ bool SceneRenderer::RecordUpscaleDispatch() {
         return false;
     }
     bool upscaled = false;
-    if (up_.native_neural_only) {
+    static const bool bypass = std::getenv("PT_UPSCALE_BYPASS") != nullptr;
+    if (up_.native_neural_only || bypass) {
         auto& cmd = *up_dispatch_.list;
         cmd.UseTargets({{&hdr_, gpu::Layout::TransferSrc}, {&upscaled_, gpu::Layout::TransferDst}});
         gpu::ImageCopy copy;

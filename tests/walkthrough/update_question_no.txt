@@ -1,0 +1,7 @@
+# A copy that updates itself (an install, or a portable copy beside its pt-updater) asks at its start when a newer version is
+# offered: "Not now", as a player who keeps playing (tools/walkthrough.py puts this before the routes of a scenario with --fake-update)
+swait 120
+sui pcfocus pc_update_no
+swait 20
+sui menukey accept
+swait 20

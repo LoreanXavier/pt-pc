@@ -153,7 +153,7 @@ void main() {
 #endif
 #ifdef PT_REFLECT_LAYER
     amount = max(amount, 0.0);
-    out_color = vec4(SrgbEncode(min(hit, vec3(1.0))) * amount, amount);
+    out_color = vec4(SrgbEncode(HdrOutput() ? max(hit, vec3(0.0)) : min(hit, vec3(1.0))) * amount, amount);
 #ifdef PT_RT_REFLECTIONS
     bool on_screen = refl.w > 1.0e-4 && refl.z > 0.0 && all(greaterThanEqual(coordinate, vec2(0.0))) && all(lessThanEqual(coordinate, vec2(1.0)));
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * coordinate - 1.0), on_screen);
@@ -161,6 +161,6 @@ void main() {
     out_history = HistoryOffset(v, uv, uv + map_scale * (2.0 * refl.xy - 1.0), true);
 #endif
 #else
-    out_color = vec4(SrgbDecode(mix(ReflectionBlendBase(base.rgb, pass.ids.y != 0u), SrgbEncode(min(hit, vec3(1.0))), amount)), base.a);
+    out_color = vec4(SrgbDecode(mix(ReflectionBlendBase(base.rgb, pass.ids.y != 0u), SrgbEncode(HdrOutput() ? max(hit, vec3(0.0)) : min(hit, vec3(1.0))), amount)), base.a);
 #endif
 }

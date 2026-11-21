@@ -135,6 +135,7 @@ bool PreviousSecond() {
 
 const float kPtShadeReach = 0.35;
 const float kPtShadeTransmission = 0.3;
+const float kPtShadeNear = 0.35;
 int g_pt_shade_record = -2;
 int PtShadeRecord(Pixel p) {
     if (g_pt_shade_record != -2) {
@@ -179,7 +180,9 @@ vec3 PtShadeLight(Pixel p, bool shadow) {
             continue;
         }
         float visibility = shadow ? PtVisibility(l, p.world - p.ng * max(0.003, 0.001 * p.z), l.position.xyz, pass.f2.y, p.ng) : 1.0;
-        sum += d * (kPtShadeTransmission * visibility);
+        float near = min(1.0, dot(to_light, to_light) / (kPtShadeNear * kPtShadeNear));
+        near *= near;
+        sum += d * (kPtShadeTransmission * visibility * near);
     }
     return sum;
 }

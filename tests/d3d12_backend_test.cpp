@@ -1683,6 +1683,17 @@ int main(int argc, char** argv) {
     const char* gpu_upload = std::getenv("PT_D3D12_GPU_UPLOAD");
     Check(MappedInputRun(*device, gpu_upload && gpu_upload[0] == '0'),
           "mapped read-only inputs preserve partial updates and recorded upload snapshots");
+    {
+        _putenv_s("PT_D3D12_TEST_LATE_FENCE", "1");
+        std::string late_error;
+        std::unique_ptr<gpu::d3d12::D3D12Device> late = gpu::d3d12::Create(options, late_error);
+        _putenv_s("PT_D3D12_TEST_LATE_FENCE", "");
+        bool held = late != nullptr;
+        for (int i = 0; held && i < 8; ++i) {
+            held = MappedInputRun(*late, false);
+        }
+        Check(held, "the submits after a fence wait that ran out still wait for their own copies" + (late ? std::string() : ": " + late_error));
+    }
     const std::string shader_dir = pt::ResourceDir("shaders", PT_SHADER_DIR).string();
     std::string report;
     const bool covered = device->CheckRootSignature(shader_dir, report);

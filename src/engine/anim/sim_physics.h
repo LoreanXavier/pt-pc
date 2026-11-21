@@ -31,6 +31,10 @@ struct SimBody {
     float linear_damping = 0.0f;
     float angular_damping = 0.0f;
     float max_linear_velocity = 100.0f;
+    float max_angular_velocity = 180.0f;
+    int collision_id = 0;
+    float friction = 0.0f;
+    float permitted_depth = 0.0f;
     glm::vec3 offset_position{0.0f};
     glm::quat offset_rotation{1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3 bind_position{0.0f};
@@ -85,36 +89,6 @@ private:
     std::vector<float> hit_distance_;
     float wind_coefficient_ = 1.0f;
     bool convert_move_to_wind_ = false;
-};
-
-class SimPhysics {
-public:
-    void Reset() { warm_ = true; }
-    bool Step(const SimRig& rig, const Skeleton& skeleton, std::vector<glm::mat4>& world, const glm::mat4& model_world, float dt,
-              const glm::vec3& wind);
-
-private:
-    struct Frame {
-        glm::vec3 position{0.0f};
-        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
-    };
-
-    void Bind(const SimRig& rig, const Skeleton& skeleton);
-    Frame Animated(const SimRig& rig, size_t body, const std::vector<glm::mat4>& world, const glm::mat4& model_world) const;
-    void Snap(const SimRig& rig, const std::vector<glm::mat4>& world, const glm::mat4& model_world);
-    void Solve(const SimRig& rig, size_t order_index, const std::vector<int>& slot, bool constrain);
-
-    const SimRig* rig_ = nullptr;
-    const Skeleton* skeleton_ = nullptr;
-    std::vector<int> bone_;
-    std::vector<bool> active_;
-    std::vector<int> bone_order_;
-    std::vector<Frame> frame_;
-    std::vector<Frame> previous_kinematic_;
-    std::vector<glm::vec3> end_;
-    std::vector<glm::vec3> previous_end_;
-    std::vector<glm::vec3> velocity_;
-    bool warm_ = true;
 };
 
 bool SimPhysicsEnabled();

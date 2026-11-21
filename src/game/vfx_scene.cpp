@@ -119,17 +119,22 @@ glm::vec3 PointLighting(const SceneLighting& lighting, const glm::vec3& p) {
     return best[0] + best[1] + best[2];
 }
 
-vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& center, const glm::vec3& half) {
+vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& center, const glm::vec3& half, bool street_scenery) {
     vfx::LightBlock block;
     const float radius = std::max({half.x, half.y, half.z});
     struct Candidate {
         const SceneLight* light = nullptr;
         float score = 0.0f;
         float cone = 1.0f;
+        float min_dist = 0.01f;
     };
     std::vector<Candidate> candidates;
     for (const SceneLight& l : lighting.lights) {
         if ((l.type != LightType::Point && l.type != LightType::Spot) || (l.hidden_views & 1u) != 0 || l.outer_range <= 0.0f) {
+            continue;
+        }
+        if (street_scenery && l.type == LightType::Spot && l.position.y < 5.0f && l.direction.y > 0.1f &&
+            l.name.find("DemoLightFunctor") != std::string::npos) {
             continue;
         }
         const glm::vec3 reach(l.outer_range + l.dimmer);
@@ -143,10 +148,17 @@ vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& cen
             const float cos_a = dist > 1.0e-6f ? glm::dot(glm::normalize(l.direction), to / dist) : 1.0f;
             cone = std::pow(std::clamp((cos_a - l.cos_outer) * l.inv_cone_range, 0.0f, 1.0f), 2.7182817f);
         }
-        const float d = std::max(dist, l.inner_range);
+        float min_d = std::max(l.inner_range, 0.01f);
+        if (street_scenery) {
+            min_d = std::max(min_d, radius * 1.5f);
+            if (l.type == LightType::Spot) {
+                min_d = std::max(min_d, l.outer_range * 0.35f);
+            }
+        }
+        const float d = std::max(dist, street_scenery ? min_d : l.inner_range);
         const float r = l.outer_range + radius;
         const float falloff = 1.0f / std::max(d * d, 1.0e-12f) - d * d / std::max(r * r * r * r, 1.0e-12f);
-        candidates.push_back({&l, glm::length(l.intensity) * cone * falloff, cone});
+        candidates.push_back({&l, glm::length(l.intensity) * cone * falloff, cone, street_scenery ? min_d : 0.01f});
     }
     std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
     for (size_t k = 0; k < 3 && k < candidates.size(); ++k) {
@@ -155,6 +167,7 @@ vfx::LightBlock LightBlockAt(const SceneLighting& lighting, const glm::vec3& cen
         block.position[block.count] = l.position;
         block.color[block.count] = l.intensity * candidates[k].cone;
         block.inv_r4[block.count] = 1.0f / std::max(range * range * range * range, 1.0e-12f);
+        block.min_dist[block.count] = candidates[k].min_dist;
         ++block.count;
     }
     std::vector<const SceneProbe*> probes;
@@ -727,7 +740,6 @@ void VfxScene::Prepare(Game& game, const Camera& camera, float aspect, SceneLigh
 }
 
 void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, SceneLighting& lighting, VfxPass& pass, float blend) {
-    (void)game;
     static const bool trace_log = std::getenv("PT_VFX_TRACE_LOG") != nullptr;
     static const bool disabled = [] {
         const char* v = std::getenv("PT_VFX");
@@ -762,7 +774,10 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
     if (legacy_lit) {
         system_.SetLightBlockProbe({});
     } else {
-        system_.SetLightBlockProbe([scene](const glm::vec3& center, const glm::vec3& half) { return LightBlockAt(*scene, center, half); });
+        const bool street_scenery = game.StreetWalkActive() || game.SurvivalActive();
+        system_.SetLightBlockProbe([scene, street_scenery](const glm::vec3& center, const glm::vec3& half) {
+            return LightBlockAt(*scene, center, half, street_scenery);
+        });
     }
     const auto preload_started = std::chrono::steady_clock::now();
     if (!preload_.empty()) {
@@ -782,11 +797,24 @@ void VfxScene::PrepareList(Game& game, const Camera& camera, float aspect, Scene
     system_.SetLightsReady([&lighting](const std::vector<vfx::LightOut>& built) {
         for (const vfx::LightOut& l : built) {
             lighting.lights.push_back(ToSceneLight(l));
+            lighting.lights.back().intensity *= lighting.stage_glow;
         }
     });
     const auto build_started = std::chrono::steady_clock::now();
+    system_.SetGlowingDust(game.SurvivalActive());
+    static const float smoke_light = [] { const char* g = std::getenv("PT_SURVIVAL_SMOKE"); return g ? static_cast<float>(std::atof(g)) : 0.6f; }();
+    system_.SetSmokeLight(game.SurvivalActive() ? smoke_light : 1.0f);
     system_.Build(view, textures, cubes, probe, list, lights, blend);
     system_.SetLightsReady({});
+    if (glm::distance(lighting.stage_glow, glm::vec3(1.0f)) > 1.0e-3f) {
+        for (const vfx::Draw& d : list.draws) {
+            if (d.layer == vfx::Layer::Screen) continue;
+            for (uint32_t q = d.first; q < d.first + d.count && q < list.quads.size(); ++q) {
+                list.quads[q].color = glm::vec4(glm::vec3(list.quads[q].color) * lighting.stage_glow, list.quads[q].color.a);
+            }
+        }
+    }
+    if (game.SurvivalActive()) game.Survival()->AddEffectQuads(list, camera);
     const auto build_done = std::chrono::steady_clock::now();
     preload_ms_ = std::chrono::duration<double, std::milli>(build_started - preload_started).count();
     build_ms_ = std::chrono::duration<double, std::milli>(build_done - build_started).count();

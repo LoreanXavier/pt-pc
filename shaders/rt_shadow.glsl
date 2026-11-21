@@ -14,6 +14,10 @@ layout(std430, set = 2, binding = 1) readonly buffer RtRecords {
     RtRecord rt_records[];
 };
 
+vec3 RtRecordTint(uint flags) {
+    return vec3(float(((flags >> 12u) & 63u) ^ 32u), float(((flags >> 18u) & 63u) ^ 32u), float(((flags >> 24u) & 63u) ^ 32u)) / 32.0;
+}
+
 #ifdef PT_D3D12
 /* D3D12: raw (byte address) views of every vertex and index buffer a TLAS record can name, one unbounded descriptor array: set 2
    binding 2 as 32-bit words, nonuniform (the records of one wave differ). RtRecord.vertices.x / indices.x index it. A vertex is 22
@@ -64,6 +68,36 @@ bool RtCasterOpaque(uint record, uint primitive, vec2 bary) {
     vec2 uv = vec2(RT_VERTEX(vb, i0), RT_VERTEX(vb, i0 + 1u)) * (1.0 - bary.x - bary.y) + vec2(RT_VERTEX(vb, i1), RT_VERTEX(vb, i1 + 1u)) * bary.x + vec2(RT_VERTEX(vb, i2), RT_VERTEX(vb, i2 + 1u)) * bary.y;
     Material m = materials[r.material];
     return textureLod(PT_TEX2D(m.albedo), uv, 0.0).a >= ShadowAlphaCutoff(m.flags);
+}
+
+const uint kRtEffect = 2048u;
+
+bool RtEffectRecord(uint record) {
+    return (rt_records[record].flags & kRtEffect) != 0u;
+}
+
+vec4 RtEffectLayer(uint record, uint primitive, vec2 bary) {
+    RtRecord r = rt_records[record];
+    RtIndexRef ib = RT_INDEX_REF(r.indices);
+    RtVertexRef vb = RT_VERTEX_REF(r.vertices);
+    uint base = 3u * primitive;
+    uint i0 = RT_INDEX(ib, base) * 22u;
+    uint i1 = RT_INDEX(ib, base + 1u) * 22u;
+    uint i2 = RT_INDEX(ib, base + 2u) * 22u;
+    vec2 uv = vec2(RT_VERTEX(vb, i0 + 10u), RT_VERTEX(vb, i0 + 11u)) * (1.0 - bary.x - bary.y) +
+              vec2(RT_VERTEX(vb, i1 + 10u), RT_VERTEX(vb, i1 + 11u)) * bary.x + vec2(RT_VERTEX(vb, i2 + 10u), RT_VERTEX(vb, i2 + 11u)) * bary.y;
+    uint slot = floatBitsToUint(RT_VERTEX(vb, i0 + 12u));
+    uint mode = floatBitsToUint(RT_VERTEX(vb, i0 + 13u));
+    vec4 color = vec4(RT_VERTEX(vb, i0 + 14u), RT_VERTEX(vb, i0 + 15u), RT_VERTEX(vb, i0 + 16u), RT_VERTEX(vb, i0 + 17u));
+    vec4 tex = textureLod(PT_TEX2D(slot), uv, 1.0);
+    vec3 c = tex.rgb;
+    if ((mode & 4u) != 0u) {
+        c = mix(pow(max(vec3(1.0e-5), 0.94786733 * (vec3(0.055) + c)), vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.03928)));
+    } else if ((mode & 2u) != 0u) {
+        c = mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.04045)));
+    }
+    float a = clamp(tex.a * color.a, 0.0, 1.0);
+    return vec4(max(c * color.rgb, vec3(0.0)) * a, (mode & 1u) != 0u ? 0.0 : a);
 }
 
 bool RtOccluded(Light l, vec3 world, vec3 target, bool spot, uint info) {

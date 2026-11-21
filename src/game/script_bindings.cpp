@@ -164,6 +164,10 @@ int MainChangeStageId(lua_State* L) {
 }
 
 int MainActivateStage(lua_State* L) {
+    if (G(L).NightDoorPending() && Str(L, 1) == "next") {
+        LogInfo("loop browser: the night's start room keeps the hallway down");
+        return 0;
+    }
     G(L).Stages().RequestActivate(Str(L, 1));
     return 0;
 }

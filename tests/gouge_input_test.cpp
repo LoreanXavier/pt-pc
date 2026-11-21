@@ -123,5 +123,25 @@ int main(){
         const pt::InputState gouge=tick();
         check((gouge.pressed&pt::kPadGouge)&&!(gouge.held&pt::kPadGouge),"the X key's gouge is a press, never held");
     }
+    {
+        pt::InputState pending;auto tick=[&]{const pt::InputState t=pending;pt::SpendTickInput(pending);return t;};
+        auto frame=[&]{pt::MergeFrameButtons(pending,poll());};
+        frame();tick();
+        input.InjectMouseButton(SDL_BUTTON_LEFT,true);frame();input.InjectMouseButton(SDL_BUTTON_LEFT,false);frame();
+        const pt::InputState click=tick();
+        check((click.survival_pressed&pt::kSurvivalFire)&&(click.survival_held&pt::kSurvivalFire),"a fire click is pressed and held at the next tick");
+        frame();bool quiet=true;for(int i=0;i<30;++i){frame();const pt::InputState t=tick();quiet&=!(t.survival_pressed&pt::kSurvivalFire)&&!(t.survival_held&pt::kSurvivalFire);}
+        check(quiet,"after the click no later tick fires");
+        input.InjectMouseButton(SDL_BUTTON_LEFT,true);frame();
+        int fire_presses=tick().survival_pressed&pt::kSurvivalFire?1:0;bool held=true;
+        for(int i=0;i<20;++i){frame();const pt::InputState t=tick();fire_presses+=t.survival_pressed&pt::kSurvivalFire?1:0;held&=(t.survival_held&pt::kSurvivalFire)!=0;}
+        check(fire_presses==1&&held,"a held fire button is one press, then held");
+        input.InjectKey(SDL_SCANCODE_R,true);frame();input.InjectKey(SDL_SCANCODE_R,false);frame();
+        int reload_presses=0;fire_presses=0;
+        for(int i=0;i<20;++i){const pt::InputState t=tick();reload_presses+=t.survival_pressed&pt::kSurvivalReload?1:0;fire_presses+=t.survival_pressed&pt::kSurvivalFire?1:0;frame();}
+        check(reload_presses==1&&fire_presses==0,"a reload tapped while fire is held is one press and adds no shot");
+        input.InjectMouseButton(SDL_BUTTON_LEFT,false);frame();tick();frame();
+        check(!(tick().survival_held&pt::kSurvivalFire),"releasing fire ends it at the next tick");
+    }
     pads.DetachAll();input.Shutdown();SDL_Quit();return failed?1:0;
 }
