@@ -259,9 +259,9 @@ bool SaveStore::Save(const SaveFile& file) {
         last_slot_ = 1 - last_slot_;
         --sequence_;
     }
-    LogInfo("save: slot {} written (floor {}, cleared {}{}{}{}{}, photo {:#x}) {}", last_slot_, file.progress.floor, file.progress.cleared[0],
-            file.progress.cleared[1], file.progress.cleared[2], file.progress.cleared[3], file.progress.cleared[4], file.progress.photo_word,
-            ok ? "" : "FAILED");
+    LogInfo("save: slot {} written (floor {}, cleared {}{}{}{}{}, photo {:#x}, game+ {} finishes {}) {}", last_slot_, file.progress.floor,
+            file.progress.cleared[0], file.progress.cleared[1], file.progress.cleared[2], file.progress.cleared[3], file.progress.cleared[4],
+            file.progress.photo_word, file.progress.game_plus ? 1 : 0, file.progress.finishes, ok ? "" : "FAILED");
     return ok;
 }
 

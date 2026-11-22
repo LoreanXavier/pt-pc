@@ -5682,7 +5682,7 @@ private:
         bool operator==(const HdrGradeValues&) const = default;
     };
     static constexpr HdrGradeValues kHdrGradeOriginal{0, 100, 100, 100, 100, 100, 0};
-    static constexpr HdrGradeValues kHdrGradeRich{0, 100, 145, 100, 150, 100, 0};
+    static constexpr HdrGradeValues kHdrGradeRich{0, 105, 120, 100, 130, 110, 0};
     static HdrGradeValues HdrGradeOf(const pt::AppSettings& s) {
         const auto& d = s.display;
         return {d.hdr_exposure, d.hdr_contrast, d.hdr_highlights, d.hdr_shadows, d.hdr_saturation, d.hdr_highlight_saturation, d.hdr_blowout};

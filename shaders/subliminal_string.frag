@@ -21,7 +21,7 @@ void main() {
     float ink = (pass.f2.x > 0.0 ? pass.f2.x : 0.1) * clamp(pass.f0.z * a, 0.0, 1.0);
 
     vec3 hdr = ImgFetch(IMG_HDR, pixel).rgb * pass.f1.y;
-    vec2 bloom_uv = in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);
+    vec2 bloom_uv = HdrOutput() ? in_uv : in_uv + 0.5 / ImgSize(IMG_BLOOM_SUM);
     vec3 bloom = pass.f1.x > 0.0 ? Img(IMG_BLOOM_SUM, SMP_LINEAR_CLAMP, bloom_uv).rgb * pass.f1.x : vec3(0.0);
     bloom = HdrOutput() ? max(bloom, vec3(0.0)) : min(vec3(0.5), bloom);
     vec3 c;

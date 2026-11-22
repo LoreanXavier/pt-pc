@@ -28,7 +28,12 @@ vec3 HdrGrade(vec3 light, vec4 look0, vec4 look1, float peak) {
     if (y > 1.0e-7) {
         float over = y / kMid;
         float high = y / (y + kMid);
-        float power = look0.y - 1.0 + (look0.z - 1.0) * high * high + 0.5 * (1.0 - look0.w) * (1.0 - high) * (1.0 - high);
+        float hi_delta = look0.z - 1.0;
+        if (hi_delta > 0.0) {
+            float headroom = 1.0 - smoothstep(0.5, max(peak, 1.01), y);
+            hi_delta *= 0.25 + 0.75 * headroom;
+        }
+        float power = look0.y - 1.0 + hi_delta * high * high + 0.5 * (1.0 - look0.w) * (1.0 - high) * (1.0 - high);
         light *= pow(over, power);
         y = dot(light, vec3(0.2126, 0.7152, 0.0722));
     }

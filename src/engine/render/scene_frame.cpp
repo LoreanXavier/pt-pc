@@ -1397,7 +1397,7 @@ void SceneRenderer::RecordRayTracing(gpu::CommandList& cmd) {
         }
     }
     CollectEffects();
-    rt_->SetEffects(rt_effect_vertices_, rt_effect_indices_);
+    rt_->SetEffects(rt_effect_vertices_, rt_effect_indices_, rt_path_ ? 16u : 64u);
     BindSets(cmd, gpu::BindPoint::Compute);
     if (!rt_->Build(cmd, renderer_->FrameIndex(), rt_casters_)) {
         untraced();

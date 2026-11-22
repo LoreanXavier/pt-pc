@@ -28,7 +28,8 @@ float LensChannel(uint source, vec2 uv, vec2 size, int channel) {
     for (int j = 0; j < 4; ++j) {
         for (int i = 0; i < 4; ++i) {
             ivec2 at = clamp(ivec2(base) + ivec2(i - 1, j - 1), ivec2(0), last);
-            float light = pow(max(ImgFetch(source, at)[channel], 0.0), 2.2);
+            float v = max(ImgFetch(source, at)[channel], 0.0);
+            float light = v * v;
             sum += light * w[i].x * w[j].y;
             if ((i == 1 || i == 2) && (j == 1 || j == 2)) {
                 low = min(low, light);
@@ -36,7 +37,7 @@ float LensChannel(uint source, vec2 uv, vec2 size, int channel) {
             }
         }
     }
-    return pow(clamp(sum, low, high), 1.0 / 2.2);
+    return sqrt(clamp(sum, low, high));
 }
 
 vec3 SampleScreen(uint source, vec2 uv) {

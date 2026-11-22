@@ -459,9 +459,10 @@ void VkRayTracing::WriteSet(Slot& slot) {
     slot.written = true;
 }
 
-void VkRayTracing::SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
+void VkRayTracing::SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint8_t mask) {
     effect_vertices_.assign(vertices.begin(), vertices.end());
     effect_indices_.assign(indices.begin(), indices.end());
+    effect_mask_ = mask;
 }
 
 bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<const RtCaster> casters) {
@@ -609,10 +610,6 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
                 jobs.push_back(p.job);
                 ++stats_.skinned_instances;
             }
-            if (!RunJobs(cmd, slot, jobs)) {
-                for (const Pending& p : pending) blas[p.caster] = 0;
-                jobs.clear();
-            }
         }
     }
 
@@ -650,15 +647,22 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
             if (vk::Check(vkCreateAccelerationStructureKHR(device_, &create, nullptr, &handle), "vkCreateAccelerationStructureKHR (effects)")) {
                 slot.dynamic.push_back(handle);
                 job.info.dstAccelerationStructure = handle;
-                std::vector<BuildJob> effect_jobs{job};
-                if (RunJobs(cmd, slot, effect_jobs)) {
-                    VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-                    address.accelerationStructure = handle;
-                    effects_blas = vkGetAccelerationStructureDeviceAddressKHR(device_, &address);
-                    stats_.effect_triangles = effect_primitives;
-                }
+                jobs.push_back(job);
+                VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+                address.accelerationStructure = handle;
+                effects_blas = vkGetAccelerationStructureDeviceAddressKHR(device_, &address);
+                stats_.effect_triangles = effect_primitives;
             }
         }
+    }
+
+    if (!jobs.empty() && !RunJobs(cmd, slot, jobs)) {
+        for (size_t i = 0; i < casters.size(); ++i) {
+            if (casters[i].skin_base != gpu::kInvalid) blas[i] = 0;
+        }
+        effects_blas = 0;
+        stats_.effect_triangles = 0;
+        jobs.clear();
     }
 
     const uint32_t count = static_cast<uint32_t>(casters.size()) + (effects_blas != 0 ? 1u : 0u);
@@ -729,7 +733,7 @@ bool VkRayTracing::Build(gpu::CommandList& list, uint32_t slot_index, std::span<
         inst.transform.matrix[1][1] = 1.0f;
         inst.transform.matrix[2][2] = 1.0f;
         inst.instanceCustomIndex = used;
-        inst.mask = 64;
+        inst.mask = effect_mask_;
         inst.instanceShaderBindingTableRecordOffset = 0;
         inst.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR | VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         inst.accelerationStructureReference = effects_blas;

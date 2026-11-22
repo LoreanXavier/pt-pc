@@ -52,9 +52,10 @@ public:
     virtual void Shutdown() = 0;
     virtual void Forget(const GpuMesh& mesh) = 0;
     virtual bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) = 0;
-    virtual void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
+    virtual void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint8_t mask = 64u) {
         (void)vertices;
         (void)indices;
+        (void)mask;
     }
     virtual bool Valid(uint32_t slot) const = 0;
     virtual bool Ready(uint32_t slot) const = 0;
@@ -86,7 +87,7 @@ public:
     void Shutdown() override;
     void Forget(const GpuMesh& mesh) override;
     bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) override;
-    void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices) override;
+    void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint8_t mask = 64u) override;
     bool Valid(uint32_t slot) const override { return slots_[slot].valid; }
     bool Ready(uint32_t slot) const override;
     void SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) override;
@@ -156,6 +157,7 @@ private:
     std::unordered_map<const GpuMesh*, std::vector<Blas>> static_;
     std::vector<Vertex> effect_vertices_;
     std::vector<uint32_t> effect_indices_;
+    uint8_t effect_mask_ = 64u;
     RtStats stats_;
     std::chrono::steady_clock::time_point retry_after_{};
 };

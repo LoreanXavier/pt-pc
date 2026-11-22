@@ -423,10 +423,14 @@ void Spatial(ivec2 pixel, ivec2 size) {
     int radius = kind >= 3.0 ? 1 : kind >= 2.0 ? 2 : (roughness > 0.6 ? 2 : 1);
     float softness = kind < 3.0 ? frame.grade.w : 0.0;
     if (softness > 0.0) {
-        float rows = v.viewport.y / 1080.0;
-        radius = max(radius, int(softness * (kind >= 2.0 ? 24.0 : 8.0 + 40.0 * roughness) * rows + 0.5));
+        if (pane) {
+            radius = max(radius, 2 + int(softness + 0.5));
+        } else {
+            float rows = v.viewport.y / 1080.0;
+            radius = max(radius, int(softness * (8.0 + 40.0 * roughness) * rows + 0.5));
+        }
     }
-    int stride = radius > 4 ? (radius + 3) / 4 : 1;
+    int stride = pane ? 1 : (radius > 2 ? (radius + 1) / 2 : 1);
     float spread = max(4.0, float(radius * radius) * 0.5);
     float normal_power = mix(32.0, 2.0, softness);
     float edge_kept = 1.0 - Saturate(4.0 * softness);
@@ -447,9 +451,12 @@ void Spatial(ivec2 pixel, ivec2 size) {
             if (kind < 2.0 && code <= 2.0 && !middle) {
                 continue;
             }
-            float dk = ImgFetch(IMG_DEPTH, p).x;
-            if (!pane && (dk <= 0.0) != background) {
-                continue;
+            float dk = 0.0;
+            if (!pane) {
+                dk = ImgFetch(IMG_DEPTH, p).x;
+                if ((dk <= 0.0) != background) {
+                    continue;
+                }
             }
             vec3 c = written_second ? imageLoad(pt_layer_history1, p).rgb : imageLoad(pt_layer_history0, p).rgb;
             float apart = float(dot(offset, offset));
@@ -459,7 +466,9 @@ void Spatial(ivec2 pixel, ivec2 size) {
                     w *= exp(-abs(ViewZ(v, dk) - z) / ((0.01 * z + 0.002) * (1.0 + softness * apart)));
                     w *= pow(max(dot(n, DecodeNormal(ImgFetch(IMG_NORMAL, p).xyz)), 0.0), normal_power);
                 }
-                w *= mix(1.0, exp(-abs(Luma709(c) - l_center) / (0.5 * l_center + 1.0e-4)), edge_kept);
+                if (edge_kept > 0.0) {
+                    w *= mix(1.0, exp(-abs(Luma709(c) - l_center) / (0.5 * l_center + 1.0e-4)), edge_kept);
+                }
             }
             sum += w * c;
             weight_sum += w;

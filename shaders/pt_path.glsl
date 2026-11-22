@@ -5,6 +5,7 @@
 const uint kPtOccluderMask = 128u;
 const uint kPtSurfaceMask = 8u;
 const uint kPtLayerMask = 64u;
+const uint kPtEffectMask = 16u;
 const float kPtPi = 3.14159265;
 
 struct PtMaterial {
@@ -397,7 +398,8 @@ bool PtLayers(vec3 origin, vec3 dir, float t_end, float emissive_cap, inout vec3
     for (int k = 0; k < 3; ++k) {
         rayQueryEXT rq;
         uint flags = gl_RayFlagsCullBackFacingTrianglesEXT | (g_pt_mirror_view ? gl_RayFlagsNoOpaqueEXT : 0u);
-        rayQueryInitializeEXT(rq, rt_casters, flags, kPtLayerMask, origin, t_start, dir, t_end);
+        uint layer_mask = g_pt_layer_effects ? (kPtLayerMask | kPtEffectMask) : kPtLayerMask;
+        rayQueryInitializeEXT(rq, rt_casters, flags, layer_mask, origin, t_start, dir, t_end);
         while (rayQueryProceedEXT(rq)) {
             if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
                 uint record = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);

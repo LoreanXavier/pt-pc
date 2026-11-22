@@ -937,6 +937,11 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
                             }
                             handy_lens_gpu_ = lens_mat;
                         }
+                    } else if (lens_gain <= 0.0f && handy_lens_gpu_.params.y > 0.0f) {
+                        MaterialGpu lens_mat = handy_lens_gpu_;
+                        lens_mat.params.y = 0.0f;
+                        models_.Textures().UpdateMaterial(static_cast<uint32_t>(handy_lens_material_), lens_mat);
+                        handy_lens_gpu_ = lens_mat;
                     }
                 }
                 if (handy_lens_mesh_ && handy_lens_material_ >= 0) {
@@ -2493,6 +2498,9 @@ int Game::GamePlusNoticeDue() {
 
 void Game::TakeGamePlusNotice(int tier) {
     gameplus_announced_ = std::max<uint32_t>(gameplus_announced_, static_cast<uint32_t>(tier));
+    if (saved_progress_) {
+        saved_progress_->gameplus_announced = gameplus_announced_;
+    }
     LogInfo("game+: notice for tier {} given", tier);
 }
 
@@ -2520,6 +2528,30 @@ void Game::EnableGamePlus() {
     } else {
         LogInfo("game+: finish not counted toward the tier (Game+ off), finishes stay {}", finishes_);
     }
+}
+
+void Game::PersistGamePlusFinish() {
+    if (browse_save_suppressed_ || saves_held_) {
+        return;
+    }
+    floor_.SetSaveFloorName("f000");
+    SaveFile file;
+    file.options = options_;
+    file.progress.floor = "f000";
+    file.progress.cleared.fill(0);
+    file.progress.photo_word = 0;
+    file.progress.game_plus = game_plus_;
+    file.progress.finishes = finishes_;
+    file.progress.gameplus_announced = gameplus_announced_;
+    saved_progress_ = file.progress;
+    last_save_request_ = time_;
+    ++save_io_count_;
+    save_io_loading_ = false;
+    if (!save_store_.Enabled()) {
+        LogInfo("save: game+ finish skipped (no save store, finishes {})", finishes_);
+        return;
+    }
+    OnSaveWritten(save_store_.Save(file));
 }
 
 void Game::ReleaseUnusedAssets(std::string_view why) {
@@ -2894,6 +2926,7 @@ bool Game::FinishIntoNight() {
     NoteEndingTier();
     NoteGameFinished();
     EnableGamePlus();
+    PersistGamePlusFinish();
     RequestSurvival();
     if (StartStreetWalk()) {
         LogInfo("ending: Game+ tier {} finished, no credits: out of the house onto the street into the night", ending_tier_);
@@ -3191,7 +3224,16 @@ void Game::RequestLoad() {
         saved_progress_ = file->progress;
         controller_.first_boot = false;
         resumed_threshold_ = file->progress.floor == "f090" && nazo_.IsCleared(NazoId::Hello);
-        LogInfo("save: loaded floor {}; native threshold overlap {}", file->progress.floor, resumed_threshold_ ? "restored" : "off");
+        LogInfo("save: loaded floor {} (game+ {}, finishes {}); native threshold overlap {}", file->progress.floor, game_plus_ ? 1 : 0, finishes_,
+                resumed_threshold_ ? "restored" : "off");
+        if (game_finished_ && !game_plus_ && file->progress.floor == "f120") {
+            LogInfo("game+: recovering missed Game+ finish on f120 save (pt.ini already marked game_finished)");
+            EnableGamePlus();
+            floor_.SetFloorLevel("f000");
+            floor_.ResetLoopCount();
+            nazo_.ResetAllStates();
+            PersistGamePlusFinish();
+        }
     } else if (result.status == SaveLoadStatus::Broken) {
         controller_.first_boot = false;
         save_dialog_ = SaveDialog{"sys_load_failed_3", SaveDialog::Then::NewSave};

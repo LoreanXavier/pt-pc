@@ -80,6 +80,7 @@ void GameController::FinishEnding() {
     if (current_ == 28 && !game_.BrowseSaveSuppressed()) {
         game_.NoteGameFinished();
         game_.EnableGamePlus();
+        game_.PersistGamePlusFinish();
     }
     if (current_ == 28) {
         game_.StartPortCredits();

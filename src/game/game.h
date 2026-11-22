@@ -428,6 +428,7 @@ public:
     float EndingSkipProgress() const { return ending_skip_hold_ / kEndingSkipHold; }
     void OnFloorReached(std::string_view floor, int pass);
     void EnableGamePlus();
+    void PersistGamePlusFinish();
     bool GamePlus() const { return game_plus_; }
     uint32_t Finishes() const { return finishes_; }
     int GamePlusNoticeDue();
