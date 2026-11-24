@@ -25,7 +25,9 @@ rebuilt in C++ from the original's behaviour, with Vulkan and DirectX 12 rendere
 script and cutscene is read at run time from your own copy of the PS4 game. There is no game data in this repository
 and none in the installer.
 
-The port runs on its own engine, Hallway Engine.
+The port runs on its own engine, Hallway Engine. It is open source under GPL-3.0 with an attribution term: if you
+build on it, keep the credit "Built on Hallway Engine by LoreanXavier" in your credits and publish your changes under
+the same license (see [License](#license)).
 
 I made this in my spare time, with AI tools (see AI Disclosure at the end), because P.T. deserved to keep existing
 somewhere other than on consoles that still have it installed. It plays the whole teaser from the first wake-up to
@@ -190,8 +192,19 @@ executable.
 
 ## License
 
-The port's own code is under the MIT license (see LICENSE). P.T. and all of its content belong to Konami, and the
-third-party pieces listed above keep their own licenses (see NOTICE).
+The port's own code, Hallway Engine included, is under the GNU General Public License v3.0 or later (see LICENSE)
+with the additional terms in [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md):
+
+- Anything built on Hallway Engine must keep its copyright notices and show **"Built on Hallway Engine by
+  LoreanXavier"** with a link to this repository in its credits or about screen.
+- Changes to the engine must be published under the same license.
+- Linking with the NVIDIA DLSS, Intel XeSS and DirectX Agility SDKs is allowed.
+
+Please also name Hallway Engine on your README and release page. Releases up to and including 1.1.1 were published
+under MIT and stay under it.
+
+P.T. and all of its content belong to Konami, and the third-party pieces listed above keep their own licenses (see
+NOTICE).
 
 ## AI Disclosure
 
