@@ -1908,7 +1908,8 @@ SCENARIOS = {
             r"survival: player hit for 14",
             r"survival: the player fell on wave 1",
             r"survival: retry \(difficulty 1\)",
-            r"survival: waking on the street via gc_p00_020",
+            # (a retry stands the player up on the street at once, the wake-up is not played again)
+            r"survival: looks applied",
             r"survival: wave 1 \(",
         ],
     },

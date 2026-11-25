@@ -1414,6 +1414,37 @@ void SceneRenderer::ReadTimestamps(FrameSlot& slot) {
     stats_.pt_ms[1] = span(25, 26);
     stats_.pt_ms[2] = span(26, 27);
     stats_.pt_ms[3] = span(27, 28);
+    LayerDiag();
+}
+
+void SceneRenderer::LayerDiag() {
+    if (layer_diag_variant_ < 0) {
+        return;
+    }
+    static const char* const kNames[8] = {"all of it", "no filter", "no history, no filter", "nothing", "no floor coat", "no glass", "no mirror",
+                                          "no coat, glass or mirror"};
+    if (layer_diag_variant_ != layer_diag_last_) {
+        if (layer_diag_last_ >= 0 && layer_diag_frames_ > 0) {
+            const double n = static_cast<double>(layer_diag_frames_);
+            LogInfo("layer diag: variant {} ({}): layers {:.2f} ms, direct {:.2f}, indirect {:.2f}, gpu {:.2f} ms over {} frames, {} effect quads", layer_diag_last_,
+                    kNames[layer_diag_last_], layer_diag_sum_[0] / n, layer_diag_sum_[1] / n, layer_diag_sum_[2] / n, layer_diag_sum_[3] / n, layer_diag_frames_,
+                    rt_effect_indices_.size() / 6);
+        }
+        layer_diag_last_ = layer_diag_variant_;
+        layer_diag_frames_ = 0;
+        layer_diag_skip_ = 80;
+        layer_diag_sum_ = {};
+        return;
+    }
+    if (layer_diag_skip_ > 0) {
+        --layer_diag_skip_;
+        return;
+    }
+    layer_diag_sum_[0] += stats_.pt_ms[3];
+    layer_diag_sum_[1] += stats_.pt_ms[0];
+    layer_diag_sum_[2] += stats_.pt_ms[1];
+    layer_diag_sum_[3] += stats_.gpu_ms;
+    ++layer_diag_frames_;
 }
 
 float SceneRenderer::MeterLuminance(const glm::vec2* texels, uint32_t count) {

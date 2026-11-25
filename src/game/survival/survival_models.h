@@ -18,6 +18,8 @@ struct DrawItem;
 
 namespace pt::game {
 
+struct SkinBakeSource;
+
 struct SurvivalReloadKey {
     float t = 0.0f;
     glm::vec3 at{0.0f};
@@ -86,8 +88,16 @@ struct SurvivalGunModel {
         uint32_t index = 0;
         uint8_t channel = 0;
         MaterialGpu original{};
+        std::shared_ptr<SkinBakeSource> source;
     };
     std::vector<SkinMaterial> skin_materials;
+    struct CarryPose {
+        bool on = false;
+        glm::mat4 gun[2]{glm::mat4(1.0f), glm::mat4(1.0f)};
+        glm::vec3 right_pole[2]{glm::vec3(-0.4f, -0.9f, -0.2f), glm::vec3(-0.4f, -0.9f, -0.2f)};
+        glm::vec3 left_pole[2]{glm::vec3(0.4f, -0.9f, -0.2f), glm::vec3(0.4f, -0.9f, -0.2f)};
+    };
+    CarryPose carry;
     bool loaded = false;
 };
 

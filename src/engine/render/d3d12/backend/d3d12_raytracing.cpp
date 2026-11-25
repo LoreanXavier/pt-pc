@@ -62,6 +62,7 @@ public:
     void Shutdown() override;
     void Forget(const GpuMesh& mesh) override;
     bool Build(gpu::CommandList& cmd, uint32_t slot, std::span<const RtCaster> casters) override;
+    void SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint8_t mask = 64u) override;
     bool Valid(uint32_t slot) const override { return slots_[slot].valid; }
     bool Ready(uint32_t slot) const override { return slots_[slot].valid || std::chrono::steady_clock::now() >= retry_after_; }
     void SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) override;
@@ -94,6 +95,9 @@ private:
         Raw scratch;
         gpu::BufferResource positions;
         Raw dynamic_storage;
+        gpu::BufferResource effect_vertices;
+        gpu::BufferResource effect_indices;
+        Raw effect_storage;
         std::vector<Raw> retired;
         std::vector<gpu::BufferResource> retired_buffers;
         gpu::BindingSetHandle set;
@@ -131,6 +135,9 @@ private:
     std::unordered_map<const BufferRecord*, uint32_t> raw_index_;
     std::vector<uint32_t> raw_free_;
     uint32_t raw_next_ = 0;
+    std::vector<Vertex> effect_vertices_;
+    std::vector<uint32_t> effect_indices_;
+    uint8_t effect_mask_ = 64u;
     RtStats stats_;
     std::chrono::steady_clock::time_point retry_after_{};
     bool ready_ = false;
@@ -208,13 +215,14 @@ void D3D12RayTracing::Shutdown() {
     }
     static_.clear();
     for (Slot& slot : slots_) {
-        for (Raw* r : {&slot.tlas, &slot.scratch, &slot.dynamic_storage}) {
+        for (Raw* r : {&slot.tlas, &slot.scratch, &slot.dynamic_storage, &slot.effect_storage}) {
             dev_.Retire(std::move(r->resource), r->allocation);
         }
         for (Raw& r : slot.retired) {
             dev_.Retire(std::move(r.resource), r.allocation);
         }
-        for (gpu::BufferResource* b : {&slot.instances, &slot.records, &slot.positions, &slot.light_state, &slot.path_remap}) {
+        for (gpu::BufferResource* b : {&slot.instances, &slot.records, &slot.positions, &slot.effect_vertices, &slot.effect_indices, &slot.light_state,
+                                       &slot.path_remap}) {
             dev_.DestroyBuffer(*b);
         }
         for (gpu::BufferResource& b : slot.retired_buffers) {
@@ -233,6 +241,9 @@ void D3D12RayTracing::Shutdown() {
     raw_index_.clear();
     raw_free_.clear();
     raw_next_ = 0;
+    effect_vertices_.clear();
+    effect_indices_.clear();
+    effect_mask_ = 64u;
     ready_ = false;
 }
 
@@ -427,6 +438,12 @@ bool D3D12RayTracing::RunJobs(CommandListImpl& cl, ID3D12GraphicsCommandList4* l
     return true;
 }
 
+void D3D12RayTracing::SetEffects(std::span<const Vertex> vertices, std::span<const uint32_t> indices, uint8_t mask) {
+    effect_vertices_.assign(vertices.begin(), vertices.end());
+    effect_indices_.assign(indices.begin(), indices.end());
+    effect_mask_ = mask;
+}
+
 void D3D12RayTracing::SetReflectionImage(gpu::ImageViewHandle view, gpu::SamplerHandle sampler) {
     const gpu::ImageBinding image{view, gpu::Layout::ShaderReadOnly, sampler};
     for (Slot& slot : slots_) {
@@ -503,6 +520,7 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
     }
     slot.retired.clear();
     for (gpu::BufferResource& b : slot.retired_buffers) {
+        Unregister(b);
         dev_.DestroyBuffer(b);
     }
     slot.retired_buffers.clear();
@@ -646,16 +664,74 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
                 jobs.push_back(p.job);
                 ++stats_.skinned_instances;
             }
-            if (!RunJobs(cl, list.Get(), slot, jobs)) {
-                for (const Pending& p : pending) blas[p.caster] = 0;
-                jobs.clear();
-            }
         } else if (!pending.empty()) {
             BackOff("the skinned BLAS");
         }
     }
 
-    const uint32_t count = static_cast<uint32_t>(casters.size());
+    D3D12_GPU_VIRTUAL_ADDRESS effects_blas = 0;
+    stats_.effect_triangles = 0;
+    const uint32_t effect_primitives = static_cast<uint32_t>(effect_indices_.size() / 3);
+    if (effect_primitives > 0) {
+        const uint64_t vbytes = effect_vertices_.size() * sizeof(Vertex);
+        const uint64_t ibytes = effect_indices_.size() * sizeof(uint32_t);
+        auto ensure_effect = [&](gpu::BufferResource& target, uint64_t needed, const char* name) {
+            if (target.buffer && target.size >= needed) {
+                return true;
+            }
+            gpu::BufferResource grown;
+            const uint64_t want = std::max<uint64_t>(needed + needed / 2, 4096);
+            if (!dev_.CreateBuffer({want, gpu::BufferUsage::StorageBuffer | gpu::BufferUsage::AccelerationStructureBuildInput, true, false, name, true},
+                                   grown)) {
+                return false;
+            }
+            if (target.buffer) slot.retired_buffers.push_back(target);
+            target = grown;
+            return true;
+        };
+        if (ensure_effect(slot.effect_vertices, vbytes, "ray tracing effect vertices") &&
+            ensure_effect(slot.effect_indices, ibytes, "ray tracing effect indices")) {
+            std::memcpy(slot.effect_vertices.mapped, effect_vertices_.data(), vbytes);
+            std::memcpy(slot.effect_indices.mapped, effect_indices_.data(), ibytes);
+            dev_.FlushMapped(slot.effect_vertices, 0, vbytes);
+            dev_.FlushMapped(slot.effect_indices, 0, ibytes);
+            BufferRecord* vrec = Rec<BufferRecord>(slot.effect_vertices.buffer);
+            BufferRecord* irec = Rec<BufferRecord>(slot.effect_indices.buffer);
+            if (vrec && irec) {
+                cl.Transition(*vrec, kMeshRead);
+                cl.Transition(*irec, kMeshRead);
+                BuildJob job;
+                job.geometry = Triangles(vrec->resource->GetGPUVirtualAddress(), sizeof(Vertex), static_cast<uint32_t>(effect_vertices_.size()),
+                                         irec->resource->GetGPUVirtualAddress(), effect_primitives * 3);
+                job.desc.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+                job.desc.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+                job.desc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+                job.desc.Inputs.NumDescs = 1;
+                job.desc.Inputs.pGeometryDescs = &job.geometry;
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
+                device5_->GetRaytracingAccelerationStructurePrebuildInfo(&job.desc.Inputs, &info);
+                const uint64_t size = AlignUp(info.ResultDataMaxSizeInBytes, kAlignment);
+                if (EnsureRaw(slot, slot.effect_storage, size, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, "effects BLAS")) {
+                    effects_blas = slot.effect_storage.resource->GetGPUVirtualAddress();
+                    job.desc.DestAccelerationStructureData = effects_blas;
+                    job.scratch = info.ScratchDataSizeInBytes;
+                    jobs.push_back(job);
+                    stats_.effect_triangles = effect_primitives;
+                }
+            }
+        }
+    }
+
+    if (!jobs.empty() && !RunJobs(cl, list.Get(), slot, jobs)) {
+        for (size_t i = 0; i < casters.size(); ++i) {
+            if (casters[i].skin_base != gpu::kInvalid) blas[i] = 0;
+        }
+        effects_blas = 0;
+        stats_.effect_triangles = 0;
+        jobs.clear();
+    }
+
+    const uint32_t count = static_cast<uint32_t>(casters.size()) + (effects_blas != 0 ? 1u : 0u);
     if (count > slot.capacity || !slot.instances.buffer) {
         uint32_t capacity = 1024;
         while (capacity < count) {
@@ -717,6 +793,24 @@ bool D3D12RayTracing::Build(gpu::CommandList& cmd, uint32_t slot_index, std::spa
         rec.material = c.material;
         rec.flags = RtRecordFlags(c);
         MeshRead(cl, *c.mesh);
+        ++used;
+    }
+    if (effects_blas != 0) {
+        D3D12_RAYTRACING_INSTANCE_DESC& inst = instances[used];
+        inst = {};
+        inst.Transform[0][0] = 1.0f;
+        inst.Transform[1][1] = 1.0f;
+        inst.Transform[2][2] = 1.0f;
+        inst.InstanceID = used;
+        inst.InstanceMask = effect_mask_;
+        inst.InstanceContributionToHitGroupIndex = 0;
+        inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_NON_OPAQUE | D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+        inst.AccelerationStructure = effects_blas;
+        RtRecord& rec = records[used];
+        rec = RtRecord{};
+        rec.vertices[0] = RawIndex(slot.effect_vertices);
+        rec.indices[0] = RawIndex(slot.effect_indices);
+        rec.flags = kRtRecordEffect;
         ++used;
     }
     stats_.instances = used;

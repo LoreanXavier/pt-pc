@@ -1177,9 +1177,37 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
             return nullptr;
         }
         std::vector<uint32_t> src_mats;
+        std::vector<std::string> src_names;
+        std::vector<std::shared_ptr<SkinBakeSource>> sub_sources;
         if (collect) {
             src_mats.reserve(model.mesh.submeshes.size());
-            for (const SubMesh& sub : model.mesh.submeshes) src_mats.push_back(sub.material);
+            for (const SubMesh& sub : model.mesh.submeshes) {
+                src_mats.push_back(sub.material);
+                src_names.push_back(sub.material < model.materials.size() ? model.materials[sub.material].name : std::string());
+                auto source = std::make_shared<SkinBakeSource>();
+                const auto& vertices = model.mesh.vertices;
+                const auto& indices = model.mesh.indices;
+                for (uint32_t k = 0; k + 2 < sub.index_count && static_cast<size_t>(sub.first_index) + k + 2 < indices.size(); k += 3) {
+                    Vertex corner[3];
+                    bool ok = true;
+                    for (uint32_t c = 0; c < 3; ++c) {
+                        const int64_t vi = static_cast<int64_t>(indices[sub.first_index + k + c]) + sub.vertex_offset;
+                        if (vi < 0 || static_cast<size_t>(vi) >= vertices.size()) {
+                            ok = false;
+                            break;
+                        }
+                        corner[c] = vertices[static_cast<size_t>(vi)];
+                    }
+                    if (!ok) continue;
+                    for (const Vertex& v : corner) {
+                        source->position.push_back(v.position);
+                        source->normal.push_back(v.normal);
+                        source->uv.push_back(v.uv0);
+                    }
+                }
+                if (sub.material < model.materials.size()) source->base_path = model.materials[sub.material].base_color;
+                sub_sources.push_back(std::move(source));
+            }
         }
         const ModelEntry* entry = models.Get(asset + "#" + node, &model);
         if (entry && entry->mesh && collect) {
@@ -1189,8 +1217,14 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
                 const uint32_t gpu_mat = entry->mesh->submeshes[i].material;
                 if (gpu_mat == 0) continue;
                 bool dup = false;
-                for (const auto& existing : *collect) {
+                for (auto& existing : *collect) {
                     if (existing.index == gpu_mat) {
+                        if (existing.source && i < sub_sources.size()) {
+                            const SkinBakeSource& more = *sub_sources[i];
+                            existing.source->position.insert(existing.source->position.end(), more.position.begin(), more.position.end());
+                            existing.source->normal.insert(existing.source->normal.end(), more.normal.begin(), more.normal.end());
+                            existing.source->uv.insert(existing.source->uv.end(), more.uv.begin(), more.uv.end());
+                        }
                         dup = true;
                         break;
                     }
@@ -1198,15 +1232,21 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
                 if (dup) continue;
                 const MaterialGpu* orig = tm.Material(gpu_mat);
                 if (!orig) continue;
-                const uint32_t src_idx = src_mats[i];
-                const std::string mname = src_idx < model.materials.size() ? model.materials[src_idx].name : std::string();
+                const std::string mname = i < src_names.size() ? src_names[i] : std::string();
                 uint8_t channel = 0;
                 if (mname.find("wood") != std::string::npos || mname.find("grip") != std::string::npos) {
                     channel = 1;
                 } else if (mname.find("hammer") != std::string::npos || mname.find("plain") != std::string::npos) {
                     channel = 2;
                 }
-                collect->push_back({gpu_mat, channel, *orig});
+                std::shared_ptr<SkinBakeSource> source = i < sub_sources.size() ? sub_sources[i] : nullptr;
+                if (source) {
+                    source->channel = channel;
+                    source->key = std::format("{}_{}", node, gpu_mat);
+                }
+                LogInfo("survival: skin surface {} ({}) channel {}: {} triangles, image {}", source ? source->key : std::string("-"), mname, channel,
+                        source ? source->uv.size() / 3 : 0, source && !source->base_path.empty() ? source->base_path : std::string("none"));
+                collect->push_back({gpu_mat, channel, *orig, std::move(source)});
             }
         }
         return entry ? entry->mesh.get() : nullptr;
@@ -1226,6 +1266,34 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
             }
             out_models.armory_slots_loaded |= (1u << 6);
         }
+        json::Value carry_doc;
+        bool carry_read = false;
+        if (const std::optional<std::vector<uint8_t>> carried = mods::ReadDiskFile(dir / "carry_poses.json")) {
+            std::string carry_error;
+            carry_read = json::Parse(std::string_view(reinterpret_cast<const char*>(carried->data()), carried->size()), carry_doc, &carry_error);
+            if (!carry_read) LogWarn("survival: survival/carry_poses.json unreadable ({})", carry_error);
+        }
+        const auto read_carry = [&](const char* name, SurvivalGunModel& gun) {
+            const json::Value* poses = carry_read ? carry_doc.Find(name) : nullptr;
+            if (!poses) return;
+            static const char* const kStates[2] = {"ready", "run"};
+            SurvivalGunModel::CarryPose carry;
+            for (size_t s = 0; s < 2; ++s) {
+                const json::Value* state = poses->Find(kStates[s]);
+                const json::Value* m = state ? state->Find("gun") : nullptr;
+                const json::Value* rp = state ? state->Find("right_pole") : nullptr;
+                const json::Value* lp = state ? state->Find("left_pole") : nullptr;
+                if (!m || m->Size() != 16 || !rp || rp->Size() != 3 || !lp || lp->Size() != 3) return;
+                for (size_t k = 0; k < 16; ++k) carry.gun[s][static_cast<glm::length_t>(k / 4)][static_cast<glm::length_t>(k % 4)] = static_cast<float>(m->At(k)->number);
+                for (size_t k = 0; k < 3; ++k) {
+                    carry.right_pole[s][static_cast<glm::length_t>(k)] = static_cast<float>(rp->At(k)->number);
+                    carry.left_pole[s][static_cast<glm::length_t>(k)] = static_cast<float>(lp->At(k)->number);
+                }
+            }
+            carry.on = true;
+            gun.carry = carry;
+            LogInfo("survival: the {}'s carried poses from survival/carry_poses.json", name);
+        };
         for (size_t w = 1; w < guns.size(); ++w) {
             if (slot_filter != 0 && slot_filter != static_cast<int>(w)) continue;
             if ((out_models.armory_slots_loaded & (1u << static_cast<unsigned>(w))) != 0) continue;
@@ -1240,6 +1308,7 @@ void LoadGunFiles(ModelCache& models, SurvivalModels& out_models, bool include_g
             out.hammer = part(*g, "hammer", &skin_mats);
             out.magazine = part(*g, "magazine", &skin_mats);
             out.skin_materials = std::move(skin_mats);
+            read_carry(kNames[w], out);
             out.muzzle = vec3(*g, "muzzle", out.muzzle);
             out.ejection = vec3(*g, "ejection", out.ejection);
             out.cylinder_axis = vec3(*g, "cylinder_axis", out.cylinder_axis);
@@ -1332,25 +1401,38 @@ void ApplyWeaponSkin(TextureManager& textures, const SurvivalGunModel& gun, int 
     if (skin_id <= 0) {
         for (const auto& sm : gun.skin_materials) {
             textures.UpdateMaterial(sm.index, sm.original);
+            NoteSkinShown(textures, sm.index, nullptr, 0);
         }
         return;
     }
-    const SkinTextureSet set = EnsureSkinTextures(textures, skin_id);
+    SkinTextureSet tile{};
+    bool tile_made = false;
     for (const auto& sm : gun.skin_materials) {
         MaterialGpu m = sm.original;
         m.flags &= ~(gpu::kMatConstantColor | gpu::kMatIncidence);
         m.albedo_factor = glm::vec4(1.0f);
-        if (sm.channel == 1) {
-            if (set.grip_albedo) m.albedo = set.grip_albedo;
-            if (set.grip_srm) m.specular = set.grip_srm;
-        } else if (sm.channel == 2) {
-            if (set.accent_albedo) m.albedo = set.accent_albedo;
-            if (set.accent_srm) m.specular = set.accent_srm;
+        const BakedSkinMaterial baked = sm.source ? BakeSkinMaterial(textures, *sm.source, skin_id, false) : BakedSkinMaterial{};
+        if (baked.albedo) {
+            m.albedo = baked.albedo;
+            if (baked.srm) m.specular = baked.srm;
         } else {
-            if (set.metal_albedo) m.albedo = set.metal_albedo;
-            if (set.metal_srm) m.specular = set.metal_srm;
+            if (!tile_made) {
+                tile = EnsureSkinTextures(textures, skin_id);
+                tile_made = true;
+            }
+            if (sm.channel == 1) {
+                if (tile.grip_albedo) m.albedo = tile.grip_albedo;
+                if (tile.grip_srm) m.specular = tile.grip_srm;
+            } else if (sm.channel == 2) {
+                if (tile.accent_albedo) m.albedo = tile.accent_albedo;
+                if (tile.accent_srm) m.specular = tile.accent_srm;
+            } else {
+                if (tile.metal_albedo) m.albedo = tile.metal_albedo;
+                if (tile.metal_srm) m.specular = tile.metal_srm;
+            }
         }
         textures.UpdateMaterial(sm.index, m);
+        NoteSkinShown(textures, sm.index, baked.albedo ? sm.source.get() : nullptr, skin_id);
     }
 }
 
@@ -1361,29 +1443,40 @@ void ApplyWeaponSkinAnimated(TextureManager& textures, const SurvivalGunModel& g
         ApplyWeaponSkin(textures, gun, skin_id);
         return;
     }
-    const MythicAnimSet anim = EnsureMythicAnimTextures(textures, sk.id);
     const float fps = sk.id == 54 ? 14.0f : (sk.id == 56 ? 12.0f : 10.0f);
     const int f = static_cast<int>(std::floor(std::max(0.0f, time_sec) * fps)) % kMythicAnimFrames;
     const glm::vec3 live_col = MythicLiveColor(sk.id, time_sec);
     const float breath = 0.5f + 0.5f * std::sin(time_sec * (sk.id == 54 ? 13.0f : 3.4f));
-
+    MythicAnimSet anim{};
+    bool anim_made = false;
     for (const auto& sm : gun.skin_materials) {
         MaterialGpu m = sm.original;
         m.flags &= ~gpu::kMatConstantColor;
         m.flags |= gpu::kMatIncidence;
         m.albedo_factor = glm::vec4(live_col, sm.channel == 1 ? (0.32f + 0.25f * breath) : (0.62f + 0.35f * breath));
         m.params.z = 2.1f;
-        if (sm.channel == 1) {
-            if (anim.grip_albedo) m.albedo = anim.grip_albedo;
-            if (anim.grip_srm) m.specular = anim.grip_srm;
-        } else if (sm.channel == 2) {
-            if (anim.accent_albedo[static_cast<size_t>(f)]) m.albedo = anim.accent_albedo[static_cast<size_t>(f)];
-            if (anim.accent_srm) m.specular = anim.accent_srm;
+        const BakedSkinMaterial baked = sm.source ? BakeSkinMaterial(textures, *sm.source, sk.id, true) : BakedSkinMaterial{};
+        if (baked.albedo) {
+            m.albedo = sm.channel == 0 && static_cast<size_t>(f) < baked.frames.size() ? baked.frames[static_cast<size_t>(f)] : baked.albedo;
+            if (baked.srm) m.specular = baked.srm;
         } else {
-            if (anim.metal_albedo[static_cast<size_t>(f)]) m.albedo = anim.metal_albedo[static_cast<size_t>(f)];
-            if (anim.metal_srm) m.specular = anim.metal_srm;
+            if (!anim_made) {
+                anim = EnsureMythicAnimTextures(textures, sk.id);
+                anim_made = true;
+            }
+            if (sm.channel == 1) {
+                if (anim.grip_albedo) m.albedo = anim.grip_albedo;
+                if (anim.grip_srm) m.specular = anim.grip_srm;
+            } else if (sm.channel == 2) {
+                if (anim.accent_albedo[static_cast<size_t>(f)]) m.albedo = anim.accent_albedo[static_cast<size_t>(f)];
+                if (anim.accent_srm) m.specular = anim.accent_srm;
+            } else {
+                if (anim.metal_albedo[static_cast<size_t>(f)]) m.albedo = anim.metal_albedo[static_cast<size_t>(f)];
+                if (anim.metal_srm) m.specular = anim.metal_srm;
+            }
         }
         textures.UpdateMaterial(sm.index, m);
+        NoteSkinShown(textures, sm.index, baked.albedo ? sm.source.get() : nullptr, sk.id);
     }
 }
 

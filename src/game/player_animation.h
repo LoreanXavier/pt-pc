@@ -97,6 +97,26 @@ public:
     const anim::Ragdoll* ragdoll = nullptr;
     std::optional<glm::vec3> elbow_hint[2];
     float right_hint_share = 1.0f;
+    float carry_weight = 0.0f;
+    glm::mat4 carry_hand{1.0f};
+    float strafe_weight = 0.0f;
+    float strafe_phase = 0.0f;
+    bool strafe_left = false;
+
+private:
+    uint32_t skin_serial_ = 0;
+    uint32_t hinge_serial_[2] = {0, 0};
+    float hinge_roll_[2] = {0.0f, 0.0f};
+    uint32_t give_serial_ = 0;
+    glm::vec3 give_axis_{0.0f};
+    glm::mat4 left_raw_{1.0f};
+    bool left_raw_known_ = false;
+    float swivel_speed_[2] = {0.0f, 0.0f};
+    uint32_t between_serial_ = 0;
+    glm::vec3 between_axis_{0.0f, 1.0f, 0.0f};
+
+public:
+    glm::vec3 carry_pole[2]{glm::vec3(0.4f, -0.9f, -0.2f), glm::vec3(-0.4f, -0.9f, -0.2f)};
     bool ease_reach = false;
     bool snap_reach = false;
     float straight_wrist[2] = {0.0f, 0.0f};
@@ -161,6 +181,7 @@ private:
     void AimKnee(int side);
     float ArmRoom() const;
     void RunOverlay(float amount);
+    void StrafeOverlay();
     static constexpr float kWalkLeftReach = 42.0f;
     void IdleOverlay();
     void IdleHeadOverlay();
@@ -216,6 +237,7 @@ private:
         bool planted = false;
         float side_fix = 0.0f;
         glm::vec3 shown_step{0.0f};
+        bool wait_swing = false;
     };
     HeldFoot held_[2];
     float pose_knee_toe_[2] = {0.0f, 0.0f};
@@ -275,6 +297,7 @@ bool PlayerPoseSkin(const anim::HelpBones* help, float frame, const PlayerPoseEd
 bool PlayerClipPose(int clip, double frame, const anim::Skeleton& target, anim::Pose& out);
 bool PlayerClipTravel(int clip, float& frames, float& travel, const anim::Skeleton* target = nullptr);
 const PlayerLocomotion& PlayerLocomotionData();
+float PlayerStrafeDistance();
 int WalkDirection(float heading_delta);
 bool LastFootLeft(bool fallback);
 

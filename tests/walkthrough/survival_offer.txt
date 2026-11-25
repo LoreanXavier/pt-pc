@@ -2,6 +2,14 @@
 # page the street question's walk is the survival night's; taken, the walk starts and the night with it once the scenery is ready
 sstep 15
 swait 30
+# (the night's answer is only there once the night is unlocked, which takes a finished run of New Game+ 4: five finishes counted here)
+sgameplus
+sgameplus
+sgameplus
+sgameplus
+sgameplus
+swait 10
+sexpect night 1
 sloop 16
 sbrowsed
 swait 4400

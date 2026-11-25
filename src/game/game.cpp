@@ -364,6 +364,16 @@ void Game::Update(float dt, const InputState& pad_input) {
                 survival_->ThirdPersonStance(long_gun, recoil, left_elbow, right_elbow, right_share);
                 player_.SetAimStance(long_gun, recoil);
                 if (body_seen) player_.SetElbowHints(left_elbow, right_elbow, right_share);
+                {
+                    glm::mat4 gun(1.0f);
+                    glm::vec3 left_pole(0.0f), right_pole(0.0f);
+                    float weight = 0.0f;
+                    if (body_seen && survival_->ThirdPersonCarryPose(gun, left_pole, right_pole, weight) && weight > 0.0f) {
+                        player_.SetCarryPose(weight, gun * survival_->ThirdPersonRightHandOnGun(), left_pole, right_pole);
+                    } else {
+                        player_.SetCarryPose(0.0f, glm::mat4(1.0f), glm::vec3(0.4f, -0.9f, -0.2f), glm::vec3(-0.4f, -0.9f, -0.2f));
+                    }
+                }
                 player_.SetMeleeBody(body_seen ? survival_->MeleeBody() : glm::vec3(0.0f));
             }
             glm::mat4 hand(1.0f);
@@ -706,6 +716,12 @@ void Game::AddMirrorBody(std::vector<DrawItem>& out) {
             std::fwrite(&n, sizeof(n), 1, skins);
             std::fwrite(player_skin_.data(), sizeof(glm::mat4), n, skins);
             std::fflush(skins);
+            static std::FILE* chests = std::fopen(std::format("{}/chest.bin", dump).c_str(), "wb");
+            if (glm::mat4 natural(1.0f); chests && player_.NaturalBone("SKL_002_CHEST", natural)) {
+                std::fwrite(&t, sizeof(t), 1, chests);
+                std::fwrite(&natural, sizeof(natural), 1, chests);
+                std::fflush(chests);
+            }
             static std::FILE* guns = std::fopen(std::format("{}/gun.bin", dump).c_str(), "wb");
             if (guns) {
                 const glm::mat4 gun = glm::inverse(player_.PoseTransform()) * survival_->WeaponTransformFor(ViewCamera(true));

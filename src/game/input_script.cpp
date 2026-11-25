@@ -851,8 +851,13 @@ void InputScript::Apply(uint64_t frame, Game& game, InputState& input) {
         } else if (item.op == "zoom") {
             zoom_ = item.frames != 0;
         } else if (item.op == "ui") {
-            if (item.words.empty() ||
-                !GameUi::ScriptCommand(game, item.words[0], item.words.size() > 1 ? std::string_view(item.words[1]) : std::string_view(), item.args)) {
+            std::string rest;
+            if (!item.words.empty() && item.words[0] == "pcfocus") {
+                for (size_t w = 1; w < item.words.size(); ++w) rest += (w > 1 ? " " : "") + item.words[w];
+            } else if (item.words.size() > 1) {
+                rest = item.words[1];
+            }
+            if (item.words.empty() || !GameUi::ScriptCommand(game, item.words[0], rest, item.args)) {
                 LogWarn("input script: sui {} is not a UI op", item.words.empty() ? std::string() : item.words[0]);
             }
         } else if (item.op == "handylight") {

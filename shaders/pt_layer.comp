@@ -120,10 +120,10 @@ void Trace(ivec2 pixel, ivec2 size) {
     float t_mirror = t_surface;
     RtSurfaceHit mirror_hit;
     bool mirror = false;
-    mirror = FindMirror(eye, dir, LayerEnd(t_surface), t_mirror, mirror_hit);
+    mirror = (uint(pass.f1.w + 0.5) & 32u) == 0u && FindMirror(eye, dir, LayerEnd(t_surface), t_mirror, mirror_hit);
     RtSurfaceHit glass_hit;
     float t_glass = t_mirror;
-    bool glass = FindGlass(eye, dir, LayerEnd(t_mirror), t_glass, glass_hit);
+    bool glass = (uint(pass.f1.w + 0.5) & 16u) == 0u && FindGlass(eye, dir, LayerEnd(t_mirror), t_glass, glass_hit);
     float first;
     float mirror_distance = 0.0;
     float coat_distance = 0.0;

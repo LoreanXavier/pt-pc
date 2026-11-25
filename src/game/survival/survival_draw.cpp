@@ -226,6 +226,10 @@ uint8_t SurvivalNight::BodyViews() const {
     return game_.FreeView() && !game_.BodyShown() ? 1 : 0;
 }
 
+namespace {
+glm::mat4 GripHand(const SurvivalGunModel& gun);
+}
+
 glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
     if (!BodyHoldsGun()) return FirstPersonWeapon(camera);
     const Player& player = game_.GetPlayer();
@@ -261,9 +265,9 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
     const SurvivalGunModel& held_model = models_.guns[static_cast<size_t>(weapon_)];
     const glm::vec3 butt_of = held_model.body ? glm::vec3(0.0f, held_model.sight_rear.y - 0.08f, held_model.body->bounds_min.z + 0.015f) : glm::vec3(0.0f, 0.0f, -0.35f);
     const auto across_dir = [&](const glm::vec3& ahead) { return glm::normalize(ahead * 0.68f + glm::vec3(0.0f, -0.40f, 0.0f) + body_left * 0.61f); };
-    const auto run_dir = [&](const glm::vec3& ahead) { return glm::normalize(ahead * 0.50f + glm::vec3(0.0f, -0.44f, 0.0f) + body_left * 0.74f); };
     const auto reload_long_dir = [&](const glm::vec3& ahead) { return glm::normalize(ahead * 0.85f + glm::vec3(0.0f, -0.06f, 0.0f) + body_left * 0.28f); };
     const float rf = Smooth(reload_front_);
+    const float rf_pose = held_model.carry.on ? 1.0f : rf;
     glm::vec3 ready_dir_now(0.0f);
     glm::mat4 ride(1.0f);
     if (glm::mat4 chest_bone(1.0f); player.NaturalBone("SKL_002_CHEST", chest_bone)) {
@@ -274,7 +278,7 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
     }
     const auto ridden = [&](const glm::vec3& p) { return glm::vec3(ride * glm::vec4(p, 1.0f)); };
     const auto ridden_dir = [&](const glm::vec3& d) { return glm::normalize(glm::vec3(ride * glm::vec4(d, 0.0f))); };
-    glm::vec3 ready_dir = across ? glm::normalize(glm::mix(across_dir(flat), reload_long_dir(flat), rf))
+    glm::vec3 ready_dir = across ? glm::normalize(glm::mix(across_dir(flat), reload_long_dir(flat), rf_pose))
                                        : weapon_ == SurvivalWeapon::Magnum ? glm::normalize(flat * 0.79f + glm::vec3(0.0f, -0.56f, 0.0f) + body_left * 0.24f)
                                                                            : glm::normalize(flat * 0.81f + glm::vec3(0.0f, -0.56f, 0.0f) + body_left * 0.17f);
     const float breath_y = 0.0035f * std::sin(time_ * 1.75f);
@@ -283,17 +287,33 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
                                    flat * (weapon_ == SurvivalWeapon::Magnum ? 0.315f : 0.305f));
     ready_wrist += (flat * 0.016f * std::sin(bob_phase_) + glm::vec3(0.0f, 0.007f, 0.0f) * std::sin(2.0f * bob_phase_)) * bob_weight_;
     ready_dir = ridden_dir(ready_dir);
-    glm::vec3 carry_butt = ridden(shoulder + flat * kCarryAhead + glm::vec3(0.0f, glm::mix(kCarryDown, -0.02f, rf), 0.0f) + body_left * kCarryIn);
+    glm::vec3 carry_butt = ridden(shoulder + flat * kCarryAhead + glm::vec3(0.0f, glm::mix(kCarryDown, -0.02f, rf_pose), 0.0f) + body_left * kCarryIn);
     if (glm::mat4 chest(1.0f); across && player.BoneModel("SKL_002_CHEST", chest)) {
         const float in = weapon_ == SurvivalWeapon::Double ? 0.035f : 0.0f;
-        const glm::vec3 pocket_now = glm::mix(kCarryPocket, kReloadPocket, rf);
-        carry_butt = glm::vec3(body * chest * glm::vec4(pocket_now.x + in * (1.0f - rf), pocket_now.y, pocket_now.z, 1.0f));
+        const glm::vec3 pocket_now = glm::mix(kCarryPocket, kReloadPocket, rf_pose);
+        carry_butt = glm::vec3(body * chest * glm::vec4(pocket_now.x + in * (1.0f - rf_pose), pocket_now.y, pocket_now.z, 1.0f));
     }
     glm::vec3 ready_at = across ? glm::vec3(Frame(carry_butt, ready_dir) * glm::vec4(-butt_of, 1.0f))
                                 : glm::vec3(Frame(ready_wrist, ready_dir) * glm::vec4(-held_model.wrist, 1.0f));
     {
         const glm::vec3 grip(Frame(ready_at, ready_dir) * glm::vec4(held_model.wrist, 1.0f));
         ready_at += glm::vec3(body * glm::vec4(player.KeepOffTorso(glm::vec3(glm::inverse(body) * glm::vec4(grip, 1.0f)), across ? 0.068f : 0.110f), 0.0f));
+    }
+    glm::mat4 carried_gun(1.0f);
+    bool carried_known = false;
+    float carried_roll = 0.0f;
+    if (glm::mat4 chest_now(1.0f), gun_in_chest(1.0f); held_model.carry.on && player.NaturalBone("SKL_002_CHEST", chest_now)) {
+        glm::vec3 left_pole(0.0f), right_pole(0.0f);
+        float share = 0.0f;
+        ThirdPersonCarryPose(gun_in_chest, left_pole, right_pole, share);
+        carried_gun = body * chest_now * gun_in_chest;
+        carried_known = true;
+        const glm::vec3 carried_dir = glm::normalize(glm::vec3(carried_gun[2]));
+        const glm::mat3 upright = glm::transpose(glm::mat3(Frame(glm::vec3(carried_gun[3]), carried_dir))) * glm::mat3(carried_gun);
+        carried_roll = std::atan2(upright[0].y, upright[0].x);
+        const float keep = across ? 1.0f - rf : 1.0f;
+        ready_at = glm::mix(ready_at, glm::vec3(carried_gun[3]), keep);
+        ready_dir = glm::normalize(glm::mix(ready_dir, carried_dir, keep));
     }
     if (!across && reload_front_ > 0.0f) {
         const float k = reload_front_;
@@ -377,7 +397,7 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
         }
     }
     const float away = SwingAway();
-    const float low = std::max({across ? 0.0f : sprint, hud_.dead ? 1.0f : 0.0f, across ? 0.0f : away});
+    const float low = std::max({across || carried_known ? 0.0f : sprint, hud_.dead ? 1.0f : 0.0f, across ? 0.0f : away});
     const glm::vec3 low_dir = glm::normalize(body_forward * 0.5f + glm::vec3(0.0f, -0.75f, 0.0f));
     aim = glm::normalize(glm::mix(aim, low_dir, low * 0.8f));
     at = glm::mix(at, shoulder + low_dir * 0.3f + body_forward * 0.12f + glm::vec3(0.0f, -0.12f, 0.0f) + body_left * (0.16f + 0.21f * away), low * 0.8f);
@@ -394,46 +414,19 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
         at = glm::mix(at, left_wrist - glm::vec3(Frame(glm::vec3(0.0f), hang) * glm::vec4(glm::vec3(on_gun[3]), 0.0f)), away) + body_forward * (0.2f * 4.0f * away * (1.0f - away));
         aim = glm::normalize(glm::mix(aim, hang, away));
     }
-    const float run = Smooth((run_stride::Weight(1.0f + BodyRunWeight() * (run_stride::kNightSprintSpeed - 1.0f), run_stride::kNightSprintSpeed, run_stride::kNightPaceSpeed) - 0.1f) / 0.45f);
-    if (glm::mat4 chest_bone(1.0f); run > 0.0f && (player.NaturalBone("SKL_002_CHEST", chest_bone) || player.BoneModel("SKL_002_CHEST", chest_bone))) {
-        const glm::vec3 chest_at(body * chest_bone[3]);
-        const glm::vec3 up(0.0f, 1.0f, 0.0f);
-        const glm::vec3 right = -body_left;
-        const bool long_gun = SurvivalLongGun(weapon_);
-        const glm::vec3 chest_ahead(chest_bone * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
-        const float shoulders = std::clamp(std::atan2(chest_ahead.x, chest_ahead.z), -0.35f, 0.35f);
-        const glm::quat swing = glm::angleAxis((long_gun ? 0.18f : 0.08f) * shoulders, glm::vec3(body * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)));
-        const glm::vec3 turned = swing * run_dir(body_forward);
-        const glm::vec3 carry_dir = long_gun ? turned
-                                             : weapon_ == SurvivalWeapon::Magnum ? glm::normalize(body_forward * 0.72f - up * 0.65f + body_left * 0.22f)
-                                                                                 : glm::normalize(body_forward * 0.74f - up * 0.64f + body_left * 0.18f);
-        glm::vec3 carry_at(0.0f);
-        if (long_gun) {
-            const glm::vec3 stride_pump = up * (0.011f * std::cos(2.0f * bob_phase_)) + body_forward * (0.006f * std::sin(bob_phase_));
-            const float in = weapon_ == SurvivalWeapon::Double ? 0.016f : 0.0f;
-            const glm::vec3 butt_at = glm::vec3(body * chest_bone * glm::vec4(-0.165f + in, 0.172f, 0.132f, 1.0f)) + stride_pump;
-            carry_at = glm::vec3(Frame(butt_at, turned) * glm::vec4(-butt_of, 1.0f));
-            const glm::vec3 grip(Frame(carry_at, turned) * glm::vec4(held_model.wrist, 1.0f));
-            carry_at += glm::vec3(body * glm::vec4(player.KeepOffTorso(glm::vec3(glm::inverse(body) * glm::vec4(grip, 1.0f)), 0.068f), 0.0f));
-        } else {
-            const glm::vec3 pump = body_forward * (0.010f * std::sin(bob_phase_)) + up * (0.010f * std::cos(2.0f * bob_phase_));
-            glm::vec3 sprint_wrist = chest_at + body_forward * 0.275f + right * 0.045f - up * 0.065f + pump;
-            sprint_wrist += glm::vec3(body * glm::vec4(player.KeepOffTorso(glm::vec3(glm::inverse(body) * glm::vec4(sprint_wrist, 1.0f)), 0.115f), 0.0f));
-            carry_at = glm::vec3(Frame(sprint_wrist, carry_dir) * glm::vec4(-held_model.wrist, 1.0f));
-        }
-        aim = glm::normalize(glm::mix(aim, carry_dir, run));
-        at = glm::mix(at, carry_at, run);
-        if (static const bool log = std::getenv("PT_SURVIVAL_CARRY_LOG") != nullptr; log && game_.Frame() % 20 == 0) {
-            LogInfo("survival: carry run {:.2f} chest ({:.2f} {:.2f} {:.2f}) feet y {:.2f} at ({:.2f} {:.2f} {:.2f}) aim ({:.2f} {:.2f} {:.2f})", run, chest_at.x, chest_at.y,
-                    chest_at.z, player.Feet().y, at.x, at.y, at.z, aim.x, aim.y, aim.z);
-        }
-    }
-    if (const float drawn = Smooth(swap_); drawn > 0.0f) {
-        const bool long_gun_now = SurvivalLongGun(weapon_);
-        const glm::vec3 from_dir = glm::normalize(body_forward * 0.78f + glm::vec3(0.0f, long_gun_now ? -0.3f : -0.6f, 0.0f) + body_left * (long_gun_now ? -0.32f : 0.18f));
-        glm::vec3 wrist = glm::vec3(body * glm::vec4(-0.30f, glm::mix(0.95f, 0.84f, draw_pick_) + (long_gun_now ? 0.12f * (1.0f - draw_pick_) : 0.0f), glm::mix(0.18f, 0.22f, draw_pick_), 1.0f));
+    glm::mat4 stowed(1.0f);
+    const float drawn = Smooth(swap_);
+    if (drawn > 0.0f) {
+        const glm::vec3 hip_dir = glm::normalize(body_forward * 0.78f + glm::vec3(0.0f, -0.3f, 0.0f) + body_left * -0.32f);
+        glm::vec3 wrist = glm::vec3(body * glm::vec4(-0.30f, glm::mix(0.95f, 0.84f, draw_pick_) + 0.12f * (1.0f - draw_pick_), glm::mix(0.18f, 0.22f, draw_pick_), 1.0f));
         wrist += glm::vec3(body * glm::vec4(player.KeepOffTorso(glm::vec3(glm::inverse(body) * glm::vec4(wrist, 1.0f)), 0.13f), 0.0f));
-        const glm::vec3 from_at = wrist - glm::vec3(Frame(glm::vec3(0.0f), from_dir) * glm::vec4(model.wrist, 0.0f));
+        const glm::mat3 hand_turn = glm::mat3(Frame(glm::vec3(0.0f), hip_dir)) * glm::mat3(GripHand(models_.guns[static_cast<size_t>(SurvivalWeapon::Shotgun)]));
+        const glm::mat4 on_gun = ThirdPersonRightHandLocal();
+        const glm::mat3 gun_turn = hand_turn * glm::inverse(glm::mat3(on_gun));
+        const glm::vec3 from_at = wrist - gun_turn * glm::vec3(on_gun[3]);
+        const glm::vec3 from_dir = glm::normalize(gun_turn[2]);
+        stowed = glm::mat4(gun_turn);
+        stowed[3] = glm::vec4(from_at, 1.0f);
         aim = glm::normalize(glm::mix(aim, from_dir, drawn));
         at = glm::mix(at, from_at, drawn) + (-body_left * 0.06f + body_forward * 0.07f) * (4.0f * drawn * (1.0f - drawn));
     }
@@ -442,7 +435,6 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
     }
     const float jab = ShoveOut();
     if (jab > 0.0f) {
-        const glm::vec3 chest = shoulder + body_left * (SurvivalLongGun(weapon_) ? 0.1f : 0.19f) + glm::vec3(0.0f, -0.16f, 0.0f);
         if (SurvivalLongGun(weapon_)) {
             const glm::vec3 stroke = glm::normalize(body_left * 0.86f - body_forward * 0.2f + glm::vec3(0.0f, 0.12f, 0.0f));
             const glm::vec3 grip = shoulder + body_left * 0.14f + glm::vec3(0.0f, -0.1f, 0.0f) + body_forward * 0.5f;
@@ -457,7 +449,7 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
         }
     }
     glm::mat4 m = Frame(at, aim);
-    m = m * glm::rotate(glm::mat4(1.0f), -0.06f * (1.0f - aim_) - (across ? 0.25f : 0.14f) * (1.0f - raise) * (1.0f - rf), glm::vec3(0, 0, 1));
+    m = m * glm::rotate(glm::mat4(1.0f), -0.06f * (1.0f - aim_) + (carried_known ? carried_roll : across ? -0.25f : -0.14f) * (1.0f - raise) * (1.0f - rf), glm::vec3(0, 0, 1));
     if (ReloadPose pose; ReloadNow(pose)) {
         if (weapon_ == SurvivalWeapon::Shotgun || weapon_ == SurvivalWeapon::Lever) {
             m = m * glm::translate(glm::mat4(1.0f), butt_of) * Rot(pose.turn.z * 0.32f, {0, 0, 1}) * glm::translate(glm::mat4(1.0f), -butt_of);
@@ -477,6 +469,7 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
         m[3] += glm::vec4(0.0f, -(long_gun ? 0.018f : 0.008f) * fc, 0.0f, 0.0f);
         m = m * Rot((long_gun ? 0.08f : 0.03f) * fc, {1, 0, 0}) * Rot(-(long_gun ? 0.075f : 0.055f) * fc, {0, 0, 1});
     }
+    const glm::vec3 unclamped(m[3]);
     if (SurvivalLongGun(weapon_)) {
         if (glm::mat4 bone(1.0f); player.NaturalBone("SKL_021_RUARM", bone) || player.BoneModel("SKL_021_RUARM", bone)) {
             constexpr float kReach = 0.485f;
@@ -516,7 +509,47 @@ glm::mat4 SurvivalNight::WeaponTransform(const Camera& camera) const {
         }
         m[3] += glm::vec4(glm::vec3(body * glm::vec4(push, 0.0f)), 0.0f);
     }
+    if (carried_known) {
+        m[3] = glm::vec4(glm::mix(unclamped, glm::vec3(m[3]), std::clamp(std::max(Smooth(raise), rf), 0.0f, 1.0f)), 1.0f);
+    }
+    if (glm::mat4 gun(1.0f), chest(1.0f); CarryShare() > 0.0f && player.NaturalBone("SKL_002_CHEST", chest)) {
+        glm::vec3 left_pole(0.0f), right_pole(0.0f);
+        float weight = 0.0f;
+        if (ThirdPersonCarryPose(gun, left_pole, right_pole, weight) && weight > 0.0f) {
+            const glm::mat4 carried = body * chest * gun;
+            glm::mat4 mixed = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(m))), glm::normalize(glm::quat_cast(glm::mat3(carried))), weight));
+            mixed[3] = glm::vec4(glm::mix(glm::vec3(m[3]), glm::vec3(carried[3]), weight), 1.0f);
+            m = mixed;
+        }
+    }
+    if (drawn > 0.0f) {
+        const glm::vec3 arc = (-body_left * 0.06f + body_forward * 0.07f) * (4.0f * drawn * (1.0f - drawn));
+        glm::mat4 mixed = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(m))), glm::normalize(glm::quat_cast(glm::mat3(stowed))), drawn));
+        mixed[3] = glm::vec4(glm::mix(glm::vec3(m[3]), glm::vec3(stowed[3]) + arc, drawn), 1.0f);
+        m = mixed;
+    }
     return m;
+}
+
+float SurvivalNight::CarryShare() const {
+    if (!active_ || hud_.dead || !BodyHoldsGun() || weapon_ == SurvivalWeapon::Flashlight) return 0.0f;
+    if (!models_.guns[static_cast<size_t>(weapon_)].carry.on) return 0.0f;
+    if (PipeHold() > 0.0f || melee_timer_ >= 0.0f) return 0.0f;
+    const float share = (1.0f - Smooth(ThirdPersonRaise())) * (1.0f - Smooth(reload_front_)) * (1.0f - Smooth(swap_)) * (1.0f - Smooth(SwingAway())) *
+                        (1.0f - Smooth(ShoveOut())) * (1.0f - Smooth(ShoveWind())) * (1.0f - Smooth(FlashClickWeight()));
+    return std::clamp(share, 0.0f, 1.0f);
+}
+
+bool SurvivalNight::ThirdPersonCarryPose(glm::mat4& gun_in_chest, glm::vec3& left_pole, glm::vec3& right_pole, float& weight) const {
+    weight = CarryShare();
+    const SurvivalGunModel::CarryPose& carry = models_.guns[static_cast<size_t>(weapon_)].carry;
+    if (!carry.on) return false;
+    const float run = Smooth((run_stride::Weight(1.0f + BodyRunWeight() * (run_stride::kNightSprintSpeed - 1.0f), run_stride::kNightSprintSpeed, run_stride::kNightPaceSpeed) - 0.1f) / 0.45f);
+    gun_in_chest = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(carry.gun[0]))), glm::normalize(glm::quat_cast(glm::mat3(carry.gun[1]))), run));
+    gun_in_chest[3] = glm::vec4(glm::mix(glm::vec3(carry.gun[0][3]), glm::vec3(carry.gun[1][3]), run), 1.0f);
+    left_pole = glm::normalize(glm::mix(carry.left_pole[0], carry.left_pole[1], run));
+    right_pole = glm::normalize(glm::mix(carry.right_pole[0], carry.right_pole[1], run));
+    return true;
 }
 
 namespace {

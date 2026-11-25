@@ -2,8 +2,11 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <string_view>
+#include <vector>
 
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 namespace pt {
@@ -174,5 +177,30 @@ MythicAnimSet EnsureMythicAnimTextures(TextureManager& textures, int skin_id);
 glm::vec3 MythicLiveColor(int skin_id, float time_sec);
 
 TorchTextureSet EnsureTorchTextures(TextureManager& textures, int torch_id);
+
+struct SkinBakeSource {
+    std::string key;
+    uint8_t channel = 0;
+    std::vector<glm::vec3> position;
+    std::vector<glm::vec3> normal;
+    std::vector<glm::vec2> uv;
+    std::string base_path;
+    struct Raster {
+        uint32_t size = 0;
+        std::vector<int32_t> tri;
+        std::vector<glm::vec3> weights;
+        std::vector<float> detail;
+    };
+    std::vector<Raster> rasters;
+};
+
+struct BakedSkinMaterial {
+    uint32_t albedo = 0;
+    uint32_t srm = 0;
+    std::vector<uint32_t> frames;
+};
+
+BakedSkinMaterial BakeSkinMaterial(TextureManager& textures, SkinBakeSource& source, int skin_id, bool animated);
+void NoteSkinShown(TextureManager& textures, uint32_t material_index, const SkinBakeSource* source, int skin_id);
 
 }

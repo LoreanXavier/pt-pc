@@ -850,6 +850,12 @@ private:
     float blur_span_ = static_cast<float>(render::kOriginalFrameSeconds);
     bool motion_cut_ = false;
     uint32_t frame_counter_ = 0;
+    void LayerDiag();
+    int layer_diag_variant_ = -1;
+    int layer_diag_last_ = -1;
+    int layer_diag_skip_ = 0;
+    uint32_t layer_diag_frames_ = 0;
+    std::array<double, 4> layer_diag_sum_{};
     RenderStats stats_;
 
     struct UpscaleState {

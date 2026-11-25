@@ -279,6 +279,8 @@ public:
         scancode = captured_scancode_;
         mouse = captured_mouse_;
         cancelled = captured_cancel_;
+        swallowed_capture_scancode_ = cancelled ? static_cast<uint16_t>(41) /* SDL_SCANCODE_ESCAPE */ : captured_scancode_;
+        swallowed_capture_mouse_ = cancelled ? 0 : captured_mouse_;
         captured_ready_ = false;
         capturing_key_ = false;
         return true;
@@ -378,6 +380,8 @@ private:
     bool captured_cancel_ = false;
     uint16_t captured_scancode_ = 0;
     uint8_t captured_mouse_ = 0;
+    uint16_t swallowed_capture_scancode_ = 0;
+    uint8_t swallowed_capture_mouse_ = 0;
 };
 
 }

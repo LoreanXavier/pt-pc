@@ -670,11 +670,6 @@ void OptionsMenu::CancelPhotoZoom() {
 
 void OptionsMenu::Close() {
     if (state_ == State::SetIn || state_ == State::Active) {
-        if (survival_promo_seen_ && pc_source_) {
-            pc_source_->DismissSurvivalPromo();
-            survival_promo_shown_ = false;
-            survival_promo_seen_ = false;
-        }
         if (page_ == Page::Pc && pc_source_) pc_source_->Closed();
         resume_ = resume_ || !resume_sent_;
         resume_sent_ = true;
@@ -774,6 +769,10 @@ void OptionsMenu::Update(Game& game, const MenuInput& raw_input, float dt) {
     }
     {
         const bool shown = page_ == Page::Original && taking_input && !quit_confirming_ && !street_confirming_ && !survival_locked_confirming_;
+        if (survival_promo_shown_ && (!pc_source_ || !pc_source_->SurvivalPromoDue())) {
+            survival_promo_shown_ = false;
+            survival_promo_seen_ = false;
+        }
         if (!shown) hovered_ = Button::None;
         if (shown && survival_promo_shown_) {
             promo_toast_t_ = std::min(1.0f, promo_toast_t_ + dt * 2.5f);

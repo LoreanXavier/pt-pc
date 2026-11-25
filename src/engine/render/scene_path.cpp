@@ -353,17 +353,23 @@ void SceneRenderer::RecordPathTrace(gpu::CommandList& cmd, const ViewSetup& view
     Stamp(cmd, 27);
     {
         cmd.BindPipeline(gpu::BindPoint::Compute, pt_layer_);
-        const bool coat = toggles.local_reflections && lighting_->screen.local_reflections;
+        static const bool diag = std::getenv("PT_LAYER_DIAG") != nullptr;
+        const uint32_t variant = diag ? (frame_counter_ / 400u) % 8u : 0u;
+        layer_diag_variant_ = diag ? static_cast<int>(variant) : -1;
+        const bool coat = toggles.local_reflections && lighting_->screen.local_reflections && variant != 4u && variant != 7u;
         const ScreenSettings& screen = lighting_->screen;
         static const float layer_bounces = EnvFloat("PT_PATH_LAYER_BOUNCES", 3.0f, 1.0f, 8.0f);
         const bool fsr_rr = rr_frame_ && (up_.kind == UpscalerKind::Fsr4 || fsr_rr_input_check_);
         for (uint32_t mode = 0; mode < 3u; ++mode) {
+            if (variant == 3u || (variant == 2u && mode >= 1u) || (variant == 1u && mode == 2u)) {
+                continue;
+            }
             push.ids = glm::uvec4(view.index, light_count_, mode, history);
             push.f0 = glm::vec4(reach, std::floor(layer_bounces), static_cast<float>(frame_counter_ & 0xFFFFFFu), clamp_light);
             static const bool mirror_linear = std::getenv("PT_PATH_MIRROR_LINEAR") != nullptr;
             const bool dlss_rr = rr_frame_ && up_.kind == UpscalerKind::Dlss;
             push.f1 = glm::vec4(0.0f, 1.0f, 0.0f, (coat ? 1.0f : 0.0f) + (mirror_linear ? 2.0f : 0.0f) + (fsr_rr ? 4.0f : 0.0f) +
-                               (dlss_rr ? 8.0f : 0.0f));
+                               (dlss_rr ? 8.0f : 0.0f) + (variant == 5u || variant == 7u ? 16.0f : 0.0f) + (variant == 6u || variant == 7u ? 32.0f : 0.0f));
             push.f2 = glm::vec4(screen.reflect_scale, screen.reflect_bias, rt_full_previous_jitter_);
             push.m = rt_full_previous_;
             PushConstants(cmd, &push, sizeof(push));

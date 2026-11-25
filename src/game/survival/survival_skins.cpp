@@ -2,11 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include <glm/glm.hpp>
+#include <stb_image.h>
+
+#include "engine/core/log.h"
+#include "engine/core/parallel_for.h"
+#include "engine/fs/mods.h"
 #include "engine/render/texture_manager.h"
 
 namespace pt::game {
@@ -221,10 +229,10 @@ SampleOut EvalMetalPattern(const SurvivalSkinDef& skin, float u, float v) {
         case SkinPattern::Filigree: {
             const float a1 = std::sin(u * 8.0f * kPi) * std::cos(v * 8.0f * kPi);
             const float a2 = std::sin((u + v) * 6.0f * kPi + a1 * 1.4f);
-            const float scroll = Smooth((std::abs(a2) - 0.72f) / 0.14f);
-            const float fine = Smooth((std::abs(std::sin((u - v) * 12.0f * kPi + a1 * 1.2f)) - 0.82f) / 0.10f);
-            const float eng = std::max(scroll, fine * 0.8f);
-            const glm::vec3 col = Lerp3(A, C, eng);
+            const float scroll = Smooth((std::abs(a2) - 0.88f) / 0.07f);
+            const float fine = Smooth((std::abs(std::sin((u - v) * 12.0f * kPi + a1 * 1.2f)) - 0.93f) / 0.05f);
+            const float eng = std::max(scroll, fine * 0.55f);
+            const glm::vec3 col = Lerp3(A, Lerp3(A, C, 0.8f), eng);
             return {col, Lerp3(S, SA, eng)};
         }
         case SkinPattern::Marble: {
@@ -740,6 +748,100 @@ SkinTextureSet EnsureSkinTextures(TextureManager& textures, int skin_id) {
     return set;
 }
 
+glm::vec3 EvalMythicMetal(const SurvivalSkinDef& skin, float u, float v, int f, int x, int y) {
+    const uint32_t seed = static_cast<uint32_t>(skin.id) * 193u + 37u;
+    const glm::vec3 A = skin.metal_a;
+    const glm::vec3 B = skin.metal_b;
+    const glm::vec3 C = skin.accent;
+    const float phase = static_cast<float>(f) / static_cast<float>(kMythicAnimFrames);
+    const float ang = phase * 2.0f * kPi;
+    const float breath = 0.5f + 0.5f * std::sin(ang);
+    glm::vec3 col = A;
+
+    switch (skin.id) {
+        case 54: {
+            const float vs = std::fmod(v + phase, 1.0f);
+            const int row_i = static_cast<int>(v * 32.0f);
+            const float band = HashF(f * 3 + 1, row_i, seed);
+            const float shift = band > 0.72f ? (band - 0.72f) * 1.8f : 0.0f;
+            const float us = std::fmod(u + shift, 1.0f);
+            const float sweep = std::exp(-std::pow(std::sin((vs - 0.5f) * kPi) * 3.8f, 2.0f));
+            const float scan = 0.65f + 0.35f * std::sin((v * 48.0f + phase * 4.0f) * 2.0f * kPi);
+            const float blk = TileNoise(std::floor(us * 12.0f) / 12.0f, std::floor(v * 24.0f) / 24.0f, 12, seed + static_cast<uint32_t>(f) * 19u);
+            const float hot = std::clamp(Smooth((blk - 0.62f) / 0.16f) * (band > 0.55f ? 1.0f : 0.45f) + sweep * 0.75f, 0.0f, 1.0f);
+            const float grain = HashF(static_cast<int>(x) + f * 17, static_cast<int>(y) + f * 31, seed + 5u);
+            col = Lerp3(B, A, scan * (0.45f + 0.55f * grain));
+            col = Lerp3(col, C, hot);
+            col = Lerp3(col, glm::vec3(1.0f, 0.94f, 0.92f), Smooth((hot - 0.80f) / 0.18f) * 0.75f);
+            break;
+        }
+        case 55:
+        case 56:
+        case 58:
+        case 60: {
+            const float edge = TileVoronoiEdge(u, v, 7, seed);
+            const float flow = TileFbm(std::fmod(u + phase, 1.0f), std::fmod(v + phase * (skin.id == 58 ? 1.0f : 0.0f), 1.0f), 4, 3, seed + 17u);
+            const float wave = 0.5f + 0.5f * std::sin((u * 2.0f + v * 1.0f - phase * 2.0f) * 2.0f * kPi);
+            const float surge = 0.45f + 0.55f * (skin.id == 56 ? std::pow(wave, 2.2f) : (0.5f * breath + 0.5f * wave));
+            const float crack = 1.0f - Smooth((edge + (flow - 0.5f) * 0.06f) / (0.09f + 0.06f * surge));
+            const float core = 1.0f - Smooth(edge / (0.030f + 0.035f * surge));
+            col = Lerp3(B, A, flow * 0.65f);
+            col = Lerp3(col, C, std::clamp(crack * (0.70f + 0.45f * surge), 0.0f, 1.0f));
+            const glm::vec3 hot_core = skin.id == 60 ? glm::vec3(0.88f, 1.00f, 0.68f)
+                                      : skin.id == 56 ? glm::vec3(1.00f, 0.72f, 0.78f)
+                                                      : glm::vec3(1.00f, 0.95f, 0.76f);
+            col = Lerp3(col, hot_core, core * (0.45f + 0.50f * surge));
+            break;
+        }
+        case 57: {
+            const float n = TileFbm(std::fmod(u + phase, 1.0f), std::fmod(v - phase, 1.0f), 4, 3, seed);
+            const float band = 0.5f + 0.5f * std::sin((u * 2.0f + v * 2.0f - phase * 2.0f + n * 1.4f) * 2.0f * kPi);
+            const float arc = 1.0f - Smooth(std::abs(std::sin((u * 3.0f - v * 2.0f + phase * 2.0f + n * 2.4f) * kPi)) / 0.14f);
+            col = Lerp3(B, A, band);
+            col = Lerp3(col, C, Smooth((band - 0.45f) / 0.45f) * 0.75f);
+            col = Lerp3(col, glm::vec3(0.86f, 0.98f, 1.00f), arc * 0.85f);
+            break;
+        }
+        case 59: {
+            const float n = TileFbm(u, v, 3, 2, seed) * 0.25f;
+            const float h = std::fmod(u * 1.0f + v * 0.6f - phase + n + 4.0f, 1.0f) * 6.0f;
+            const float r = std::clamp(std::abs(h - 3.0f) - 1.0f, 0.0f, 1.0f);
+            const float g = std::clamp(2.0f - std::abs(h - 2.0f), 0.0f, 1.0f);
+            const float b = std::clamp(2.0f - std::abs(h - 4.0f), 0.0f, 1.0f);
+            const float sheen = 0.5f + 0.5f * std::sin((u * 3.0f - v * 2.0f + phase * 2.0f) * 2.0f * kPi);
+            col = glm::vec3(0.18f) + 0.82f * glm::vec3(r, g, b);
+            col = Lerp3(col, glm::vec3(1.0f, 0.96f, 0.90f), Smooth((sheen - 0.78f) / 0.22f) * 0.45f);
+            break;
+        }
+        case 61:
+        case 63: {
+            const float a1 = std::sin(u * 8.0f * kPi) * std::cos(v * 8.0f * kPi);
+            const float a2 = std::sin((u + v) * 6.0f * kPi + a1 * 1.4f);
+            const float eng = Smooth((std::abs(a2) - 0.68f) / 0.16f);
+            const float wave = 0.5f + 0.5f * std::sin((u * 2.0f + v - phase * 2.0f) * 2.0f * kPi);
+            const float sparkle = Smooth((HashF(static_cast<int>(u * 48.0f), static_cast<int>(v * 48.0f), seed) - 0.90f) / 0.09f) *
+                                  (0.35f + 0.65f * std::sin(ang + u * 12.0f + v * 9.0f));
+            col = Lerp3(B, A, 0.45f + 0.55f * wave);
+            col = Lerp3(col, C, std::clamp(eng * (0.65f + 0.45f * wave), 0.0f, 1.0f));
+            col = Lerp3(col, glm::vec3(1.0f, 0.98f, 0.88f), std::clamp(sparkle + eng * std::pow(wave, 3.0f) * 0.65f, 0.0f, 1.0f));
+            break;
+        }
+        case 62: {
+            const float n1 = TileFbm(std::fmod(u + phase, 1.0f), v, 4, 3, seed);
+            const float rings = 0.5f + 0.5f * std::sin((u * 4.0f + v * 2.0f - phase * 2.0f + n1 * 4.2f) * 2.0f * kPi);
+            const float crest = Smooth((rings - 0.72f) / 0.22f);
+            col = Lerp3(B, A, Smooth((rings - 0.25f) / 0.45f));
+            col = Lerp3(col, C, crest * (0.55f + 0.45f * breath));
+            break;
+        }
+        default:
+            col = Lerp3(B, A, breath);
+            break;
+    }
+
+    return col;
+}
+
 glm::vec3 MythicLiveColor(int skin_id, float time_sec) {
     const SurvivalSkinDef& sk = SurvivalSkin(skin_id);
     if (sk.rarity != SkinRarity::Mythic) return sk.aura_color;
@@ -824,103 +926,15 @@ MythicAnimSet EnsureMythicAnimTextures(TextureManager& textures, int skin_id) {
         return textures.Create(name, gpu::Format::R8G8B8A8Srgb, mips);
     };
 
-    const uint32_t seed = static_cast<uint32_t>(skin.id) * 193u + 37u;
-    const glm::vec3 A = skin.metal_a;
-    const glm::vec3 B = skin.metal_b;
-    const glm::vec3 C = skin.accent;
-
     for (int f = 0; f < kMythicAnimFrames; ++f) {
         const float phase = static_cast<float>(f) / static_cast<float>(kMythicAnimFrames);
-        const float ang = phase * 2.0f * kPi;
-        const float breath = 0.5f + 0.5f * std::sin(ang);
 
         for (uint32_t y = 0; y < kMythicTexSize; ++y) {
             const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(kMythicTexSize);
             for (uint32_t x = 0; x < kMythicTexSize; ++x) {
                 const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kMythicTexSize);
                 const size_t idx = (static_cast<size_t>(y) * kMythicTexSize + x) * 4u;
-                glm::vec3 col = A;
-
-                switch (skin.id) {
-                    case 54: {
-                        const float vs = std::fmod(v + phase, 1.0f);
-                        const int row_i = static_cast<int>(v * 32.0f);
-                        const float band = HashF(f * 3 + 1, row_i, seed);
-                        const float shift = band > 0.72f ? (band - 0.72f) * 1.8f : 0.0f;
-                        const float us = std::fmod(u + shift, 1.0f);
-                        const float sweep = std::exp(-std::pow(std::sin((vs - 0.5f) * kPi) * 3.8f, 2.0f));
-                        const float scan = 0.65f + 0.35f * std::sin((v * 48.0f + phase * 4.0f) * 2.0f * kPi);
-                        const float blk = TileNoise(std::floor(us * 12.0f) / 12.0f, std::floor(v * 24.0f) / 24.0f, 12, seed + static_cast<uint32_t>(f) * 19u);
-                        const float hot = std::clamp(Smooth((blk - 0.62f) / 0.16f) * (band > 0.55f ? 1.0f : 0.45f) + sweep * 0.75f, 0.0f, 1.0f);
-                        const float grain = HashF(static_cast<int>(x) + f * 17, static_cast<int>(y) + f * 31, seed + 5u);
-                        col = Lerp3(B, A, scan * (0.45f + 0.55f * grain));
-                        col = Lerp3(col, C, hot);
-                        col = Lerp3(col, glm::vec3(1.0f, 0.94f, 0.92f), Smooth((hot - 0.80f) / 0.18f) * 0.75f);
-                        break;
-                    }
-                    case 55:
-                    case 56:
-                    case 58:
-                    case 60: {
-                        const float edge = TileVoronoiEdge(u, v, 7, seed);
-                        const float flow = TileFbm(std::fmod(u + phase, 1.0f), std::fmod(v + phase * (skin.id == 58 ? 1.0f : 0.0f), 1.0f), 4, 3, seed + 17u);
-                        const float wave = 0.5f + 0.5f * std::sin((u * 2.0f + v * 1.0f - phase * 2.0f) * 2.0f * kPi);
-                        const float surge = 0.45f + 0.55f * (skin.id == 56 ? std::pow(wave, 2.2f) : (0.5f * breath + 0.5f * wave));
-                        const float crack = 1.0f - Smooth((edge + (flow - 0.5f) * 0.06f) / (0.09f + 0.06f * surge));
-                        const float core = 1.0f - Smooth(edge / (0.030f + 0.035f * surge));
-                        col = Lerp3(B, A, flow * 0.65f);
-                        col = Lerp3(col, C, std::clamp(crack * (0.70f + 0.45f * surge), 0.0f, 1.0f));
-                        const glm::vec3 hot_core = skin.id == 60 ? glm::vec3(0.88f, 1.00f, 0.68f)
-                                                  : skin.id == 56 ? glm::vec3(1.00f, 0.72f, 0.78f)
-                                                                  : glm::vec3(1.00f, 0.95f, 0.76f);
-                        col = Lerp3(col, hot_core, core * (0.45f + 0.50f * surge));
-                        break;
-                    }
-                    case 57: {
-                        const float n = TileFbm(std::fmod(u + phase, 1.0f), std::fmod(v - phase, 1.0f), 4, 3, seed);
-                        const float band = 0.5f + 0.5f * std::sin((u * 2.0f + v * 2.0f - phase * 2.0f + n * 1.4f) * 2.0f * kPi);
-                        const float arc = 1.0f - Smooth(std::abs(std::sin((u * 3.0f - v * 2.0f + phase * 2.0f + n * 2.4f) * kPi)) / 0.14f);
-                        col = Lerp3(B, A, band);
-                        col = Lerp3(col, C, Smooth((band - 0.45f) / 0.45f) * 0.75f);
-                        col = Lerp3(col, glm::vec3(0.86f, 0.98f, 1.00f), arc * 0.85f);
-                        break;
-                    }
-                    case 59: {
-                        const float n = TileFbm(u, v, 3, 2, seed) * 0.25f;
-                        const float h = std::fmod(u * 1.0f + v * 0.6f - phase + n + 4.0f, 1.0f) * 6.0f;
-                        const float r = std::clamp(std::abs(h - 3.0f) - 1.0f, 0.0f, 1.0f);
-                        const float g = std::clamp(2.0f - std::abs(h - 2.0f), 0.0f, 1.0f);
-                        const float b = std::clamp(2.0f - std::abs(h - 4.0f), 0.0f, 1.0f);
-                        const float sheen = 0.5f + 0.5f * std::sin((u * 3.0f - v * 2.0f + phase * 2.0f) * 2.0f * kPi);
-                        col = glm::vec3(0.18f) + 0.82f * glm::vec3(r, g, b);
-                        col = Lerp3(col, glm::vec3(1.0f, 0.96f, 0.90f), Smooth((sheen - 0.78f) / 0.22f) * 0.45f);
-                        break;
-                    }
-                    case 61:
-                    case 63: {
-                        const float a1 = std::sin(u * 8.0f * kPi) * std::cos(v * 8.0f * kPi);
-                        const float a2 = std::sin((u + v) * 6.0f * kPi + a1 * 1.4f);
-                        const float eng = Smooth((std::abs(a2) - 0.68f) / 0.16f);
-                        const float wave = 0.5f + 0.5f * std::sin((u * 2.0f + v - phase * 2.0f) * 2.0f * kPi);
-                        const float sparkle = Smooth((HashF(static_cast<int>(u * 48.0f), static_cast<int>(v * 48.0f), seed) - 0.90f) / 0.09f) *
-                                              (0.35f + 0.65f * std::sin(ang + u * 12.0f + v * 9.0f));
-                        col = Lerp3(B, A, 0.45f + 0.55f * wave);
-                        col = Lerp3(col, C, std::clamp(eng * (0.65f + 0.45f * wave), 0.0f, 1.0f));
-                        col = Lerp3(col, glm::vec3(1.0f, 0.98f, 0.88f), std::clamp(sparkle + eng * std::pow(wave, 3.0f) * 0.65f, 0.0f, 1.0f));
-                        break;
-                    }
-                    case 62: {
-                        const float n1 = TileFbm(std::fmod(u + phase, 1.0f), v, 4, 3, seed);
-                        const float rings = 0.5f + 0.5f * std::sin((u * 4.0f + v * 2.0f - phase * 2.0f + n1 * 4.2f) * 2.0f * kPi);
-                        const float crest = Smooth((rings - 0.72f) / 0.22f);
-                        col = Lerp3(B, A, Smooth((rings - 0.25f) / 0.45f));
-                        col = Lerp3(col, C, crest * (0.55f + 0.45f * breath));
-                        break;
-                    }
-                    default:
-                        col = Lerp3(B, A, breath);
-                        break;
-                }
+                const glm::vec3 col = EvalMythicMetal(skin, u, v, f, static_cast<int>(x), static_cast<int>(y));
 
                 buf[idx + 0] = ToU8(col.r);
                 buf[idx + 1] = ToU8(col.g);
@@ -1007,6 +1021,386 @@ TorchTextureSet EnsureTorchTextures(TextureManager& textures, int torch_id) {
     out.body_albedo = textures.Create(n_alb, gpu::Format::R8G8B8A8Srgb, a_mips);
     out.body_srm = textures.Create(n_srm, gpu::Format::R8G8B8A8Unorm, s_mips);
     return out;
+}
+
+namespace {
+
+constexpr uint32_t kBakeSize = 1024;
+constexpr uint32_t kBakeFrameSize = 512;
+constexpr float kDetailShare = 0.85f;
+constexpr int kBakePadding = 6;
+constexpr uint64_t kBakeBudget = 384ull << 20;
+
+float Fract(float x) {
+    return x - std::floor(x);
+}
+
+float SkinTile(const SurvivalSkinDef& skin, uint8_t channel) {
+    if (channel == 1) return skin.rarity == SkinRarity::Tactical || skin.rarity == SkinRarity::Mythic ? 0.06f : 0.25f;
+    switch (skin.pattern) {
+        case SkinPattern::Filigree: return 0.11f;
+        case SkinPattern::CarbonWeave: return 0.12f;
+        case SkinPattern::HexGrid: return 0.20f;
+        case SkinPattern::Damascus:
+        case SkinPattern::AsylumTile: return 0.15f;
+        case SkinPattern::BrushedMetal:
+        case SkinPattern::FactoryOriginal: return 0.20f;
+        default: return 0.30f;
+    }
+}
+
+bool OriginalLuminance(const std::string& base_path, uint32_t size, std::vector<float>& out) {
+    if (base_path.empty()) return false;
+    const auto bytes = mods::ReadOverride(base_path + ".png");
+    if (!bytes) return false;
+    int w = 0, h = 0, ch = 0;
+    stbi_uc* px = stbi_load_from_memory(bytes->data(), static_cast<int>(bytes->size()), &w, &h, &ch, 4);
+    if (!px || w <= 0 || h <= 0) {
+        if (px) stbi_image_free(px);
+        return false;
+    }
+    out.assign(static_cast<size_t>(size) * size, 0.0f);
+    const int bx = std::max(1, w / static_cast<int>(size)), by = std::max(1, h / static_cast<int>(size));
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            const int sx = static_cast<int>(static_cast<uint64_t>(x) * static_cast<uint64_t>(w) / size);
+            const int sy = static_cast<int>(static_cast<uint64_t>(y) * static_cast<uint64_t>(h) / size);
+            float sum = 0.0f;
+            int n = 0;
+            for (int j = 0; j < by && sy + j < h; ++j) {
+                for (int i = 0; i < bx && sx + i < w; ++i) {
+                    const stbi_uc* p = px + (static_cast<size_t>(sy + j) * static_cast<size_t>(w) + static_cast<size_t>(sx + i)) * 4;
+                    sum += (0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2]) / 255.0f;
+                    ++n;
+                }
+            }
+            out[static_cast<size_t>(y) * size + x] = n > 0 ? sum / static_cast<float>(n) : 0.0f;
+        }
+    }
+    stbi_image_free(px);
+    return true;
+}
+
+const SkinBakeSource::Raster& Rasterize(SkinBakeSource& source, uint32_t size) {
+    for (const auto& r : source.rasters) {
+        if (r.size == size) return r;
+    }
+    SkinBakeSource::Raster r;
+    r.size = size;
+    const size_t texels = static_cast<size_t>(size) * size;
+    r.tri.assign(texels, -1);
+    r.weights.assign(texels, glm::vec3(0.0f));
+    const float fs = static_cast<float>(size);
+    const size_t tris = source.uv.size() / 3;
+    for (size_t t = 0; t < tris; ++t) {
+        const glm::vec2 a = source.uv[t * 3] * fs, b = source.uv[t * 3 + 1] * fs, c = source.uv[t * 3 + 2] * fs;
+        const float area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        if (std::abs(area) < 1.0e-8f) continue;
+        const int x0 = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
+        const int x1 = std::min(static_cast<int>(size) - 1, static_cast<int>(std::ceil(std::max({a.x, b.x, c.x}))));
+        const int y0 = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, c.y}))));
+        const int y1 = std::min(static_cast<int>(size) - 1, static_cast<int>(std::ceil(std::max({a.y, b.y, c.y}))));
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                const glm::vec2 p(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+                const float w0 = ((b.x - p.x) * (c.y - p.y) - (c.x - p.x) * (b.y - p.y)) / area;
+                const float w1 = ((c.x - p.x) * (a.y - p.y) - (a.x - p.x) * (c.y - p.y)) / area;
+                const float w2 = 1.0f - w0 - w1;
+                if (w0 < -1.0e-4f || w1 < -1.0e-4f || w2 < -1.0e-4f) continue;
+                const size_t i = static_cast<size_t>(y) * size + static_cast<size_t>(x);
+                r.tri[i] = static_cast<int32_t>(t);
+                r.weights[i] = glm::vec3(w0, w1, w2);
+            }
+        }
+    }
+    for (int pass = 0; pass < kBakePadding; ++pass) {
+        std::vector<int32_t> tri = r.tri;
+        std::vector<glm::vec3> wts = r.weights;
+        for (uint32_t y = 0; y < size; ++y) {
+            for (uint32_t x = 0; x < size; ++x) {
+                const size_t i = static_cast<size_t>(y) * size + x;
+                if (r.tri[i] >= 0) continue;
+                for (const glm::ivec2 d : {glm::ivec2(1, 0), glm::ivec2(-1, 0), glm::ivec2(0, 1), glm::ivec2(0, -1)}) {
+                    const int nx = static_cast<int>(x) + d.x, ny = static_cast<int>(y) + d.y;
+                    if (nx < 0 || ny < 0 || nx >= static_cast<int>(size) || ny >= static_cast<int>(size)) continue;
+                    const size_t j = static_cast<size_t>(ny) * size + static_cast<size_t>(nx);
+                    if (r.tri[j] < 0) continue;
+                    tri[i] = r.tri[j];
+                    wts[i] = r.weights[j];
+                    break;
+                }
+            }
+        }
+        r.tri.swap(tri);
+        r.weights.swap(wts);
+    }
+    std::vector<float> luma;
+    r.detail.assign(texels, 1.0f);
+    if (OriginalLuminance(source.base_path, size, luma)) {
+        double sum = 0.0;
+        size_t n = 0;
+        for (size_t i = 0; i < texels; ++i) {
+            if (r.tri[i] >= 0) {
+                sum += luma[i];
+                ++n;
+            }
+        }
+        const float mean = n > 0 ? static_cast<float>(sum / static_cast<double>(n)) : 0.0f;
+        if (mean > 0.01f) {
+            for (size_t i = 0; i < texels; ++i) r.detail[i] = std::clamp(luma[i] / mean, 0.2f, 2.0f);
+        }
+    }
+    source.rasters.push_back(std::move(r));
+    return source.rasters.back();
+}
+
+struct PatternOut {
+    glm::vec3 rgb{0.0f};
+    glm::vec3 srm{0.0f};
+};
+
+PatternOut PatternAt(const SurvivalSkinDef& skin, uint8_t channel, int frame, float u, float v, uint32_t size) {
+    if (channel == 1) {
+        const SampleOut g = EvalGripPattern(skin, u, v);
+        return {g.rgb, g.srm};
+    }
+    if (channel == 2) {
+        const glm::vec3 acc = frame >= 0 ? MythicLiveColor(skin.id, static_cast<float>(frame) / static_cast<float>(kMythicAnimFrames) * 2.4f) : skin.accent;
+        return {acc, skin.accent_srm};
+    }
+    if (frame >= 0) {
+        return {EvalMythicMetal(skin, u, v, frame, static_cast<int>(u * static_cast<float>(size)), static_cast<int>(v * static_cast<float>(size))), skin.metal_srm};
+    }
+    const SampleOut m = EvalMetalPattern(skin, u, v);
+    return {m.rgb, m.srm};
+}
+
+void BakePixels(const SurvivalSkinDef& skin, const SkinBakeSource& source, const SkinBakeSource::Raster& r, int frame, std::vector<uint8_t>& albedo,
+                std::vector<uint8_t>* srm) {
+    const uint32_t size = r.size;
+    albedo.assign(static_cast<size_t>(size) * size * 4, 0);
+    if (srm) srm->assign(static_cast<size_t>(size) * size * 4, 0);
+    const bool panels = skin.pattern == SkinPattern::Filigree && source.channel == 0 && frame < 0;
+    int lateral = 0;
+    if (panels && source.position.size() >= 3) {
+        glm::vec3 facing(0.0f);
+        for (size_t k = 0; k + 2 < source.position.size(); k += 3) {
+            facing += glm::abs(glm::cross(source.position[k + 1] - source.position[k], source.position[k + 2] - source.position[k]));
+        }
+        lateral = facing.x >= facing.y && facing.x >= facing.z ? 0 : facing.y >= facing.z ? 1 : 2;
+    }
+    ParallelChunks(size, 32, [&](size_t, size_t begin, size_t end) {
+        for (size_t y = begin; y < end; ++y) {
+            for (size_t x = 0; x < size; ++x) {
+                const size_t i = y * size + x;
+                const int32_t t = r.tri[i];
+                PatternOut out;
+                if (t < 0) {
+                    out = PatternAt(skin, source.channel, frame, 0.5f, 0.5f, size);
+                } else {
+                    const glm::vec3 w = r.weights[i];
+                    const size_t k = static_cast<size_t>(t) * 3;
+                    const glm::vec3 p = source.position[k] * w.x + source.position[k + 1] * w.y + source.position[k + 2] * w.z;
+                    glm::vec3 n = source.normal[k] * w.x + source.normal[k + 1] * w.y + source.normal[k + 2] * w.z;
+                    n = glm::length(n) > 1.0e-6f ? glm::normalize(n) : glm::vec3(0.0f, 1.0f, 0.0f);
+                    glm::vec3 side = glm::abs(n);
+                    side = side * side * side * side;
+                    side /= std::max(side.x + side.y + side.z, 1.0e-6f);
+                    const glm::vec3 q = p / SkinTile(skin, source.channel);
+                    const glm::vec2 planes[3] = {{q.z, q.y}, {q.x, q.z}, {q.x, q.y}};
+                    float total = 0.0f;
+                    for (int a = 0; a < 3; ++a) {
+                        if (side[a] < 0.02f) continue;
+                        const PatternOut o = PatternAt(skin, source.channel, frame, Fract(planes[a].x), Fract(planes[a].y), size);
+                        out.rgb += o.rgb * side[a];
+                        out.srm += o.srm * side[a];
+                        total += side[a];
+                    }
+                    if (total > 0.0f) {
+                        out.rgb /= total;
+                        out.srm /= total;
+                    }
+                    if (panels) {
+                        const float on_side = Smooth((std::abs(n[lateral]) - 0.62f) / 0.25f);
+                        out.rgb = Lerp3(skin.metal_a, out.rgb, on_side);
+                        out.srm = Lerp3(skin.metal_srm, out.srm, on_side);
+                    }
+                    const float d = glm::mix(1.0f, std::clamp(r.detail[i], 0.3f, 1.06f), kDetailShare);
+                    out.rgb *= d;
+                    out.srm.y = std::clamp(out.srm.y + (1.0f - r.detail[i]) * 0.12f, 0.05f, 0.95f);
+                }
+                uint8_t* a = &albedo[i * 4];
+                a[0] = ToU8(out.rgb.r);
+                a[1] = ToU8(out.rgb.g);
+                a[2] = ToU8(out.rgb.b);
+                a[3] = 255;
+                if (srm) {
+                    uint8_t* s2 = &(*srm)[i * 4];
+                    s2[0] = ToU8(out.srm.x);
+                    s2[1] = ToU8(out.srm.y);
+                    s2[2] = ToU8(out.srm.z);
+                    s2[3] = 255;
+                }
+            }
+        }
+    });
+}
+
+uint32_t UploadMipped(TextureManager& textures, const std::string& name, bool srgb, uint32_t size, std::vector<uint8_t> top) {
+    static const std::array<float, 256> to_linear = [] {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i) {
+            const float c = static_cast<float>(i) / 255.0f;
+            t[static_cast<size_t>(i)] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+        }
+        return t;
+    }();
+    const auto encode = [](float l) {
+        l = std::clamp(l, 0.0f, 1.0f);
+        const float c = l <= 0.0031308f ? l * 12.92f : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
+        return static_cast<uint8_t>(c * 255.0f + 0.5f);
+    };
+    std::vector<std::vector<uint8_t>> levels;
+    levels.push_back(std::move(top));
+    uint32_t s = size;
+    while (s > 1) {
+        const uint32_t h = s / 2;
+        const std::vector<uint8_t>& up = levels.back();
+        std::vector<uint8_t> down(static_cast<size_t>(h) * h * 4);
+        for (uint32_t y = 0; y < h; ++y) {
+            for (uint32_t x = 0; x < h; ++x) {
+                for (size_t c = 0; c < 4; ++c) {
+                    const auto at = [&](uint32_t xx, uint32_t yy) { return up[(static_cast<size_t>(yy) * s + xx) * 4 + c]; };
+                    const uint8_t q[4] = {at(2 * x, 2 * y), at(2 * x + 1, 2 * y), at(2 * x, 2 * y + 1), at(2 * x + 1, 2 * y + 1)};
+                    uint8_t v;
+                    if (srgb && c < 3) {
+                        v = encode((to_linear[q[0]] + to_linear[q[1]] + to_linear[q[2]] + to_linear[q[3]]) * 0.25f);
+                    } else {
+                        v = static_cast<uint8_t>((static_cast<int>(q[0]) + q[1] + q[2] + q[3] + 2) / 4);
+                    }
+                    down[(static_cast<size_t>(y) * h + x) * 4 + c] = v;
+                }
+            }
+        }
+        levels.push_back(std::move(down));
+        s = h;
+    }
+    std::vector<TextureMip> mips;
+    s = size;
+    for (const auto& l : levels) {
+        mips.push_back(TextureMip{s, s, l});
+        s = std::max(1u, s / 2);
+    }
+    TextureManager::ModelScope scope(textures);
+    const uint32_t index = textures.Create(name, srgb ? gpu::Format::R8G8B8A8Srgb : gpu::Format::R8G8B8A8Unorm, mips);
+    textures.AddModelRef(index);
+    return index;
+}
+
+struct BakeEntry {
+    BakedSkinMaterial set;
+    uint64_t bytes = 0;
+    uint64_t last_use = 0;
+    int shown = 0;
+};
+std::unordered_map<std::string, BakeEntry> g_bakes;
+std::unordered_map<uint32_t, std::string> g_shown;
+struct Retired {
+    std::chrono::steady_clock::time_point at;
+    std::vector<uint32_t> textures;
+};
+std::vector<Retired> g_retired;
+uint64_t g_bake_clock = 0;
+uint64_t g_bake_bytes = 0;
+
+std::string BakeKey(const SkinBakeSource& source, int skin_id) {
+    return std::format("survival_bake_{}_{}", skin_id, source.key);
+}
+
+void PumpRetired(TextureManager& textures) {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = g_retired.begin(); it != g_retired.end();) {
+        if (now - it->at < std::chrono::milliseconds(1500)) {
+            ++it;
+            continue;
+        }
+        for (const uint32_t t : it->textures) textures.ReleaseModelRef(t);
+        it = g_retired.erase(it);
+    }
+}
+
+void Evict(const std::string& keep) {
+    while (g_bake_bytes > kBakeBudget) {
+        auto oldest = g_bakes.end();
+        for (auto it = g_bakes.begin(); it != g_bakes.end(); ++it) {
+            if (it->second.shown > 0 || it->first == keep) continue;
+            if (oldest == g_bakes.end() || it->second.last_use < oldest->second.last_use) oldest = it;
+        }
+        if (oldest == g_bakes.end()) return;
+        Retired r{std::chrono::steady_clock::now(), {}};
+        const BakedSkinMaterial& s = oldest->second.set;
+        if (s.albedo) r.textures.push_back(s.albedo);
+        if (s.srm) r.textures.push_back(s.srm);
+        for (const uint32_t f : s.frames) r.textures.push_back(f);
+        g_bake_bytes -= oldest->second.bytes;
+        LogInfo("survival: skin bake {} let go ({} MB baked)", oldest->first, g_bake_bytes >> 20);
+        g_retired.push_back(std::move(r));
+        g_bakes.erase(oldest);
+    }
+}
+
+}
+
+BakedSkinMaterial BakeSkinMaterial(TextureManager& textures, SkinBakeSource& source, int skin_id, bool animated) {
+    PumpRetired(textures);
+    const SurvivalSkinDef& skin = SurvivalSkin(skin_id);
+    if (skin.id == 0 || source.uv.empty()) return {};
+    const bool mythic = animated && skin.rarity == SkinRarity::Mythic;
+    const std::string key = BakeKey(source, skin.id);
+    auto it = g_bakes.find(key);
+    if (it != g_bakes.end() && (!mythic || source.channel != 0 || !it->second.set.frames.empty())) {
+        it->second.last_use = ++g_bake_clock;
+        return it->second.set;
+    }
+    const auto started = std::chrono::steady_clock::now();
+    BakeEntry entry = it != g_bakes.end() ? it->second : BakeEntry{};
+    const uint64_t old_bytes = it != g_bakes.end() ? it->second.bytes : 0;
+    if (!entry.set.albedo) {
+        const SkinBakeSource::Raster& r = Rasterize(source, kBakeSize);
+        std::vector<uint8_t> albedo, srm;
+        BakePixels(skin, source, r, -1, albedo, &srm);
+        entry.set.albedo = UploadMipped(textures, key + "_a", true, kBakeSize, std::move(albedo));
+        entry.set.srm = UploadMipped(textures, key + "_s", false, kBakeSize, std::move(srm));
+        entry.bytes += 2ull * kBakeSize * kBakeSize * 4 * 4 / 3;
+    }
+    if (mythic && source.channel == 0 && entry.set.frames.empty()) {
+        const SkinBakeSource::Raster& r = Rasterize(source, kBakeFrameSize);
+        for (int f = 0; f < kMythicAnimFrames; ++f) {
+            std::vector<uint8_t> albedo;
+            BakePixels(skin, source, r, f, albedo, nullptr);
+            entry.set.frames.push_back(UploadMipped(textures, std::format("{}_f{}", key, f), true, kBakeFrameSize, std::move(albedo)));
+        }
+        entry.bytes += static_cast<uint64_t>(kMythicAnimFrames) * kBakeFrameSize * kBakeFrameSize * 4 * 4 / 3;
+    }
+    g_bake_bytes = g_bake_bytes - old_bytes + entry.bytes;
+    entry.last_use = ++g_bake_clock;
+    const BakedSkinMaterial out = entry.set;
+    g_bakes[key] = std::move(entry);
+    LogInfo("survival: skin {} baked onto {} ({} triangles{}) in {} ms, {} MB baked", skin.id, source.key, source.uv.size() / 3, mythic ? ", animated" : "",
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(), g_bake_bytes >> 20);
+    Evict(key);
+    return out;
+}
+
+void NoteSkinShown(TextureManager& textures, uint32_t material_index, const SkinBakeSource* source, int skin_id) {
+    PumpRetired(textures);
+    const std::string key = source && skin_id > 0 ? BakeKey(*source, skin_id) : std::string();
+    std::string& now = g_shown[material_index];
+    if (now == key) return;
+    if (auto it = g_bakes.find(now); !now.empty() && it != g_bakes.end()) it->second.shown = std::max(0, it->second.shown - 1);
+    if (auto it = g_bakes.find(key); !key.empty() && it != g_bakes.end()) it->second.shown += 1;
+    now = key;
+    Evict(key);
 }
 
 }

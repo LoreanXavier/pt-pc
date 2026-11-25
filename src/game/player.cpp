@@ -748,6 +748,8 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
         plant_ = PlayerBody::FootPlant{};
         draw_turn_ = draw_turn_speed_ = 0.0f;
         stride_way_ = stride_way_speed_ = glm::vec2(0.0f);
+        strafe_weight_ = strafe_weight_speed_ = strafe_phase_ = 0.0f;
+        strafe_primed_ = false;
         hips_yaw_ = body_yaw_;
         hips_rate_ = hips_lag_ = 0.0f;
         drawn_body_.hips_lag = 0.0f;
@@ -793,6 +795,40 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             draw_stopping_ = true;
             stop_clip_ = clip;
         }
+    }
+    {
+        const glm::vec3 now = controller.BodyPosition() + drawn_offset_;
+        const float cycle = PlayerStrafeDistance();
+        float wanted = 0.0f;
+        const float across = std::abs(stride_way_.x), along = std::abs(stride_way_.y);
+        if (cycle > 0.0f && drawn_stride && !draw_stopping_ && across + along > 1.0e-3f) {
+            const auto step = [](float v) {
+                v = std::clamp(v, 0.0f, 1.0f);
+                return v * v * (3.0f - 2.0f * v);
+            };
+            const float running = std::clamp((drawn_body_.run - 0.3f) / 0.4f, 0.0f, 1.0f);
+            wanted = step((across / (across + along) - 0.55f) / 0.3f) * step((glm::length(stride_way_) - 0.15f) / 0.35f) * (1.0f - running);
+        }
+        if (dt > 0.0f) {
+            Spring(strafe_weight_, strafe_weight_speed_, wanted, 11.0f, dt);
+            strafe_weight_ = std::clamp(strafe_weight_, 0.0f, 1.0f);
+        }
+        if (strafe_weight_ < 0.005f && wanted <= 0.0f) {
+            strafe_weight_ = strafe_weight_speed_ = 0.0f;
+            strafe_phase_ = 0.0f;
+        }
+        if (strafe_weight_ < 0.1f || std::abs(stride_way_.x) > 0.3f) strafe_left_ = strafe_weight_ < 0.1f ? stride_way_.x > 0.0f : strafe_left_;
+        if (strafe_primed_ && cycle > 0.0f && strafe_weight_ > 0.0f) {
+            const glm::vec3 side_line = RotateYaw(body_yaw_, glm::vec3(1.0f, 0.0f, 0.0f));
+            const float gone = std::abs(glm::dot(now - strafe_last_, side_line));
+            strafe_phase_ += std::min(gone, 0.2f) / cycle;
+            strafe_phase_ -= std::floor(strafe_phase_);
+        }
+        strafe_last_ = now;
+        strafe_primed_ = true;
+        drawn_body_.strafe_weight = strafe_weight_;
+        drawn_body_.strafe_phase = strafe_phase_;
+        drawn_body_.strafe_left = strafe_left_;
     }
     const float before = drawn_body_.Frame();
     drawn_body_.Advance(dt * kMotionFps * (draw_stopping_ ? 1.0f : motion_.rate), dt * kMotionFps, true);
@@ -972,7 +1008,8 @@ void Player::UpdateDrawPose(float dt, const CollisionWorld& world) {
             const float run = std::clamp((std::cos(way) - 0.25f) / 0.5f, 0.0f, 1.0f);
             const float share = glm::mix(walk * walk * (3.0f - 2.0f * walk), 0.8f * run * run * (3.0f - 2.0f * run),
                                          std::clamp((drawn_body_.run - 0.3f) / 0.4f, 0.0f, 1.0f));
-            hips_target = pose_yaw + std::clamp(way, -kSpineTwist, kSpineTwist) * share * std::min(1.0f, stick_magnitude_) * (1.0f - 0.5f * std::clamp(drawn_body_.aim, 0.0f, 1.0f));
+            hips_target = pose_yaw + std::clamp(way, -kSpineTwist, kSpineTwist) * share * std::min(1.0f, stick_magnitude_) * (1.0f - 0.5f * std::clamp(drawn_body_.aim, 0.0f, 1.0f)) *
+                                         (1.0f - strafe_weight_);
         }
         if (dt > 0.0f) {
             const float running = std::clamp((drawn_body_.run - 0.3f) / 0.4f, 0.0f, 1.0f);

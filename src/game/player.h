@@ -134,6 +134,14 @@ public:
         }
     }
     glm::vec3 ShoulderMoved(bool right) const { return (draw_pose_ ? drawn_body_ : body_).shoulder_moved[right ? 1 : 0]; }
+    void SetCarryPose(float weight, const glm::mat4& hand, const glm::vec3& left_pole, const glm::vec3& right_pole) {
+        for (PlayerBody* body : {&body_, &drawn_body_}) {
+            body->carry_weight = weight;
+            body->carry_hand = hand;
+            body->carry_pole[0] = left_pole;
+            body->carry_pole[1] = right_pole;
+        }
+    }
     void SetElbowHints(const std::optional<glm::vec3>& left, const std::optional<glm::vec3>& right, float right_share = 1.0f) {
         body_.elbow_hint[0] = drawn_body_.elbow_hint[0] = left;
         body_.elbow_hint[1] = drawn_body_.elbow_hint[1] = right;
@@ -246,6 +254,12 @@ public:
     bool stride_blend_ = false;
     glm::vec2 stride_way_{0.0f};
     glm::vec2 stride_way_speed_{0.0f};
+    float strafe_weight_ = 0.0f;
+    float strafe_weight_speed_ = 0.0f;
+    float strafe_phase_ = 0.0f;
+    bool strafe_left_ = false;
+    glm::vec3 strafe_last_{0.0f};
+    bool strafe_primed_ = false;
     float draw_turn_ = 0.0f;
     float draw_turn_speed_ = 0.0f;
     glm::vec2 stick_soft_{0.0f};

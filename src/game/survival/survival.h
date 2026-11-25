@@ -223,6 +223,7 @@ public:
     float Lean() const { return lean_; }
     float RunWeight() const;
     float BodyRunWeight() const;
+    float CarryShare() const;
     float BodyRunArms() const;
     float ThirdPersonStockDeep() const { return weapon_ == SurvivalWeapon::Lever ? 0.03f : weapon_ == SurvivalWeapon::Double ? 0.02f : 0.0f; }
     float ThirdPersonElbowSwing() const { return SurvivalLongGun(weapon_) ? glm::mix(1.5f, 0.5f, ThirdPersonRaise()) : 0.4f; }
@@ -262,6 +263,7 @@ public:
     float ThirdPersonLunge() const;
     glm::vec2 ThirdPersonCarry() const;
     void ThirdPersonStance(float& long_gun, float& recoil, std::optional<glm::vec3>& left_elbow, std::optional<glm::vec3>& right_elbow, float& right_share) const;
+    bool ThirdPersonCarryPose(glm::mat4& gun_in_chest, glm::vec3& left_pole, glm::vec3& right_pole, float& weight) const;
     glm::vec3 MeleeBody() const;
     int TakeRecord();
 
@@ -586,6 +588,11 @@ private:
     glm::mat4 WeaponTransform(const Camera& camera) const;
     glm::mat4 DrawnWeaponTransform(const Camera& camera) const;
     glm::mat4 ThirdPersonRightHandLocal() const;
+
+public:
+    glm::mat4 ThirdPersonRightHandOnGun() const { return ThirdPersonRightHandLocal(); }
+
+private:
     glm::mat4 FirstPersonWeapon(const Camera& camera) const;
     float ThirdPersonRaise() const;
     bool BodyHoldsGun() const;

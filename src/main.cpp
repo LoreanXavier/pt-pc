@@ -3058,9 +3058,16 @@ public:
             auto archive = Row(kArchive, "pc_archive", {"pc_graphics_value"}, 0, locked ? "pc_note_archive_gate" : "pc_note_archive");
             archive.link = true;
             extras.rows.push_back(std::move(archive));
-            if (game_.SurvivalAvailable() && !game_.SurvivalActive()) {
-                auto night = Row(kLoopNight, "pc_survival", {"pc_graphics_value"}, 0, "pc_note_loop_survival");
+            const int ng_done = game_.NightUnlocked()
+                                    ? pt::game::Game::kTierSurvival
+                                    : std::clamp(static_cast<int>(game_.Finishes()) - 1, 0, pt::game::Game::kTierSurvival - 1);
+            if (!game_.SurvivalActive()) {
+                const bool available = game_.SurvivalAvailable();
+                auto night = Row(kLoopNight, "pc_survival",
+                                 {available ? std::string("pc_graphics_value") : std::format("NG+ {}/{}", ng_done, pt::game::Game::kTierSurvival)}, 0,
+                                 available ? "pc_note_loop_survival" : "pc_survival_locked_ng4");
                 night.link = true;
+                night.enabled = available;
                 extras.rows.push_back(std::move(night));
             }
             auto freecam = Row(kFreecam, "pc_freecam", {app_.freecam_active ? "pc_extras_stop" : "pc_extras_start"}, 0, "pc_note_freecam");
@@ -3075,9 +3082,6 @@ public:
             if (game_.GamePlus()) {
                 extras.rows.push_back(Row(kGamePlus, "pc_game_plus", OffOn(), app_.settings.game.game_plus ? 1 : 0, "pc_note_game_plus"));
             }
-            const int ng_done = game_.NightUnlocked()
-                                    ? pt::game::Game::kTierSurvival
-                                    : std::clamp(static_cast<int>(game_.Finishes()) - 1, 0, pt::game::Game::kTierSurvival - 1);
             auto ng_state = Row(kNgPlusState, "pc_ng_plus_state",
                                 {std::format("{}/{}", ng_done, pt::game::Game::kTierSurvival)}, 0, "pc_note_ng_plus_state");
             ng_state.wrap = false;
@@ -4678,6 +4682,7 @@ public:
         if (id == kPhotoMode) app_.extras_request = 2;
         if (id >= kLoopFirst && id < kLoopFirst + kLoopCount && LoopUnlocked(id - kLoopFirst)) game_.BrowseLoop(id - kLoopFirst);
         if (id == kLoopNight && game_.SurvivalAvailable()) {
+            DismissSurvivalPromo();
             page_ = kNightPage;
             if (!app_.options.vr) SurvivalVisions().Update(app_.options);
         }
@@ -4830,6 +4835,7 @@ public:
         }
         if (id == kStreetWalk) game_.AnswerStreetOffer(true);
         if (id == kStreetSurvival && game_.SurvivalAvailable()) {
+            DismissSurvivalPromo();
             game_.RequestSurvival();
             game_.AnswerStreetOffer(true);
         }
@@ -5008,7 +5014,7 @@ public:
     }
 
     bool SurvivalPromoDue() const override {
-        return !app_.settings.progress.survival_announced && !game_.SurvivalActive();
+        return game_.SurvivalAvailable() && !app_.settings.progress.survival_announced && !game_.SurvivalActive();
     }
 
     bool SurvivalUnlocked() const override {

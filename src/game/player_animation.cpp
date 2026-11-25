@@ -14,8 +14,11 @@
 #include "engine/anim/help_bones.h"
 #include "engine/anim/motion_data.h"
 #include "engine/anim/skeleton.h"
+#include "engine/core/json.h"
 #include "engine/core/log.h"
+#include "engine/core/resource_path.h"
 #include "engine/core/strcode.h"
+#include "engine/fs/mods.h"
 #include "engine/fs/vfs.h"
 #include "game/player_run_cycle.h"
 
@@ -135,6 +138,55 @@ void ForEachEvent(const std::vector<Event>& events, float from, float to, float 
     }
 }
 
+struct StrafeClip {
+    static constexpr size_t kBones = 9;
+    int frames = 0;
+    float distance = 0.0f;
+    int bone[kBones]{};
+    std::vector<glm::vec3> place[2];
+    std::vector<glm::quat> turn[2];
+};
+StrafeClip g_strafe;
+
+void LoadStrafeClip() {
+    g_strafe = StrafeClip{};
+    const std::optional<std::vector<uint8_t>> bytes = mods::ReadDiskFile(ExecutableDir() / "survival" / "body_clips.json");
+    json::Value doc;
+    std::string error;
+    if (!bytes || !json::Parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), doc, &error)) {
+        LogWarn("player anim: survival/body_clips.json {}, the side walk stays the original's", bytes ? error : std::string("missing"));
+        return;
+    }
+    const json::Value* clip = doc.Find("strafe");
+    const json::Value* bones = clip ? clip->Find("bones") : nullptr;
+    if (!clip || !bones || bones->Size() != StrafeClip::kBones) return;
+    StrafeClip out;
+    out.frames = static_cast<int>(clip->Number("frames", 0));
+    out.distance = static_cast<float>(clip->Number("distance", 0.0));
+    for (size_t b = 0; b < StrafeClip::kBones; ++b) {
+        out.bone[b] = g_skeleton.FindName(bones->At(b)->string.c_str());
+        if (out.bone[b] < 0) return;
+    }
+    static const char* const kSides[2] = {"right", "left"};
+    for (size_t side = 0; side < 2; ++side) {
+        const json::Value* rows = clip->Find(kSides[side]);
+        if (!rows || static_cast<int>(rows->Size()) != out.frames || out.frames < 2 || out.distance <= 0.0f) return;
+        for (size_t f = 0; f < rows->Size(); ++f) {
+            const json::Value* row = rows->At(f);
+            if (!row || row->Size() != StrafeClip::kBones) return;
+            for (size_t b = 0; b < StrafeClip::kBones; ++b) {
+                const json::Value* v = row->At(b);
+                if (!v || v->Size() != 7) return;
+                const auto n = [v](size_t k) { return static_cast<float>(v->At(k)->number); };
+                out.place[side].push_back(glm::vec3(n(0), n(1), n(2)));
+                out.turn[side].push_back(glm::quat(n(3), n(4), n(5), n(6)));
+            }
+        }
+    }
+    g_strafe = std::move(out);
+    LogInfo("player anim: the side step from survival/body_clips.json: {} frames, {:.2f} m a cycle", g_strafe.frames, g_strafe.distance);
+}
+
 bool LoadRig(Vfs& vfs) {
     auto rig_bytes = vfs.ReadFile(kRigFile);
     auto fmdl_bytes = vfs.ReadFile(kSkeletonFile);
@@ -179,6 +231,10 @@ glm::vec2 BodyClip::RootAt(float frame) const {
 
 const PlayerLocomotion& PlayerLocomotionData() {
     return g_locomotion;
+}
+
+float PlayerStrafeDistance() {
+    return g_strafe.frames > 0 ? g_strafe.distance : 0.0f;
 }
 
 bool LoadPlayerAnimation(Vfs& vfs) {
@@ -247,6 +303,7 @@ bool LoadPlayerAnimation(Vfs& vfs) {
     if (!g_locomotion.loaded) {
         LogWarn("player anim: {} lacks walk loops, start/stop clips, stand idle or the HumanFinger rig", kMotionArchive);
     }
+    if (g_rig_ready) LoadStrafeClip();
     return g_locomotion.loaded;
 }
 
@@ -670,8 +727,12 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
         return true;
     }
     snap_now_ = ease_reach && std::exchange(snap_reach, false);
+    ++skin_serial_;
     if (run > 0.0f) {
         RunOverlay(run);
+    }
+    if (strafe_weight > 0.0f && g_strafe.frames > 0) {
+        StrafeOverlay();
     }
     for (int side = 0; side < 2; ++side) {
         if (!KneeToToe(side, pose_knee_toe_[side], pose_toe_side_[side], &pose_knee_out_[side])) pose_toe_side_[side] = pose_knee_out_[side] = 0.0f;
@@ -738,6 +799,14 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
             natural_right_[i] = world_[static_cast<size_t>(b)];
         }
     }
+    glm::mat4 carried_target(1.0f);
+    if (right_target && carry_weight > 0.0f && natural_chest_known_) {
+        const glm::mat4 authored = natural_chest_ * carry_hand;
+        const float w = std::clamp(carry_weight, 0.0f, 1.0f);
+        carried_target = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(*right_target))), glm::normalize(glm::quat_cast(glm::mat3(authored))), w));
+        carried_target[3] = glm::vec4(glm::mix(glm::vec3((*right_target)[3]), glm::vec3(authored[3]), w), 1.0f);
+        right_target = &carried_target;
+    }
     if (!ease_reach) {
         if (right_target) ReachHand(true, *right_target, true);
     } else if (glm::mat4 hand(1.0f); BoneModel("SKL_023_RHAND", hand)) {
@@ -792,13 +861,40 @@ bool PlayerBody::Skin(const anim::HelpBones* help, std::vector<glm::mat4>& skin,
                     left_shift_ = glm::vec3(left_target_[3]) - glm::vec3(target[3]);
                     left_turn_ = glm::normalize(glm::quat_cast(glm::mat3(left_target_)) * glm::inverse(glm::quat_cast(glm::mat3(target))));
                 }
+                if (left_wanted_ && left_raw_known_) {
+                    const glm::quat was = glm::normalize(glm::quat_cast(glm::mat3(left_raw_))), now = glm::normalize(glm::quat_cast(glm::mat3(target)));
+                    if (2.0f * std::acos(std::min(1.0f, std::abs(glm::dot(was, now)))) > 0.3f) {
+                        left_turn_ = glm::normalize(left_turn_ * was * glm::inverse(now));
+                    }
+                    if (const glm::vec3 jump = glm::vec3(left_raw_[3]) - glm::vec3(target[3]); glm::length(jump) > 0.04f) left_shift_ += jump;
+                }
+                left_raw_ = target;
+                left_raw_known_ = true;
                 left_target_ = glm::mat4_cast(left_turn_) * glm::mat4(glm::mat3(target));
                 left_target_[3] = glm::vec4(glm::vec3(target[3]) + left_shift_, 1.0f);
             }
             left_wanted_ = wanted;
+            if (!wanted) left_raw_known_ = false;
             if (left_reach_ > 0.0f) {
                 const float k = left_reach_;
-                glm::mat4 between = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(hand))), glm::normalize(glm::quat_cast(glm::mat3(left_target_))), k));
+                const glm::quat hand_turn = glm::normalize(glm::quat_cast(glm::mat3(hand)));
+                glm::quat delta = glm::normalize(glm::normalize(glm::quat_cast(glm::mat3(left_target_))) * glm::inverse(hand_turn));
+                if (delta.w < 0.0f) delta = -delta;
+                float delta_angle = 2.0f * std::acos(std::min(1.0f, delta.w));
+                glm::vec3 delta_axis(delta.x, delta.y, delta.z);
+                if (glm::length(delta_axis) > 1.0e-5f) {
+                    delta_axis = glm::normalize(delta_axis);
+                    if ((between_serial_ + 1 == skin_serial_ || between_serial_ == skin_serial_) && glm::dot(delta_axis, between_axis_) < 0.0f && delta_angle > 2.0f) {
+                        delta_axis = -delta_axis;
+                        delta_angle = 6.2831853f - delta_angle;
+                    }
+                    between_axis_ = delta_axis;
+                    between_serial_ = skin_serial_;
+                } else {
+                    delta_axis = glm::vec3(0.0f, 1.0f, 0.0f);
+                    delta_angle = 0.0f;
+                }
+                glm::mat4 between = glm::mat4_cast(glm::angleAxis(delta_angle * k, delta_axis) * hand_turn);
                 between[3] = glm::vec4(glm::mix(glm::vec3(hand[3]), glm::vec3(left_target_[3]), k), 1.0f);
                 between[3].z += 0.035f * 4.0f * k * (1.0f - k);
                 const float transit = 1.0f - std::clamp((k - 0.85f) / 0.13f, 0.0f, 1.0f);
@@ -1034,6 +1130,7 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
         if (glm::length(step) > 0.3f * dt) held_way_ = glm::normalize(step);
     }
     const bool going_now = dt > 1.0e-5f && glm::length(glm::vec2(body.x - held_body_.x, body.z - held_body_.z)) > 0.5f * dt;
+    const bool walking_aside = stride_on_ && std::abs(stride_.x) > std::abs(stride_.y);
     for (int side = 0; side < 2; ++side) {
         HeldFoot& foot = held_[side];
         if (ankles[side] < 0 || static_cast<size_t>(ankles[side]) >= world_.size()) {
@@ -1059,7 +1156,7 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
             foot.before = ankle;
         }
         const bool low = there.y - body.y < kLow;
-        const int hold = hold_feet[side];
+        const int hold = strafe_weight > 0.5f && g_strafe.frames > 0 ? 0 : hold_feet[side];
         const glm::vec2 own_side(std::cos(body_yaw), -std::sin(body_yaw));
         const float outward = side == 0 ? 1.0f : -1.0f;
         const auto side_fixed = [&] { return glm::vec3(own_side.x, 0.0f, own_side.y) * (outward * foot.side_fix); };
@@ -1091,13 +1188,14 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
             foot.off = from;
             foot.lift = 0.0f;
         }
+        if (!low) foot.wait_swing = false;
         if (foot.held && !stance) {
             foot.held = false;
             foot.lift = kLiftSeconds;
-            foot.lift_height = kLiftHeight * std::clamp((glm::length(foot.off) - 0.02f) / 0.1f, 0.0f, 1.0f);
+            foot.lift_height = (walking_aside ? 0.3f : 1.0f) * kLiftHeight * std::clamp((glm::length(foot.off) - 0.02f) / 0.1f, 0.0f, 1.0f);
             foot.back_from = foot.off;
             foot.back_twist = foot.twist;
-        } else if (!foot.held && stance && foot.lift <= 0.0f) {
+        } else if (!foot.held && stance && foot.lift <= 0.0f && !foot.wait_swing) {
             foot.held = true;
             foot.floor = there + foot.off + side_fixed();
             foot.side_fix = 0.0f;
@@ -1106,10 +1204,11 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
         if (foot.held) {
             foot.off = glm::vec3(foot.floor.x - there.x, 0.0f, foot.floor.z - there.z);
             bool taut = false;
-            if (const float length = glm::length(foot.off); length > kLeash) {
-                foot.off *= kLeash / length;
+            const bool aside_low = low && walking_aside;
+            if (const float leash = aside_low ? 0.18f : kLeash, length = glm::length(foot.off); length > leash) {
+                foot.off *= leash / length;
                 foot.floor = there + foot.off;
-                taut = hold == 2;
+                taut = hold == 2 && !aside_low;
             }
             if (hold == 1) foot.yaw = body_yaw;
             foot.twist = std::remainder(foot.yaw - body_yaw, 6.2831853f);
@@ -1119,7 +1218,8 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
                 const glm::vec2 own_side(std::cos(body_yaw), -std::sin(body_yaw));
                 across = (side == 0 ? -1.0f : 1.0f) * ((foot.floor.x - middle.x) * own_side.x + (foot.floor.z - middle.z) * own_side.y);
             }
-            if (taut || std::abs(foot.twist) > kTwist || (hold == 2 && (across > 0.03f || -across > kWide + 0.03f))) {
+            if (taut || std::abs(foot.twist) > kTwist || (hold == 2 && !aside_low && (across > 0.03f || -across > kWide + 0.03f))) {
+                foot.wait_swing = hold == 2;
                 foot.held = false;
                 foot.lift = kLiftSeconds;
                 foot.lift_height = kLiftHeight;
@@ -1152,7 +1252,7 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
                 const float out = outward * ((placed.x - middle.x) * own_side.x + (placed.z - middle.z) * own_side.y);
                 wanted = std::clamp(out, kNarrow, kWide) - out;
             }
-            foot.side_fix += (wanted - foot.side_fix) * (1.0f - std::exp(-dt * (hold == 2 ? 60.0f : 10.0f)));
+            foot.side_fix += (wanted - foot.side_fix) * (1.0f - std::exp(-dt * (hold == 2 ? (walking_aside ? 12.0f : 60.0f) : 10.0f)));
             if (std::abs(foot.side_fix) < 5.0e-4f && wanted == 0.0f) foot.side_fix = 0.0f;
         } else if (foot.held) {
             foot.side_fix = 0.0f;
@@ -1175,6 +1275,33 @@ void PlayerBody::HoldFeet(const glm::mat4& body_world) {
         }
     }
     held_body_ = body;
+}
+
+void PlayerBody::StrafeOverlay() {
+    const float w = std::clamp(strafe_weight, 0.0f, 1.0f);
+    const size_t side = strafe_left ? 1 : 0;
+    const float at = (strafe_phase - std::floor(strafe_phase)) * static_cast<float>(g_strafe.frames);
+    const int f0 = static_cast<int>(at) % g_strafe.frames, f1 = (f0 + 1) % g_strafe.frames;
+    const float t = at - std::floor(at);
+    const auto clip_bone = [&](size_t b) {
+        const size_t i0 = static_cast<size_t>(f0) * StrafeClip::kBones + b, i1 = static_cast<size_t>(f1) * StrafeClip::kBones + b;
+        glm::mat4 m = glm::mat4_cast(glm::slerp(g_strafe.turn[side][i0], g_strafe.turn[side][i1], t));
+        m[3] = glm::vec4(glm::mix(g_strafe.place[side][i0], g_strafe.place[side][i1], t), 1.0f);
+        return m;
+    };
+    const auto mixed = [&](const glm::mat4& from, const glm::mat4& to) {
+        glm::mat4 m = glm::mat4_cast(glm::slerp(glm::normalize(glm::quat_cast(glm::mat3(from))), glm::normalize(glm::quat_cast(glm::mat3(to))), w));
+        m[3] = glm::vec4(glm::mix(glm::vec3(from[3]), glm::vec3(to[3]), w), 1.0f);
+        return m;
+    };
+    const size_t waist = static_cast<size_t>(g_strafe.bone[0]);
+    if (waist >= world_.size()) return;
+    const glm::vec3 shift = (glm::vec3(clip_bone(0)[3]) - glm::vec3(world_[waist][3])) * w;
+    for (glm::mat4& m : world_) m[3] += glm::vec4(shift, 0.0f);
+    for (size_t b = 1; b < StrafeClip::kBones; ++b) {
+        const size_t bone = static_cast<size_t>(g_strafe.bone[b]);
+        if (bone < world_.size()) world_[bone] = mixed(world_[bone], clip_bone(b));
+    }
 }
 
 void PlayerBody::RunOverlay(float amount) {
@@ -1668,7 +1795,7 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
         return;
     }
     float d = std::clamp(glm::length(to), std::abs(a - b) + 1.0e-4f, a + b - 1.0e-4f);
-    if (constexpr float kSoft = 0.012f; ease_reach && !right && glm::length(to) > a + b - kSoft) {
+    if (constexpr float kSoft = 0.03f; ease_reach && glm::length(to) > a + b - kSoft) {
         d = a + b - kSoft * std::exp(-(glm::length(to) - (a + b - kSoft)) / kSoft);
     }
     const glm::vec3 n = glm::normalize(to);
@@ -1680,6 +1807,11 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
         } else {
             pole = glm::mix(glm::normalize(pole), glm::normalize(*hint), share);
         }
+    }
+    const float carried = ease_reach && natural_chest_known_ ? std::clamp(carry_weight, 0.0f, 1.0f) : 0.0f;
+    if (carried > 0.0f) {
+        const glm::vec3 authored = glm::mat3(natural_chest_) * carry_pole[right ? 1 : 0];
+        pole = glm::length(pole) > 1.0e-5f ? glm::mix(glm::normalize(pole), authored, carried) : authored;
     }
     pole -= n * glm::dot(pole, n);
     if (glm::length(pole) < 1.0e-5f) {
@@ -1739,7 +1871,7 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
                     allowed = swing * lo;
                 }
             }
-            pole = glm::angleAxis(allowed, n) * pole;
+            pole = glm::angleAxis(allowed * (1.0f - carried), n) * pole;
         }
     }
     if (ease_reach) {
@@ -1859,6 +1991,7 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
             return diff;
         };
         const float stock_mid_y = has_stock ? (stock_a + stock_ab * 0.45f).y : 0.0f;
+        constexpr float kStayWeight = 0.35f;
         auto score = [&](float phi) {
             const float pen = arm_penalty(phi);
             const glm::vec3 p = pole_at(phi);
@@ -1870,13 +2003,13 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
             const float side_bias = right ? std::max(0.0f, p.x) : std::max(0.0f, -p.x);
             const float stay = has_last ? wrap_diff(phi, last_phi) : 0.0f;
             return pen * 50.0f + pen * pen * 240.0f + over_sh * 240.0f + over_stock * 110.0f + fwd_el * 120.0f +
-                   up_bias * up_bias * 3.0f + 0.0080f * phi * phi + 0.0020f * side_bias * side_bias + 0.0015f * stay * stay;
+                   up_bias * up_bias * 3.0f + 0.0080f * phi * phi + 0.0020f * side_bias * side_bias + kStayWeight * stay * stay;
         };
 
         float best_phi = 0.0f;
         float best_pen = arm_penalty(0.0f);
         const glm::vec3 el0 = center + u0 * reach_out;
-        const bool need_sweep = best_pen > 1.0e-4f || el0.y > s.y - 0.16f || (has_stock && (el0.y > stock_mid_y - 0.03f || (el0.z - s.z) > 0.13f));
+        const bool need_sweep = carried < 0.999f && (best_pen > 1.0e-4f || el0.y > s.y - 0.16f || (has_stock && (el0.y > stock_mid_y - 0.03f || (el0.z - s.z) > 0.13f)));
         if (need_sweep) {
             constexpr float kMaxPhi = 1.70f;
             constexpr int kSamples = 36;
@@ -1918,16 +2051,19 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
 
         float final_phi = best_phi;
         if (has_last) {
-            const float diff = wrap_diff(best_phi, last_phi);
-            const float most = std::min(6.0f * sim_seconds_ / reach_out, 3.0f);
-            if (std::abs(diff) > most) {
-                const float clamped_phi = last_phi + std::copysign(most, diff);
-                if (arm_penalty(clamped_phi) <= best_pen + 0.003f) {
-                    final_phi = clamped_phi;
-                }
-            }
+            constexpr float kOmega = 48.0f;
+            const float dt = std::min(sim_seconds_, 0.05f);
+            const float target = last_phi + wrap_diff(best_phi, last_phi);
+            const float off = last_phi - target;
+            const float push = (swivel_speed_[side] + kOmega * off) * dt;
+            const float decay = std::exp(-kOmega * dt);
+            swivel_speed_[side] = (swivel_speed_[side] - kOmega * push) * decay;
+            final_phi = target + (off + push) * decay;
+        } else {
+            swivel_speed_[side] = 0.0f;
         }
-        pole = glm::normalize(pole_at(final_phi));
+        const float settle = std::clamp((carried - 0.85f) / 0.15f, 0.0f, 1.0f);
+        pole = glm::normalize(pole_at(final_phi * (1.0f - settle * settle * (3.0f - 2.0f * settle))));
         elbow = center + pole * reach_out;
         drawn_pole_[side] = glm::transpose(chest) * pole;
         reach_age_[side] = 0.0f;
@@ -1977,8 +2113,15 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
         cur_z -= u_dir * glm::dot(cur_z, u_dir);
         if (glm::length(cur_z) > 1.0e-3f) {
             cur_z = glm::normalize(cur_z);
-            const float roll = std::atan2(glm::dot(u_dir, glm::cross(cur_z, bend_in)), glm::dot(cur_z, bend_in));
+            float roll = std::atan2(glm::dot(u_dir, glm::cross(cur_z, bend_in)), glm::dot(cur_z, bend_in));
             const float w_blend = std::clamp((bend_len - 0.02f) / 0.10f, 0.0f, 1.0f);
+            const int arm = right ? 1 : 0;
+            if (hinge_serial_[arm] + 1 == skin_serial_ || hinge_serial_[arm] == skin_serial_) {
+                roll += 6.2831853f * std::round((hinge_roll_[arm] - roll) / 6.2831853f);
+            }
+            if (w_blend < 1.0e-3f) roll = std::remainder(roll, 6.2831853f);
+            hinge_roll_[arm] = roll;
+            hinge_serial_[arm] = skin_serial_;
             TurnSubtree(upper, glm::angleAxis(roll * w_blend, u_dir), root);
         }
     }
@@ -1995,8 +2138,18 @@ void PlayerBody::ReachHand(bool right, const glm::mat4& target, bool turn_hand) 
         const float bent = std::acos(std::clamp(glm::dot(along, fingers), -1.0f, 1.0f));
         constexpr float kLimit = 0.78f;
         if (bent > kLimit) {
-            const glm::vec3 axis = glm::cross(fingers, along);
-            if (glm::length(axis) > 1.0e-4f) want = glm::angleAxis((bent - kLimit) * 0.45f, glm::normalize(axis)) * want;
+            glm::vec3 axis = glm::cross(fingers, along);
+            if (glm::length(axis) > 1.0e-4f) {
+                axis = glm::normalize(axis);
+                float give = bent;
+                if ((give_serial_ + 1 == skin_serial_ || give_serial_ == skin_serial_) && glm::dot(axis, give_axis_) < 0.0f) {
+                    axis = -axis;
+                    give = 6.2831853f - bent;
+                }
+                give_axis_ = axis;
+                give_serial_ = skin_serial_;
+                want = glm::angleAxis((give - kLimit) * 0.45f, axis) * want;
+            }
         }
     }
     TurnSubtree(hand, glm::normalize(want * glm::inverse(now)), at(hand));

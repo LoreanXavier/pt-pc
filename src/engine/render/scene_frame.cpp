@@ -1443,6 +1443,14 @@ void SceneRenderer::CollectEffects() {
             if ((flags & kSkip) != 0u || q.info.x == vfx::kNoTexture || !(q.color.a > 0.0f)) {
                 continue;
             }
+            static const float kMinAlpha = [] { const char* v = std::getenv("PT_RT_EFFECT_MIN_ALPHA"); return v ? static_cast<float>(std::atof(v)) : 0.08f; }();
+            static const float kMinArea = [] { const char* v = std::getenv("PT_RT_EFFECT_MIN_AREA"); return v ? static_cast<float>(std::atof(v)) : 2.5e-5f; }();
+            if (d.blend == vfx::BlendMode::Alpha && q.color.a < kMinAlpha) {
+                continue;
+            }
+            if (glm::length(glm::cross(glm::vec3(q.corner[1] - q.corner[0]), glm::vec3(q.corner[2] - q.corner[0]))) < kMinArea) {
+                continue;
+            }
             glm::vec3 rgb = glm::vec3(q.color);
             if ((flags & vfx::kQuadLit) != 0u) {
                 const glm::vec3 centre = (glm::vec3(q.corner[0]) + glm::vec3(q.corner[1]) + glm::vec3(q.corner[2]) + glm::vec3(q.corner[3])) * 0.25f;

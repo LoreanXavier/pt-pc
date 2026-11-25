@@ -1559,11 +1559,15 @@ void GameUi::DrawSurvival(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
             y += text(words("pc_survival_new_best", 0), {640.0f, y}, 0.78f, glm::vec4(1.0f, 0.84f, 0.5f, 0.9f * shown), ui::TextAlign::Center) + 6.0f;
         }
         if (hud.end_credits_earned > 0 || hud.end_credits_total > 0) {
-            std::string payout = std::format("+${} - ${}", hud.end_credits_earned, hud.end_credits_total);
+            std::string payout = std::format("+${}", hud.end_credits_earned);
             if (hud.end_daily_bonus > 0) {
                 payout += std::format("  (+${})", hud.end_daily_bonus);
             }
-            y += text(payout, {640.0f, y}, 0.82f, glm::vec4(0.95f, 0.82f, 0.42f, 0.95f * shown), ui::TextAlign::Center) + 6.0f;
+            const glm::vec4 gold(0.95f, 0.82f, 0.42f, 0.95f * shown);
+            y += text(payout, {640.0f, y}, 0.82f, gold, ui::TextAlign::Center) + 4.0f;
+            y += text(std::format("{}: ${}", PcText("pc_armory_credits", language_), hud.end_credits_total), {640.0f, y}, 0.68f,
+                      glm::vec4(1.0f, 1.0f, 1.0f, 0.72f * shown), ui::TextAlign::Center) +
+                 6.0f;
         }
         y += 22.0f;
         if (hud.can_retry) {
@@ -1787,10 +1791,18 @@ void GameUi::DrawSurvival(ui::UiBatch& batch, const UiCanvas& canvas, glm::vec2 
             small.text_space *= 0.52f;
             const float reserve_w = ui::LayoutText(reserve, small, 0.0f).width;
             const float y = bottom - 50.0f;
-            const float h = text(std::to_string(hud.clip), {right - reserve_w - 16.0f, y}, 0.95f, color, ui::TextAlign::End);
-            line({right - reserve_w - 11.0f, y + h * 0.95f}, {right - reserve_w - 5.0f, y + h * 0.25f}, 1.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.5f * a));
-            text(reserve, {right, y + h * 0.42f}, 0.52f, hud.reserve == 0 ? glm::vec4(0.95f, 0.3f, 0.24f, 0.8f) : glm::vec4(1.0f, 1.0f, 1.0f, 0.6f * a),
-                 ui::TextAlign::End);
+            constexpr float kStackW = 13.0f;
+            const float spare_left = right - reserve_w - 5.0f - kStackW;
+            const float h = text(std::to_string(hud.clip), {spare_left - 14.0f, y}, 0.95f, color, ui::TextAlign::End);
+            const glm::vec4 spare_color = hud.reserve == 0 ? glm::vec4(0.95f, 0.3f, 0.24f, 0.8f) : glm::vec4(1.0f, 1.0f, 1.0f, 0.6f * a);
+            const float spare_base = y + h * 0.9f;
+            for (int i = 0; i < 3; ++i) {
+                const float x0 = spare_left + static_cast<float>(i) * 5.0f;
+                const glm::vec4 brass(spare_color.r, spare_color.g * 0.92f, spare_color.b * 0.75f, spare_color.a);
+                rect({x0, spare_base - 9.0f}, {x0 + 3.0f, spare_base}, brass);
+                rect({x0 + 0.5f, spare_base - 12.0f}, {x0 + 2.5f, spare_base - 9.0f}, spare_color);
+            }
+            text(reserve, {right, y + h * 0.42f}, 0.52f, spare_color, ui::TextAlign::End);
             const float tick_h = hud.weapon == SurvivalWeapon::Handgun ? 7.0f : 9.0f;
             const float step = hud.weapon == SurvivalWeapon::Handgun ? 4.0f : 7.0f;
             const float base_y = bottom - 9.0f;
